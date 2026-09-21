@@ -11,5 +11,8 @@
     }
   },
   "remoteUser": "node",
+  "remoteEnv": {
+    "DISABLE_AUTOUPDATER": "1"
+  },
   "postCreateCommand": "npm install"
 }
