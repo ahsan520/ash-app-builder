@@ -1,4 +1,4 @@
-FROM node:20-bookworm
+FROM node:22-bookworm
 
 RUN apt-get update && apt-get install -y \
     git \
@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @anthropic-ai/claude-code @musistudio/claude-code-router
+RUN npm install -g @anthropic-ai/claude-code @musistudio/claude-code-router@latest
 
 WORKDIR /workspace
 

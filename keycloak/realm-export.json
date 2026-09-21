@@ -1,0 +1,37 @@
+{
+  "realm": "siem-platform",
+  "enabled": true,
+  "clients": [
+    {
+      "clientId": "siem-api",
+      "name": "SIEM API Client",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "redirectUris": ["http://localhost:3000/*"],
+      "webOrigins": ["+"],
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    }
+  ],
+  "roles": {
+    "realm": [
+      {"name": "admin", "description": "Platform administrator"},
+      {"name": "msp-admin", "description": "MSP administrator"},
+      {"name": "tenant-admin", "description": "Tenant administrator"},
+      {"name": "user", "description": "Standard user"}
+    ]
+  },
+  "authenticationFlows": [
+    {
+      "alias": "mfa-flow",
+      "description": "MFA enabled flow",
+      "providerId": "basic-flow"
+    }
+  ]
+}
