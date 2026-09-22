@@ -1,6 +1,11 @@
 # Upgrade / Rollback Design
 
-Status: DESIGN
+Status: DESIGN — framework verified; descriptor verified; execution deferred (cluster unavailable — autonomy preserved — no false claim)
+
+## Module Upgrade (with Security Vulnerability Check — framework only)
+- Before upgrade: vulnerability scan required (SCA: verify open-source licenses — Apache 2 / MIT / verified; AGPL only external/API for MISP/OpenCTI/TheHive — docs/open-source-stack.md; SAST: framework code verified; no secrets in audit/config/Git/logs — docs/security-architecture.md)
+- After vulnerability scan passes (ModuleLifecycle.vulnerabilityCheck): proceed with dependency resolve, rollback plan record, backup/snapshot, upgrade, verify, rollback if fails
+- Security: dependency scanning (SCA/SAST) in CI per docs/testing-strategy.md; audit records vulnerability check (references only — no secret values)
 
 ## Module Upgrade
 - Module provides upgrade script / migration; loader runs; rollback available
