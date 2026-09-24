@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:www.paloaltonetworks.com)",
+      "WebFetch(domain:docs.paloaltonetworks.com)",
+      "WebFetch(domain:opensearch.org)",
+      "WebFetch(domain:wazuh.com)"
+    ]
+  }
+}
