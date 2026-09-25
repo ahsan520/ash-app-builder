@@ -9,7 +9,7 @@ set -euo pipefail
 COMMAND="${1:?Requires command (approve-infra / list-approvals / rollback-plan / audit-log)}"
 COMPONENT="${2:?Requires component (postgresql/keycloak/kong/module)}"
 ENV="${3:-test}"
-NAMESPACE="${4:-siem-platform}"
+NAMESPACE="${4:-asix-platform}"
 USER="${5:-unknown}"
 ROLLBACK_PLAN="${6:-none}"
 

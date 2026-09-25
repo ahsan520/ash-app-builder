@@ -1,9 +1,9 @@
 {
-  "realm": "siem-platform",
+  "realm": "asix",
   "enabled": true,
   "clients": [
     {
-      "clientId": "siem-api",
+      "clientId": "asix-api",
       "name": "SIEM API Client",
       "enabled": true,
       "protocol": "openid-connect",

@@ -1,43 +1,200 @@
-// Phase 1 Deep — Gateway Middleware (DESIGN DECISION — middleware chain, not full production deployment)
-// Flow: Request → Auth (Keycloak JWT/session) → Tenant (DB session context) → RBAC (<module>:<resource>:<action>) → ABAC (attributes) → Audit → Module
-const { Provider } = require('../control-plane/providers/abstract');
+const {
+  validateToken,
+  resolveIdentity,
+} = require('../auth/auth-service');
 
-function authMiddleware(req, res, next) {
-  // DESIGN DECISION: Keycloak JWT validation (not custom token format)
-  const token = req.headers['authorization']?.replace('Bearer ', '');
-  if (!token) return res.status(401).json({ success: false, error: { code: 'AUTH_MISSING', message: 'Token required' } });
-  // Verification deferred to auth-service; framework defines middleware chain
-  req.tenant_id = req.headers['x-tenant-id']; // From token claim
-  next();
+const db = require('../db');
+const { checkRBAC } = require('../rbac/rbac-policy');
+
+async function authMiddleware(req, res, next) {
+  try {
+    const authorization = req.headers.authorization;
+
+    if (!authorization || !authorization.startsWith('Bearer ')) {
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: 'AUTH_MISSING',
+          message: 'Bearer token required',
+        },
+      });
+    }
+
+    const token = authorization.slice('Bearer '.length).trim();
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: 'AUTH_MISSING',
+          message: 'Bearer token required',
+        },
+      });
+    }
+
+    // Step 1: cryptographically validate the Keycloak JWT.
+    const tokenResult = await validateToken(token);
+
+    if (!tokenResult.valid) {
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: 'AUTH_INVALID',
+          message: 'Invalid or expired token',
+        },
+      });
+    }
+
+    // Step 2: resolve the external Keycloak identity
+    // to an ASIX-local identity and tenant scope.
+    const identity = await resolveIdentity(
+      'keycloak',
+      tokenResult.subject
+    );
+
+    if (!identity.resolved) {
+      return res.status(403).json({
+        success: false,
+        error: {
+          code: identity.error,
+          message: 'Authenticated identity is not authorized in ASIX',
+        },
+      });
+    }
+
+    req.identity_id = identity.identity_id;
+    req.identity_type = identity.identity_type;
+
+    // Human identity.
+    req.user_id = identity.user_id || null;
+
+    // Service identity.
+    req.service_name = identity.service_name || null;
+
+    // ASIX tenant context comes from the identity mapping,
+    // NOT from a tenant_id JWT claim.
+    req.tenant_id = identity.tenant_id;
+    req.tenant_name = identity.tenant_name || null;
+
+    req.session_id = tokenResult.session_id;
+    req.auth_claims = tokenResult.claims;
+
+    next();
+  } catch (error) {
+    console.error('Authentication middleware failed:', error.message);
+
+    return res.status(401).json({
+      success: false,
+      error: {
+        code: 'AUTH_ERROR',
+        message: 'Authentication processing failed',
+      },
+    });
+  }
 }
 
 function tenantMiddleware(req, res, next) {
-  // DESIGN DECISION: DB session context (SET app.current_tenant_id) — RLS enforces isolation
-  // Application middleware does NOT replace RLS
-  if (!req.tenant_id) return res.status(403).json({ success: false, error: { code: 'TENANT_MISMATCH', message: 'Tenant context missing' } });
+  if (!req.tenant_id) {
+    return res.status(403).json({
+      success: false,
+      error: {
+        code: 'TENANT_MISSING',
+        message: 'Tenant context missing',
+      },
+    });
+  }
+
   next();
 }
 
-function rbacMiddleware(req, res, next) {
-  // DESIGN DECISION: RBAC format <module>:<resource>:<action>
-  // Not full enforcement (requires role DB query); framework defines check
-  const permission = `${req.module || 'api'}:${req.resource || 'general'}:${req.method || 'read'}`;
-  req.required_permission = permission;
-  next();
+async function rbacMiddleware(req, res, next) {
+  try {
+    const permission =
+      req.required_permission ||
+      `${req.module || 'api'}:` +
+      `${req.resource || 'general'}:` +
+      `${req.method || 'read'}`;
+
+    req.required_permission = permission;
+
+    const result = await db.withTenant(req.tenant_id, async (client) => {
+      if (req.identity_type === 'service') {
+        return client.query(
+          `
+          SELECT DISTINCT unnest(r.permissions) AS permission
+          FROM service_identity_roles sir
+          JOIN roles r
+            ON r.id = sir.role_id
+          WHERE sir.service_identity_id = $1
+            AND r.tenant_id = $2
+          `,
+          [req.identity_id, req.tenant_id]
+        );
+      }
+
+      if (req.identity_type === 'human' && req.user_id) {
+        return client.query(
+          `
+          SELECT DISTINCT unnest(r.permissions) AS permission
+          FROM users u
+          JOIN roles r
+            ON r.id = ANY(u.role_ids)
+          WHERE u.id = $1
+            AND u.tenant_id = $2
+            AND r.tenant_id = $2
+          `,
+          [req.user_id, req.tenant_id]
+        );
+      }
+
+      return { rows: [] };
+    });
+
+    const rolePermissions = result.rows.map((row) => row.permission);
+
+    if (!checkRBAC(rolePermissions, permission)) {
+      return res.status(403).json({
+        success: false,
+        error: {
+          code: 'RBAC_DENIED',
+          message: 'Required permission is not assigned to the authenticated identity',
+        },
+      });
+    }
+
+    req.rbac_permissions = rolePermissions;
+
+    next();
+  } catch (error) {
+    console.error('RBAC authorization failed:', error.message);
+
+    return res.status(403).json({
+      success: false,
+      error: {
+        code: 'RBAC_ERROR',
+        message: 'Authorization processing failed',
+      },
+    });
+  }
 }
 
 function auditMiddleware(req, res, next) {
-  // DESIGN DECISION: Audit event created before execution (not after failure only)
-  req.audit_event = { action: req.path, method: req.method, tenant: req.tenant_id, user: req.user_id || 'unknown', timestamp: new Date().toISOString() };
+  req.audit_event = {
+    action: req.path,
+    method: req.method,
+    tenant: req.tenant_id,
+    identity: req.identity_id || 'unknown',
+    user: req.user_id || null,
+    service: req.service_name || null,
+    timestamp: new Date().toISOString(),
+  };
+
   next();
 }
 
-module.exports = { authMiddleware, tenantMiddleware, rbacMiddleware, auditMiddleware };
-
-// Deep Phase 1 wiring — middleware fully connected (DESIGN DECISION — not production-deployed; framework verified only)
-// 1. Auth: Keycloak JWT verification via auth-service (keycloak.org verified — Apache 2)
-// 2. Tenant: DB session context (SET app.current_tenant_id) — RLS enforced (docs/multi-tenancy.md — 5 policies)
-// 3. RBAC: permission format <module>:<resource>:<action> (plan.md H.6 — verified in docs/plan.md)
-// 4. ABAC: attribute rules (user.role + tenant.id + resource.tenant + action + time + risk) — framework preserved
-// 5. Audit: event pre-creation (before execution) — docs/audit.md design preserved
-// 6. Control plane: middleware does NOT execute infrastructure — passes to control plane (docs/control-plane.md — verified)
+module.exports = {
+  authMiddleware,
+  tenantMiddleware,
+  rbacMiddleware,
+  auditMiddleware,
+};

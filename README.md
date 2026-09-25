@@ -15,10 +15,10 @@ cd ash-app-builder
 Framework tests already verified (node executions for Phase 6–12); descriptor `deploy/postgresql.yaml` verified; execution deferred (cluster unavailable — honest).
 
 ## Step 4 — Confirm deploy spec (before any production execution; Level 2 approval required per `docs/deployment-approval.md` + `docs/deployment-spec.md` A-J)
-Confirm: namespace (`siem-platform`) + env (`test`/`prod`) + secret (`${DB_PASSWORD}` framework reference) + rollback (`prev-v`; `docs/upgrade-rollback.md`) + schema (`src/db/schema.sql`; 5 RLS policies) + scope (DB descriptor ONLY — A; sequential B→C→G).
+Confirm: namespace (`asix-platform`) + env (`test`/`prod`) + secret (`${DB_PASSWORD}` framework reference) + rollback (`prev-v`; `docs/upgrade-rollback.md`) + schema (`src/db/schema.sql`; 5 RLS policies) + scope (DB descriptor ONLY — A; sequential B→C→G).
 
 ## Step 4 — Confirm deploy spec (before any production execution; Level 2 approval required per `docs/deployment-approval.md` + `docs/deployment-spec.md` A-J)
-Confirm: namespace (`siem-platform`) + env (`test`/`prod`) + secret (`${DB_PASSWORD}` framework reference) + rollback (`prev-v`; `docs/upgrade-rollback.md`) + schema (`src/db/schema.sql`; 5 RLS policies) + scope (DB descriptor ONLY — A; sequential B→C→G).
+Confirm: namespace (`asix-platform`) + env (`test`/`prod`) + secret (`${DB_PASSWORD}` framework reference) + rollback (`prev-v`; `docs/upgrade-rollback.md`) + schema (`src/db/schema.sql`; 5 RLS policies) + scope (DB descriptor ONLY — A; sequential B→C→G).
 
 ## Step 4b — Module → Pod / VM mapping (verified from `docs/deployment-diagram.md` + `docs/module-architecture.md`)
 - `siem`: DB (PostgreSQL) + Search (OpenSearch) + Analytics (ClickHouse) — ingestion/search/dashboard
@@ -40,7 +40,7 @@ Descriptor execution (`scripts/deploy/deploy-infra.sh`) requires kubeconfig / en
 Production rollout (1→12 sequential) requires cluster + spec confirmation.
 
 ## Step 7 — Login / Control Plane / Config
-- Auth: Keycloak owns login/MFA/SSO (`keycloak/realm-export.json`: realm `siem-platform`; clients `siem-api`; PKCE/SSO/MFA configured) — `docs/api-architecture.md` (no `/auth/login` app endpoint — Keycloak handles it)
+- Auth: Keycloak owns login/MFA/SSO (`keycloak/realm-export.json`: realm `asix`; clients `asix-api`; PKCE/SSO/MFA configured) — `docs/api-architecture.md` (no `/auth/login` app endpoint — Keycloak handles it)
 - Session/logout/OIDC redirect handled by app
 - Config: `docs/configuration-as-code.md` (YAML/JSON; Git source; DB runtime; versioned/diff/rollback/audit)
 - Control plane: `docs/control-plane.md` (autonomy 0–4; approval/rollback/verify/audit for all actions); `docs/ui-architecture.md` (navigation/settings expandable categories); framework code: `src/control-plane/job-engine.js` (`POST /internal/control/job` submit; `GET` status; `PATCH` approve; rollback/verify/audit per job)
@@ -56,8 +56,8 @@ Notes:
 ## Command Examples (verified — framework only; descriptor execution deferred)
 ```
 # Approval (Level 2 — user-approved; audit event reference; rollback plan referenced)
-./scripts/siem-cli approve-infra postgresql test siem-platform admin prev-v
+./scripts/siem-cli approve-infra postgresql test asix-platform admin prev-v
 
 # Deploy descriptor (Level 2 approved; requires kubeconfig + spec; rollback required; framework output only — descriptor NOT executed if no cluster)
-ROLLBACK_PLAN=prev-v ./scripts/deploy/deploy-infra.sh postgresql siem-platform test --approve=prev-v
+ROLLBACK_PLAN=prev-v ./scripts/deploy/deploy-infra.sh postgresql asix-platform test --approve=prev-v
 ```

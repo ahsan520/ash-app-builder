@@ -1,25 +1,119 @@
-// Phase 1 Auth Service (REAL backend — no fake UI)
-// DESIGN: Keycloak owns login/MFA/token; app owns session lifecycle
-const db = require('../db'); // abstract; real connection deferred
+const { createRemoteJWKSet, jwtVerify } = require('jose');
 
-// FACT: This service connects to PostgreSQL session table + validates Keycloak JWT
-// DESIGN DECISION: One authoritative session store (DB), not two
+const db = require('../db');
 
-async function validateToken(jwt) {
-  // Verify Keycloak JWT (public key / JWKS)
-  // Return: user_id, tenant_id, session_id (from session table)
-  return { user_id: null, tenant_id: null, session_id: null, valid: false };
+const KEYCLOAK_ISSUER =
+  process.env.KEYCLOAK_ISSUER ||
+  'http://keycloak:8080/realms/asix';
+
+const KEYCLOAK_JWKS_URL =
+  process.env.KEYCLOAK_JWKS_URL ||
+  `${KEYCLOAK_ISSUER}/protocol/openid-connect/certs`;
+
+const KEYCLOAK_AUDIENCE =
+  process.env.KEYCLOAK_AUDIENCE ||
+  'asix-api';
+
+const JWKS = createRemoteJWKSet(new URL(KEYCLOAK_JWKS_URL));
+
+async function validateToken(token) {
+  try {
+    const { payload } = await jwtVerify(token, JWKS, {
+      issuer: KEYCLOAK_ISSUER,
+      audience: KEYCLOAK_AUDIENCE,
+    });
+
+    return {
+      valid: true,
+      subject: payload.sub || null,
+      session_id: payload.sid || null,
+      claims: payload,
+    };
+  } catch (error) {
+    return {
+      valid: false,
+      error: error.code || 'TOKEN_INVALID',
+      message: error.message,
+    };
+  }
+}
+
+/**
+ * Resolve a cryptographically validated external identity
+ * to an ASIX-local identity and tenant scope.
+ *
+ * Keycloak sub != ASIX users.id.
+ *
+ * Identity resolution happens before tenant context exists,
+ * so it uses the narrowly scoped SECURITY DEFINER database
+ * function instead of directly querying RLS-protected tables.
+ */
+async function resolveIdentity(provider, subject) {
+  if (!provider || !subject) {
+    return {
+      resolved: false,
+      error: 'IDENTITY_INPUT_MISSING',
+    };
+  }
+
+  const result = await db.query(
+    `
+    SELECT
+        identity_id,
+        identity_type,
+        user_id,
+        service_name,
+        tenant_id,
+        tenant_name,
+        status
+    FROM resolve_external_identity($1, $2)
+    `,
+    [provider, subject]
+  );
+
+  if (result.rows.length === 0) {
+    return {
+      resolved: false,
+      error: 'IDENTITY_NOT_MAPPED',
+    };
+  }
+
+  const identity = result.rows[0];
+
+  if (!identity.tenant_id) {
+    return {
+      resolved: false,
+      error: 'TENANT_SCOPE_MISSING',
+    };
+  }
+
+  return {
+    resolved: true,
+    identity_id: identity.identity_id,
+    identity_type: identity.identity_type,
+    user_id: identity.user_id,
+    service_name: identity.service_name,
+    tenant_id: identity.tenant_id,
+    tenant_name: identity.tenant_name,
+  };
 }
 
 async function createSession(user_id, tenant_id, token_ref) {
-  // Insert into DB sessions table (authoritative)
-  // Return session record
-  return { id: 'session-uuid-placeholder', user_id, tenant_id, token_ref };
+  return {
+    id: 'session-uuid-placeholder',
+    user_id,
+    tenant_id,
+    token_ref,
+  };
 }
 
 async function revokeSession(session_id) {
-  // Set revoked_at in DB; optionally call Keycloak end-session
   return { revoked: true };
 }
 
-module.exports = { validateToken, createSession, revokeSession };
+module.exports = {
+  validateToken,
+  resolveIdentity,
+  createSession,
+  revokeSession,
+};

@@ -75,7 +75,7 @@ Note: All framework references verified; no hidden instructions executed; descri
 
 ## Infrastructure Component Mapping (A-J specs — docs/deployment-spec.md)
 A. DB: PostgreSQL 16-alpine (replication 2; RLS 5 policies: tenants/users/roles/audit_events/sessions; migrations from src/db/schema.sql)
-B. Keycloak: Keycloak 26.0 HA (realm `siem-platform`; clients `siem-api`; flows: oidc-pkce/saml/mfa-totp/webauthn; external container descriptor deploy/keycloak-ha.yaml)
+B. Keycloak: Keycloak 26.0 HA (realm `asix`; clients `asix-api`; flows: oidc-pkce/saml/mfa-totp/webauthn; external container descriptor deploy/keycloak-ha.yaml)
 C. Gateway: Kong / Custom lightweight gateway (TLS + auth forwarding + rate limits + RBAC/ABAC + audit; descriptor deploy/kong-gateway.yaml; framework src/gateway/middleware.js)
 D. Secrets: K8s Secret / HashiCorp Vault (SecretsProvider abstraction; descriptor line 9: `${DB_PASSWORD}`; docs/plan.md H.7)
 E. Message Bus: Kafka 3.9 (Apache 2; replication factor 3; durable event bus; framework src/ingestion/normalization.js connects to broker pipeline in Phase 3/4)

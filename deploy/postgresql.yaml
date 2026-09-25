@@ -4,8 +4,8 @@
 description: "PostgreSQL production cluster — RLS enforced — deployment descriptor"
 version: "16-alpine"
 environment:
-  POSTGRES_DB: siem_platform
-  POSTGRES_USER: siem_admin
+  POSTGRES_DB: asix_platform
+  POSTGRES_USER: asix_admin
   POSTGRES_PASSWORD: "${DB_PASSWORD}" # SecretsProvider — Vault/K8s Secret (not plain)
 replicaCount: 2 # Primary + replica
 rls_enabled: true

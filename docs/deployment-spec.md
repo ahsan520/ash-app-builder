@@ -10,7 +10,7 @@
 ## B. Keycloak (Identity / Auth)
 - Component: Keycloak (Apache 2 — verified via keycloak.org)
 - Design: External HA container (not embedded; docs/api-architecture.md — Keycloak owns auth; app owns session/audit)
-- SSO: OIDC (PKCE) + SAML configuration; realm: siem-platform; client: siem-api
+- SSO: OIDC (PKCE) + SAML configuration; realm: asix-platform; client: asix-api
 - MFA: TOTP + WebAuthn/passkeys enforced
 - Assumption: External Keycloak mirrors production; embedded possible for dev only
 

@@ -5,6 +5,7 @@
   "description": "AI-assisted custom application builder",
   "dependencies": {
     "express": "^5.2.1",
+    "jose": "^6.2.12",
     "pg": "^8.23.0"
   },
   "scripts": {

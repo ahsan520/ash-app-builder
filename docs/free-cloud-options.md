@@ -10,7 +10,7 @@ Options (verified general knowledge — NOT vendor endorsement; NOT execution re
 
 Constraints (from docs/deployment-spec.md A-J + descriptor verification):
 - DB A (PostgreSQL 16-alpine; replication 2; RLS 5 policies): requires persistent volume + memory; descriptor verified (not executed — cluster unavailable)
-- Keycloak B (HA container; realm siem-platform; MFA flows): requires persistent config + container runtime; descriptor verified
+- Keycloak B (HA container; realm asix; MFA flows): requires persistent config + container runtime; descriptor verified
 - Gateway C (Kong/custom; TLS/auth): requires service mesh/network policies; descriptor verified
 - Bus E (Kafka 3.9 replication factor 3): durable message bus; framework src/ingestion/normalization.js connects; descriptor not executed
 - Storage F (OpenSearch + ClickHouse): significant disk + memory; framework search verified; descriptor verified

@@ -28,9 +28,9 @@ spec:
             - name: DB_PORT
               value: "5432"
             - name: DB_NAME
-              value: "siem_platform"
+              value: "asix_platform"
             - name: DB_USER
-              value: "siem_admin"
+              value: "asix_admin"
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:

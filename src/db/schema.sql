@@ -89,3 +89,158 @@ CREATE INDEX idx_users_tenant_id ON users(tenant_id);
 CREATE INDEX idx_roles_tenant_id ON roles(tenant_id);
 CREATE INDEX idx_audit_tenant_id ON audit_events(tenant_id);
 CREATE INDEX idx_sessions_tenant_id ON sessions(tenant_id);
+
+-- ASIX identity mappings
+-- Maps external identities (Keycloak) to ASIX local identities.
+-- Never assumes Keycloak sub == ASIX users.id.
+
+CREATE TABLE IF NOT EXISTS identity_mappings (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+
+    -- External identity provider information
+    provider VARCHAR(100) NOT NULL DEFAULT 'keycloak',
+    subject VARCHAR(255) NOT NULL,
+
+    -- Identity type: human user or service account
+    identity_type VARCHAR(50) NOT NULL
+        CHECK (identity_type IN ('human', 'service')),
+
+    -- ASIX local identity
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+
+    -- Service identity name/reference when identity_type = service
+    service_name VARCHAR(255),
+
+    -- Optional default tenant for this identity
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+
+    status VARCHAR(50) NOT NULL DEFAULT 'active',
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT identity_mapping_subject_unique
+        UNIQUE (provider, subject),
+
+    CONSTRAINT identity_mapping_identity_check
+        CHECK (
+            (identity_type = 'human' AND user_id IS NOT NULL)
+            OR
+            (identity_type = 'service' AND service_name IS NOT NULL)
+        )
+);
+
+ALTER TABLE identity_mappings ENABLE ROW LEVEL SECURITY;
+
+CREATE INDEX IF NOT EXISTS idx_identity_mappings_user_id
+    ON identity_mappings(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_identity_mappings_tenant_id
+    ON identity_mappings(tenant_id);
+
+CREATE INDEX IF NOT EXISTS idx_identity_mappings_subject
+    ON identity_mappings(provider, subject);
+
+-- Service identities can be authorized for multiple tenants.
+CREATE TABLE IF NOT EXISTS service_identity_tenants (
+    service_identity_id UUID NOT NULL
+        REFERENCES identity_mappings(id) ON DELETE CASCADE,
+
+    tenant_id UUID NOT NULL
+        REFERENCES tenants(id) ON DELETE CASCADE,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (service_identity_id, tenant_id)
+);
+
+ALTER TABLE service_identity_tenants ENABLE ROW LEVEL SECURITY;
+
+CREATE INDEX IF NOT EXISTS idx_service_identity_tenants_tenant
+    ON service_identity_tenants(tenant_id);
+
+-- Service identities can be assigned one or more tenant-scoped roles.
+CREATE TABLE IF NOT EXISTS service_identity_roles (
+    service_identity_id UUID NOT NULL
+        REFERENCES identity_mappings(id) ON DELETE CASCADE,
+
+    role_id UUID NOT NULL
+        REFERENCES roles(id) ON DELETE CASCADE,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (service_identity_id, role_id)
+);
+
+ALTER TABLE service_identity_roles ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY service_identity_roles_tenant_isolation
+ON service_identity_roles
+FOR ALL
+TO PUBLIC
+USING (
+    EXISTS (
+        SELECT 1
+        FROM roles r
+        WHERE r.id = service_identity_roles.role_id
+          AND r.tenant_id = current_setting('app.current_tenant_id')::UUID
+    )
+)
+WITH CHECK (
+    EXISTS (
+        SELECT 1
+        FROM roles r
+        WHERE r.id = service_identity_roles.role_id
+          AND r.tenant_id = current_setting('app.current_tenant_id')::UUID
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_service_identity_roles_role
+    ON service_identity_roles(role_id);
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON service_identity_roles
+TO asix_admin;
+
+-- Resolve an external identity before tenant context exists.
+-- This is intentionally a narrow SECURITY DEFINER function so the
+-- application role does not need direct RLS-bypassing access to
+-- identity_mappings or tenants.
+CREATE OR REPLACE FUNCTION resolve_external_identity(
+    p_provider VARCHAR,
+    p_subject VARCHAR
+)
+RETURNS TABLE (
+    identity_id UUID,
+    identity_type VARCHAR,
+    user_id UUID,
+    service_name VARCHAR,
+    tenant_id UUID,
+    tenant_name VARCHAR,
+    status VARCHAR
+)
+LANGUAGE SQL
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+    SELECT
+        im.id,
+        im.identity_type,
+        im.user_id,
+        im.service_name,
+        im.tenant_id,
+        t.name,
+        im.status
+    FROM public.identity_mappings im
+    LEFT JOIN public.tenants t
+        ON t.id = im.tenant_id
+    WHERE im.provider = p_provider
+      AND im.subject = p_subject
+      AND im.status = 'active'
+    LIMIT 1;
+$$;
+
+REVOKE ALL ON FUNCTION resolve_external_identity(VARCHAR, VARCHAR) FROM PUBLIC;
+
+GRANT EXECUTE ON FUNCTION resolve_external_identity(VARCHAR, VARCHAR)
+    TO asix_admin;

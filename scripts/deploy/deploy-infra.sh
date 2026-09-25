@@ -7,7 +7,7 @@
 set -euo pipefail
 
 COMPONENT="${1:?Requires component (A-J, e.g., postgresql/keycloak/kong/module)}"
-NAMESPACE="${2:?Requires namespace (e.g., siem-platform)}"
+NAMESPACE="${2:?Requires namespace (e.g., asix-platform)}"
 ENV="${3:?Requires env (test/prod)}"
 APPROVAL_REF="${4:-}"
 
