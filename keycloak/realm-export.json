@@ -8,8 +8,12 @@
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,
-      "redirectUris": ["http://localhost:3000/*"],
-      "webOrigins": ["+"],
+      "redirectUris": [
+        "http://localhost:3000/*"
+      ],
+      "webOrigins": [
+        "+"
+      ],
       "standardFlowEnabled": true,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
@@ -21,17 +25,32 @@
   ],
   "roles": {
     "realm": [
-      {"name": "admin", "description": "Platform administrator"},
-      {"name": "msp-admin", "description": "MSP administrator"},
-      {"name": "tenant-admin", "description": "Tenant administrator"},
-      {"name": "user", "description": "Standard user"}
+      {
+        "name": "admin",
+        "description": "Platform administrator"
+      },
+      {
+        "name": "msp-admin",
+        "description": "MSP administrator"
+      },
+      {
+        "name": "tenant-admin",
+        "description": "Tenant administrator"
+      },
+      {
+        "name": "user",
+        "description": "Standard user"
+      }
     ]
   },
   "authenticationFlows": [
     {
       "alias": "mfa-flow",
       "description": "MFA enabled flow",
-      "providerId": "basic-flow"
+      "providerId": "basic-flow",
+      "authenticationExecutions": [],
+      "topLevel": true,
+      "builtIn": false
     }
   ]
 }
