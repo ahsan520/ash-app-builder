@@ -22,10 +22,32 @@ spec:
       labels:
         app: keycloak
     spec:
+      initContainers:
+        - name: wait-for-keycloak-db
+          image: postgres:16-alpine
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db-secret
+                  key: PASSWORD
+          command:
+            - /bin/sh
+            - -c
+            - |
+              until psql -h postgresql -U keycloak -d keycloak -c 'select 1' >/dev/null 2>&1; do
+                echo "waiting for keycloak database to be ready..."
+                sleep 3
+              done
       containers:
         - name: keycloak
           image: quay.io/keycloak/keycloak:26.0
-          args: ["start-dev", "--import-realm", "--health-enabled=true"]
+          # Production mode (kc.sh start) instead of start-dev.
+          # --http-enabled/--hostname-strict=false keep it reachable over plain
+          # HTTP on the internal network for now — put a TLS-terminating
+          # reverse proxy/ingress in front and set KC_HOSTNAME before exposing
+          # this beyond the cluster.
+          args: ["start", "--import-realm", "--health-enabled=true", "--http-enabled=true", "--hostname-strict=false"]
           ports:
             - containerPort: 8080
               name: http
@@ -40,7 +62,16 @@ spec:
                   name: keycloak-secret
                   key: ADMIN_PASSWORD
             - name: KC_DB
-              value: "dev-mem"
+              value: "postgres"
+            - name: KC_DB_URL
+              value: "jdbc:postgresql://postgresql:5432/keycloak"
+            - name: KC_DB_USERNAME
+              value: "keycloak"
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db-secret
+                  key: PASSWORD
           volumeMounts:
             - name: realm-config
               mountPath: /opt/keycloak/data/import
