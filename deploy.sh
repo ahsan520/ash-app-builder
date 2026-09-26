@@ -29,7 +29,7 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 
-echo "== 0/7: Creating 'asix' user (passwordless sudo) + OpenSSH server =="
+echo "== 0/8: Creating 'asix' user (passwordless sudo) + OpenSSH server =="
 if id -u asix &>/dev/null; then
   echo "User 'asix' already exists — skipping creation and password setup."
 else
@@ -67,10 +67,10 @@ fi
 systemctl enable --now ssh
 systemctl restart ssh
 
-echo "== 1/7: Installing prerequisites =="
+echo "== 1/8: Installing prerequisites =="
 apt-get install -y -qq ca-certificates curl gnupg jq
 
-echo "== 2/7: Installing Docker (used only to build the image) =="
+echo "== 2/8: Installing Docker (used only to build the image) =="
 if ! command -v docker &>/dev/null; then
   install -m 0755 -d /etc/apt/keyrings
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
@@ -83,7 +83,7 @@ if ! command -v docker &>/dev/null; then
   apt-get install -y -qq docker-ce docker-ce-cli containerd.io
 fi
 
-echo "== 3/7: Installing k3s (single-node Kubernetes) =="
+echo "== 3/8: Installing k3s (single-node Kubernetes) =="
 if ! command -v k3s &>/dev/null; then
   curl -sfL https://get.k3s.io | sh -
   # wait for k3s to be ready
@@ -93,11 +93,11 @@ export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 alias kubectl="k3s kubectl"
 K=/usr/local/bin/k3s
 
-echo "== 4/7: Building and importing the asix-api image =="
+echo "== 4/8: Building and importing the asix-api image =="
 docker build -t asix-api:local "$REPO_DIR"
 docker save asix-api:local | k3s ctr images import -
 
-echo "== 5/7: Creating namespace + secrets =="
+echo "== 5/8: Creating namespace + secrets =="
 $K kubectl apply -f "$K8S_DIR/00-namespace.yaml"
 
 if ! $K kubectl -n "$NAMESPACE" get secret postgresql-secret &>/dev/null; then
@@ -118,6 +118,23 @@ if ! $K kubectl -n "$NAMESPACE" get secret keycloak-secret &>/dev/null; then
   echo "$KC_PASSWORD" > /root/asix-keycloak-password.txt
   chmod 600 /root/asix-keycloak-password.txt
 fi
+
+if ! $K kubectl -n "$NAMESPACE" get secret keycloak-db-secret &>/dev/null; then
+  KC_DB_PASSWORD="$(openssl rand -base64 24)"
+  $K kubectl -n "$NAMESPACE" create secret generic keycloak-db-secret \
+    --from-literal=PASSWORD="$KC_DB_PASSWORD"
+  echo "Generated Keycloak DB password -> stored in k8s secret 'keycloak-db-secret'"
+fi
+
+echo "== 6/8: Deploying PostgreSQL =="
+$K kubectl apply -f "$K8S_DIR/10-postgresql.yaml"
+$K kubectl -n "$NAMESPACE" rollout status statefulset/postgresql --timeout=180s
+
+echo "== 7/8: Provisioning the dedicated Keycloak database =="
+# Jobs are immutable, so drop any previous run before re-applying.
+$K kubectl -n "$NAMESPACE" delete job/keycloak-db-init --ignore-not-found
+$K kubectl apply -f "$K8S_DIR/15-keycloak-db-init.yaml"
+$K kubectl -n "$NAMESPACE" wait --for=condition=complete job/keycloak-db-init --timeout=120s
 
 # Inline the realm export into the ConfigMap manifest at deploy time
 REALM_JSON="$REPO_DIR/keycloak/realm-export.json"
@@ -142,12 +159,10 @@ else
   awk '/^---/{found=1} found' "$K8S_DIR/20-keycloak.yaml" | $K kubectl apply -f -
 fi
 
-echo "== 6/7: Deploying PostgreSQL and asix-api =="
-$K kubectl apply -f "$K8S_DIR/10-postgresql.yaml"
+echo "== 8/8: Deploying Keycloak and asix-api =="
 $K kubectl apply -f "$K8S_DIR/30-asix-api.yaml"
 
-echo "== 7/7: Waiting for rollout =="
-$K kubectl -n "$NAMESPACE" rollout status statefulset/postgresql --timeout=180s
+echo "== Waiting for rollout =="
 $K kubectl -n "$NAMESPACE" rollout status deployment/keycloak --timeout=180s
 $K kubectl -n "$NAMESPACE" rollout status deployment/asix-api --timeout=120s
 
@@ -172,6 +187,8 @@ echo "  e.g. from the target machine:"
 echo "  echo '<paste the line above>' >> ~/.ssh/authorized_keys"
 echo "  then from here: sudo -u asix ssh <user>@<target-ip>"
 echo
-echo "NOTE: Keycloak is running in 'start-dev' mode with an in-memory DB — fine to"
-echo "verify the deploy, but for anything persistent give it its own Postgres DB"
-echo "and switch to 'kc.sh start' before relying on it."
+echo "NOTE: Keycloak now runs in production mode ('kc.sh start') against its own"
+echo "'keycloak' Postgres database, so realm/client/user data survives restarts."
+echo "It's still served over plain HTTP with --hostname-strict=false for the"
+echo "internal network — put a TLS-terminating reverse proxy/ingress in front"
+echo "and set KC_HOSTNAME before exposing it beyond the cluster."
