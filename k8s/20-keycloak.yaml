@@ -25,7 +25,7 @@ spec:
       containers:
         - name: keycloak
           image: quay.io/keycloak/keycloak:26.0
-          args: ["start-dev", "--import-realm"]
+          args: ["start-dev", "--import-realm", "--health-enabled=true"]
           ports:
             - containerPort: 8080
               name: http
