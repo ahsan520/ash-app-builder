@@ -70,8 +70,8 @@ spec:
             # Resolved by name at the data node — asix-seed-identity
             # creates "Default Tenant" but its UUID isn't known ahead of
             # time, so there's nothing static to put in a Secret here.
-            - name: SYSLOG_TENANT_NAME
-              value: "Default Tenant"
+            - name: SYSLOG_TENANT_ID
+              value: "a2a16413-1571-492c-aff6-4b1e731d2ff1"
             - name: SYSLOG_COLLECTOR_ID
               value: "k8s-syslog-1"
             - name: SYSLOG_UDP_PORT
