@@ -11,11 +11,19 @@ data:
     -- identity_mappings row is upserted so a subject correction (e.g. after a
     -- fresh Keycloak realm import generates a new UUID) self-heals here
     -- instead of needing manual SQL again.
+    --
+    -- kc_subject is passed in via psql's -v flag and interpolated with
+    -- :'kc_subject'. That interpolation does NOT happen inside a DO $$ ... $$
+    -- block (psql treats dollar-quoted bodies as opaque text, same as a
+    -- regular quoted string) — so the part that needs kc_subject has to be
+    -- plain top-level SQL, not PL/pgSQL. Tenant/role setup stays in a DO
+    -- block since it needs no interpolation; the two are connected via
+    -- subqueries instead of PL/pgSQL variables, since those can't cross
+    -- separate top-level statements anyway.
+
     DO $$
     DECLARE
       v_tenant_id UUID;
-      v_role_id UUID;
-      v_identity_id UUID;
     BEGIN
       SELECT id INTO v_tenant_id FROM tenants WHERE name = 'Default Tenant' LIMIT 1;
       IF v_tenant_id IS NULL THEN
@@ -24,32 +32,33 @@ data:
         RAISE NOTICE 'Created tenant % (Default Tenant)', v_tenant_id;
       END IF;
 
-      SELECT id INTO v_role_id FROM roles
-        WHERE tenant_id = v_tenant_id AND name = 'service-default' LIMIT 1;
-      IF v_role_id IS NULL THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM roles WHERE tenant_id = v_tenant_id AND name = 'service-default'
+      ) THEN
         INSERT INTO roles (tenant_id, name, permissions)
-        VALUES (v_tenant_id, 'service-default', ARRAY['auth:identity:read'])
-        RETURNING id INTO v_role_id;
-        RAISE NOTICE 'Created role % (service-default)', v_role_id;
+        VALUES (v_tenant_id, 'service-default', ARRAY['auth:identity:read', 'search:events:read']);
+        RAISE NOTICE 'Created role service-default for tenant %', v_tenant_id;
       END IF;
-
-      INSERT INTO identity_mappings
-        (provider, subject, identity_type, service_name, tenant_id, status)
-      VALUES
-        ('keycloak', :'kc_subject', 'service', 'asix-api', v_tenant_id, 'active')
-      ON CONFLICT (provider, subject)
-      DO UPDATE SET
-        tenant_id = EXCLUDED.tenant_id,
-        service_name = EXCLUDED.service_name,
-        status = 'active'
-      RETURNING id INTO v_identity_id;
-
-      INSERT INTO service_identity_roles (service_identity_id, role_id)
-      VALUES (v_identity_id, v_role_id)
-      ON CONFLICT DO NOTHING;
-
-      RAISE NOTICE 'Seeded identity % -> tenant % / role %', v_identity_id, v_tenant_id, v_role_id;
     END $$;
+
+    -- Plain SQL from here on — :'kc_subject' actually interpolates here.
+    INSERT INTO identity_mappings (provider, subject, identity_type, service_name, tenant_id, status)
+    SELECT 'keycloak', :'kc_subject', 'service', 'asix-api', t.id, 'active'
+    FROM tenants t
+    WHERE t.name = 'Default Tenant'
+    ON CONFLICT (provider, subject)
+    DO UPDATE SET
+      tenant_id = EXCLUDED.tenant_id,
+      service_name = EXCLUDED.service_name,
+      status = 'active';
+
+    INSERT INTO service_identity_roles (service_identity_id, role_id)
+    SELECT im.id, r.id
+    FROM identity_mappings im
+    JOIN tenants t ON t.name = 'Default Tenant'
+    JOIN roles r ON r.tenant_id = t.id AND r.name = 'service-default'
+    WHERE im.provider = 'keycloak' AND im.subject = :'kc_subject'
+    ON CONFLICT DO NOTHING;
 ---
 apiVersion: batch/v1
 kind: Job
