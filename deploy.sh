@@ -130,6 +130,12 @@ echo "== 6/8: Deploying PostgreSQL =="
 $K kubectl apply -f "$K8S_DIR/10-postgresql.yaml"
 $K kubectl -n "$NAMESPACE" rollout status statefulset/postgresql --timeout=180s
 
+echo "== 6b/8: Applying the ASIX schema (tenants, roles, identity_mappings, etc.) =="
+# Jobs are immutable, so drop any previous run before re-applying.
+$K kubectl -n "$NAMESPACE" delete job/asix-schema-init --ignore-not-found
+$K kubectl apply -f "$K8S_DIR/12-schema-init.yaml"
+$K kubectl -n "$NAMESPACE" wait --for=condition=complete job/asix-schema-init --timeout=120s
+
 echo "== 7/8: Provisioning the dedicated Keycloak database =="
 # Jobs are immutable, so drop any previous run before re-applying.
 $K kubectl -n "$NAMESPACE" delete job/keycloak-db-init --ignore-not-found
