@@ -244,3 +244,49 @@ REVOKE ALL ON FUNCTION resolve_external_identity(VARCHAR, VARCHAR) FROM PUBLIC;
 
 GRANT EXECUTE ON FUNCTION resolve_external_identity(VARCHAR, VARCHAR)
     TO asix_admin;
+
+-- ============================================================
+-- Events table — source-agnostic ingestion (Phase: first live source)
+-- Normalized envelope + raw payload, not a syslog-specific table.
+-- Any future source (Windows Event, cloud, firewall) lands here too,
+-- distinguished by source_type, so the collector/table doesn't get
+-- rebuilt per source.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS events (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+
+    tenant_id UUID REFERENCES tenants(id) NOT NULL,
+
+    -- e.g. 'syslog', 'windows_event', 'cloud_aws', 'firewall' — not schema-specific
+    source_type VARCHAR(100) NOT NULL,
+
+    -- Which collector instance ingested this (matches collector-framework.js collector_id)
+    collector_id VARCHAR(255),
+
+    -- When ASIX received it vs. when the source says it happened
+    received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    event_time TIMESTAMP,
+
+    -- Original untouched payload — always kept, regardless of parse success
+    raw TEXT NOT NULL,
+
+    -- Normalized envelope (host, severity, facility, ECS/OCSF-shaped fields
+    -- as normalization.js matures) as JSONB so schema evolves without migrations
+    parsed JSONB DEFAULT '{}'::jsonb,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+ALTER TABLE events ENABLE ROW LEVEL SECURITY;
+CREATE POLICY events_tenant_isolation ON events
+    FOR ALL TO PUBLIC
+    USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+    WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+CREATE INDEX IF NOT EXISTS idx_events_tenant_id ON events(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_events_event_time ON events(event_time);
+CREATE INDEX IF NOT EXISTS idx_events_source_type ON events(source_type);
+CREATE INDEX IF NOT EXISTS idx_events_parsed_gin ON events USING GIN (parsed);
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON events TO asix_admin;
