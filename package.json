@@ -9,6 +9,7 @@
     "pg": "^8.23.0"
   },
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "start:syslog": "node src/ingestion/syslog-server.js"
   }
 }
