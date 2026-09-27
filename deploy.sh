@@ -170,6 +170,12 @@ $K kubectl apply -f "$K8S_DIR/30-asix-api.yaml"
 
 echo "== Waiting for rollout =="
 $K kubectl -n "$NAMESPACE" rollout status deployment/keycloak --timeout=180s
+
+echo "== 8b/8: Seeding default tenant + asix-api service identity =="
+$K kubectl -n "$NAMESPACE" delete job/asix-seed-identity --ignore-not-found
+$K kubectl apply -f "$K8S_DIR/25-seed-identity.yaml"
+$K kubectl -n "$NAMESPACE" wait --for=condition=complete job/asix-seed-identity --timeout=120s
+
 $K kubectl -n "$NAMESPACE" rollout status deployment/asix-api --timeout=120s
 
 echo
