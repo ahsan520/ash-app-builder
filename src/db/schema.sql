@@ -179,6 +179,7 @@ CREATE TABLE IF NOT EXISTS service_identity_roles (
 
 ALTER TABLE service_identity_roles ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS service_identity_roles_tenant_isolation ON service_identity_roles;
 CREATE POLICY service_identity_roles_tenant_isolation
 ON service_identity_roles
 FOR ALL
@@ -284,6 +285,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 ALTER TABLE events ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS events_tenant_isolation ON events;
 CREATE POLICY events_tenant_isolation ON events
     FOR ALL TO PUBLIC
     USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
