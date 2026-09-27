@@ -66,7 +66,7 @@ async function resolveIdentity(provider, subject) {
         tenant_id,
         tenant_name,
         status
-    FROM resolve_external_identity($1, $2)
+    FROM resolve_external_identity($1::varchar, $2::varchar)
     `,
     [provider, subject]
   );
