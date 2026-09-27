@@ -1,0 +1,136 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: asix-seed-identity-sql
+  namespace: asix-platform
+data:
+  seed.sql: |
+    -- Idempotent bootstrap: a default tenant, a default service role, and the
+    -- identity mapping for the asix-api service account. Safe to re-run on
+    -- every deploy — existing rows are matched and left alone, and the
+    -- identity_mappings row is upserted so a subject correction (e.g. after a
+    -- fresh Keycloak realm import generates a new UUID) self-heals here
+    -- instead of needing manual SQL again.
+    DO $$
+    DECLARE
+      v_tenant_id UUID;
+      v_role_id UUID;
+      v_identity_id UUID;
+    BEGIN
+      SELECT id INTO v_tenant_id FROM tenants WHERE name = 'Default Tenant' LIMIT 1;
+      IF v_tenant_id IS NULL THEN
+        INSERT INTO tenants (name, status) VALUES ('Default Tenant', 'active')
+        RETURNING id INTO v_tenant_id;
+        RAISE NOTICE 'Created tenant % (Default Tenant)', v_tenant_id;
+      END IF;
+
+      SELECT id INTO v_role_id FROM roles
+        WHERE tenant_id = v_tenant_id AND name = 'service-default' LIMIT 1;
+      IF v_role_id IS NULL THEN
+        INSERT INTO roles (tenant_id, name, permissions)
+        VALUES (v_tenant_id, 'service-default', ARRAY['auth:identity:read'])
+        RETURNING id INTO v_role_id;
+        RAISE NOTICE 'Created role % (service-default)', v_role_id;
+      END IF;
+
+      INSERT INTO identity_mappings
+        (provider, subject, identity_type, service_name, tenant_id, status)
+      VALUES
+        ('keycloak', :'kc_subject', 'service', 'asix-api', v_tenant_id, 'active')
+      ON CONFLICT (provider, subject)
+      DO UPDATE SET
+        tenant_id = EXCLUDED.tenant_id,
+        service_name = EXCLUDED.service_name,
+        status = 'active'
+      RETURNING id INTO v_identity_id;
+
+      INSERT INTO service_identity_roles (service_identity_id, role_id)
+      VALUES (v_identity_id, v_role_id)
+      ON CONFLICT DO NOTHING;
+
+      RAISE NOTICE 'Seeded identity % -> tenant % / role %', v_identity_id, v_tenant_id, v_role_id;
+    END $$;
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: asix-seed-identity
+  namespace: asix-platform
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: asix-seed-identity
+          image: postgres:16-alpine
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql-secret
+                  key: POSTGRES_PASSWORD
+            - name: KC_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-secret
+                  key: ADMIN_PASSWORD
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              apk add --no-cache curl jq >/dev/null
+
+              # Keycloak may still be finishing startup even though the
+              # Deployment's own readiness probe passed moments ago — retry
+              # the admin login briefly rather than failing the whole Job.
+              ADMIN_TOKEN=""
+              for i in $(seq 1 10); do
+                ADMIN_TOKEN=$(curl -sf -X POST \
+                  http://keycloak:8080/realms/master/protocol/openid-connect/token \
+                  -d grant_type=password \
+                  -d client_id=admin-cli \
+                  -d username=admin \
+                  -d "password=${KC_ADMIN_PASSWORD}" \
+                  | jq -r .access_token 2>/dev/null || true)
+                if [ -n "$ADMIN_TOKEN" ] && [ "$ADMIN_TOKEN" != "null" ]; then
+                  break
+                fi
+                echo "Waiting for Keycloak admin API... ($i/10)"
+                sleep 6
+              done
+              if [ -z "$ADMIN_TOKEN" ] || [ "$ADMIN_TOKEN" = "null" ]; then
+                echo "ERROR: could not authenticate to Keycloak admin API" >&2
+                exit 1
+              fi
+
+              CLIENT_UUID=$(curl -sf -H "Authorization: Bearer $ADMIN_TOKEN" \
+                "http://keycloak:8080/admin/realms/asix/clients?clientId=asix-api" \
+                | jq -r '.[0].id')
+              if [ -z "$CLIENT_UUID" ] || [ "$CLIENT_UUID" = "null" ]; then
+                echo "ERROR: client 'asix-api' not found in realm 'asix'" >&2
+                exit 1
+              fi
+
+              KC_SUBJECT=$(curl -sf -H "Authorization: Bearer $ADMIN_TOKEN" \
+                "http://keycloak:8080/admin/realms/asix/clients/${CLIENT_UUID}/service-account-user" \
+                | jq -r '.id')
+              if [ -z "$KC_SUBJECT" ] || [ "$KC_SUBJECT" = "null" ]; then
+                echo "ERROR: could not resolve service-account-user for client 'asix-api'" >&2
+                exit 1
+              fi
+              echo "Resolved asix-api service account subject: $KC_SUBJECT"
+
+              psql -h postgresql -U asix_admin -d asix_platform \
+                -v ON_ERROR_STOP=1 \
+                -v kc_subject="$KC_SUBJECT" \
+                -f /seed/seed.sql
+
+              echo "Identity seed complete."
+          volumeMounts:
+            - name: seed-sql
+              mountPath: /seed
+      volumes:
+        - name: seed-sql
+          configMap:
+            name: asix-seed-identity-sql
