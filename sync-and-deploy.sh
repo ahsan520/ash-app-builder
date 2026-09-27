@@ -16,8 +16,10 @@ OPT_DIR="/opt/$(basename "$SRC_DIR")"
 if [[ -d "$SRC_DIR/.git" ]]; then
   echo "== Pulling latest from GitHub =="
   git -C "$SRC_DIR" pull
+  GIT_SHA="$(git -C "$SRC_DIR" rev-parse --short HEAD)"
 else
   echo "NOTE: $SRC_DIR is not a git checkout — skipping pull, syncing as-is."
+  GIT_SHA="local"
 fi
 
 if ! command -v rsync &>/dev/null; then
@@ -28,6 +30,10 @@ echo "== Syncing $SRC_DIR -> $OPT_DIR =="
 mkdir -p "$OPT_DIR"
 rsync -a --delete --exclude='.git' "$SRC_DIR/" "$OPT_DIR/"
 
-chmod +x "$OPT_DIR/deploy.sh"
+chmod +x "$OPT_DIR/deploy.sh" "$OPT_DIR/rollback.sh" "$OPT_DIR/restore-postgres.sh" 2>/dev/null || true
 cd "$OPT_DIR"
-./deploy.sh "$OPT_DIR"
+# GIT_SHA becomes the image tag deploy.sh builds/deploys — this is what makes
+# 'kubectl rollout undo' (and rollback.sh --quick) actually restore old code,
+# rather than re-applying a manifest that still points at an already-overwritten
+# floating tag. See deploy.sh's own comment at the image-build step.
+./deploy.sh "$OPT_DIR" "$GIT_SHA"
