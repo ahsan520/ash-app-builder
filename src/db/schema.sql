@@ -4,7 +4,7 @@
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
-CREATE TABLE tenants (
+CREATE TABLE IF NOT EXISTS tenants (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name VARCHAR(255) NOT NULL,
     parent_tenant_id UUID REFERENCES tenants(id) ON DELETE SET NULL,
@@ -14,12 +14,13 @@ CREATE TABLE tenants (
 );
 
 ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation_policy ON tenants;
 CREATE POLICY tenant_isolation_policy ON tenants
     FOR ALL TO PUBLIC
     USING (id = current_setting('app.current_tenant_id')::UUID)
     WITH CHECK (id = current_setting('app.current_tenant_id')::UUID);
 
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id UUID REFERENCES tenants(id) NOT NULL,
     username VARCHAR(255) NOT NULL UNIQUE,
@@ -32,12 +33,13 @@ CREATE TABLE users (
 );
 
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS users_tenant_isolation ON users;
 CREATE POLICY users_tenant_isolation ON users
     FOR ALL TO PUBLIC
     USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
     WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
 
-CREATE TABLE roles (
+CREATE TABLE IF NOT EXISTS roles (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id UUID REFERENCES tenants(id) NOT NULL,
     name VARCHAR(255) NOT NULL,
@@ -46,12 +48,13 @@ CREATE TABLE roles (
 );
 
 ALTER TABLE roles ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS roles_tenant_isolation ON roles;
 CREATE POLICY roles_tenant_isolation ON roles
     FOR ALL TO PUBLIC
     USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
     WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
 
-CREATE TABLE audit_events (
+CREATE TABLE IF NOT EXISTS audit_events (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id UUID REFERENCES tenants(id) NOT NULL,
     user_id UUID REFERENCES users(id),
@@ -63,12 +66,13 @@ CREATE TABLE audit_events (
 );
 
 ALTER TABLE audit_events ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS audit_tenant_isolation ON audit_events;
 CREATE POLICY audit_tenant_isolation ON audit_events
     FOR ALL TO PUBLIC
     USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
     WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
 
-CREATE TABLE sessions (
+CREATE TABLE IF NOT EXISTS sessions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID REFERENCES users(id) NOT NULL,
     tenant_id UUID REFERENCES tenants(id) NOT NULL,
@@ -80,15 +84,16 @@ CREATE TABLE sessions (
 );
 
 ALTER TABLE sessions ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS sessions_tenant_isolation ON sessions;
 CREATE POLICY sessions_tenant_isolation ON sessions
     FOR ALL TO PUBLIC
     USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
     WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
 
-CREATE INDEX idx_users_tenant_id ON users(tenant_id);
-CREATE INDEX idx_roles_tenant_id ON roles(tenant_id);
-CREATE INDEX idx_audit_tenant_id ON audit_events(tenant_id);
-CREATE INDEX idx_sessions_tenant_id ON sessions(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_users_tenant_id ON users(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_roles_tenant_id ON roles(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_audit_tenant_id ON audit_events(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_tenant_id ON sessions(tenant_id);
 
 -- ASIX identity mappings
 -- Maps external identities (Keycloak) to ASIX local identities.
