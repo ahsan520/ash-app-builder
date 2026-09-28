@@ -25,7 +25,7 @@ const RFC3164_RE =
 
 // RFC5424: <PRI>VERSION TIMESTAMP HOST APP-NAME PROCID MSGID [SD] MSG
 const RFC5424_RE =
-  /^<(\d{1,3})>(\d)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(?:(\[.*?\])\s?)?(.*)$/;
+  /^<(\d{1,3})>(\d)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(?:(\[.*?\]|-)\s?)?(.*)$/;
 
 const FACILITIES = [
   'kern', 'user', 'mail', 'daemon', 'auth', 'syslog', 'lpr', 'news',
@@ -65,7 +65,7 @@ function parseSyslogLine(line) {
       app_name: appName === '-' ? null : appName,
       proc_id: procId === '-' ? null : procId,
       msg_id: msgId === '-' ? null : msgId,
-      structured_data: structuredData || null,
+      structured_data: structuredData && structuredData !== '-' ? structuredData : null,
       message,
       event_time: safeDate(timestamp),
     };
