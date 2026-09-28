@@ -1,17 +1,22 @@
-// Phase: first live source — syslog receiver
+// Phase: first live source — syslog broker/collector
 //
-// Deliberately not Kafka/OpenSearch yet. This listens for raw syslog
-// (UDP + TCP, newline-delimited), builds a normalized envelope, and
-// writes both the envelope and the untouched raw line into the
-// source-agnostic `events` table (see db/schema.sql).
+// This is the "Collector + Broker" tier from architecture.md's own
+// pipeline (Data Source → Collector → Broker → ... → Storage), NOT the
+// data node. It parses raw syslog into a normalized envelope and
+// forwards it to the data node's ingestion API over HTTP(S) — it never
+// touches Postgres directly.
 //
-// A collector is assigned to exactly one tenant at a time (matching
-// the model in collector-framework.js) — raw syslog has no tenant
-// field of its own, so tenant_id is bound at startup, not per-message.
+// That split matters once there's more than one of these (broker VMs
+// per site/segment, XSIAM-Broker-VM-style): a broker holds no DB
+// credentials at all, so a compromised or merely-exposed broker VM
+// can't reach the database, only the one narrow ingest endpoint.
+//
+// A broker is assigned to exactly one tenant at a time — raw syslog has
+// no tenant field of its own, so the tenant is configured at startup
+// and sent with every batch; the data node resolves/validates it.
 
 const dgram = require('dgram');
 const net = require('net');
-const db = require('../db');
 const { EventSpool } = require('./event-spool');
 
 // RFC3164-ish: <PRI>TIMESTAMP HOST TAG: MSG
@@ -104,24 +109,32 @@ function safeDate(str) {
 
 class SyslogListener {
   constructor(options = {}) {
-    this.tenantId = options.tenantId;
+    this.tenantId = options.tenantId || null;
+    this.tenantName = options.tenantName || null;
     this.collectorId = options.collectorId || 'syslog-local';
     this.udpPort = options.udpPort ?? 5514;
     this.tcpPort = options.tcpPort ?? 5514;
     this.bindHost = options.bindHost || '0.0.0.0';
     this.onEvent = options.onEvent; // optional hook, mainly for tests
 
-    if (!this.tenantId) {
-      throw new Error('SyslogListener requires a tenantId (collector-to-tenant assignment)');
+    if (!this.tenantId && !this.tenantName) {
+      throw new Error('SyslogListener requires tenantId or tenantName (which tenant this broker belongs to)');
+    }
+
+    this.ingestApiUrl = options.ingestApiUrl;
+    this.ingestApiToken = options.ingestApiToken;
+    if (!this.ingestApiUrl || !this.ingestApiToken) {
+      throw new Error('SyslogListener requires ingestApiUrl and ingestApiToken (data node ingestion endpoint)');
     }
 
     this._udpSocket = null;
     this._tcpServer = null;
     this._drainInterval = null;
 
-    // If the DB is briefly unreachable, spool to disk instead of dropping
-    // the event — this is the actual durability boundary for ingestion,
-    // separate from console/gateway uptime.
+    // If the data node / network is briefly unreachable, spool to disk
+    // instead of dropping the event — this is the actual durability
+    // boundary for ingestion, separate from console/gateway uptime and
+    // now also separate from the data node's own uptime.
     this.spool = new EventSpool({
       filePath: options.spoolPath || '/var/lib/asix/syslog-spool.ndjson',
       maxBytes: options.spoolMaxBytes,
@@ -151,7 +164,7 @@ class SyslogListener {
     if (this.spool.size() === 0) return;
 
     const { drained, remaining } = await this.spool.drain((record) =>
-      this._writeToDb(record.envelope, record.raw)
+      this._sendToDataNode(record.envelope, record.raw)
     );
 
     if (drained > 0) {
@@ -228,16 +241,16 @@ class SyslogListener {
     };
 
     try {
-      await this._writeToDb(envelope, trimmed);
+      await this._sendToDataNode(envelope, trimmed);
     } catch (err) {
-      // DB unreachable/erroring — spool it rather than lose it, and let
-      // the periodic drain retry once the DB is back.
+      // Data node/network unreachable — spool it rather than lose it,
+      // and let the periodic drain retry once it's back.
       const spooled = this.spool.append({ envelope, raw: trimmed });
       if (spooled) {
-        console.error(`[syslog-listener] DB write failed (${err.message}); event spooled`);
+        console.error(`[syslog-listener] ingest send failed (${err.message}); event spooled`);
       } else {
         console.error(
-          `[syslog-listener] DB write failed (${err.message}) AND spool is full; event dropped`
+          `[syslog-listener] ingest send failed (${err.message}) AND spool is full; event dropped`
         );
       }
     }
@@ -245,23 +258,34 @@ class SyslogListener {
     if (this.onEvent) this.onEvent(envelope, trimmed);
   }
 
-  async _writeToDb(envelope, raw) {
-    await db.withTenant(this.tenantId, (client) =>
-      client.query(
-        `
-        INSERT INTO events (tenant_id, source_type, collector_id, event_time, raw, parsed)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        `,
-        [
-          this.tenantId,
-          'syslog',
-          this.collectorId,
-          envelope.event_time,
+  async _sendToDataNode(envelope, raw) {
+    const body = {
+      tenant_id: this.tenantId,
+      tenant_name: this.tenantName,
+      source_type: 'syslog',
+      collector_id: this.collectorId,
+      events: [
+        {
+          event_time: envelope.event_time,
           raw,
-          JSON.stringify(envelope),
-        ]
-      )
-    );
+          parsed: envelope,
+        },
+      ],
+    };
+
+    const response = await fetch(this.ingestApiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.ingestApiToken}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`ingest API responded ${response.status}: ${text.slice(0, 200)}`);
+    }
   }
 }
 
