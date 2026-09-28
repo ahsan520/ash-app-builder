@@ -192,9 +192,56 @@ function auditMiddleware(req, res, next) {
   next();
 }
 
+// Broker ingestion auth — deliberately NOT the Keycloak JWT flow above.
+// A broker VM is a machine forwarding high-volume event batches, not a
+// human or service logging in interactively; requiring a full OAuth
+// token exchange per batch doesn't fit that shape.
+//
+// Phase 1: a single shared bearer token (BROKER_INGEST_TOKEN), the same
+// pattern as Splunk's HTTP Event Collector (HEC) token — one secret that
+// authorizes "this is a legitimate broker," not a per-broker identity.
+// It does NOT establish tenant context; the request body's tenant_id/
+// tenant_name does, and is validated against the tenants table.
+//
+// Known gap to close before broker VMs run outside a fully trusted
+// network: this token can't be revoked per-broker or audited back to
+// which broker sent what. The schema already anticipates the real fix —
+// identity_mappings (identity_type='service') + service_identity_tenants
+// already model "a service identity authorized for specific tenants,"
+// the same mechanism asix-api itself uses via Keycloak client
+// credentials. Migrating brokers onto that (one Keycloak client per
+// broker, resolved through resolve_external_identity like everything
+// else) is the natural Phase 2 step, not a new mechanism.
+function brokerAuthMiddleware(req, res, next) {
+  const expected = process.env.BROKER_INGEST_TOKEN;
+
+  if (!expected) {
+    console.error('BROKER_INGEST_TOKEN is not configured — refusing all broker ingestion');
+    return res.status(503).json({
+      success: false,
+      error: { code: 'INGEST_NOT_CONFIGURED', message: 'Ingestion is not configured on this node' },
+    });
+  }
+
+  const authorization = req.headers.authorization;
+  const token = authorization && authorization.startsWith('Bearer ')
+    ? authorization.slice('Bearer '.length).trim()
+    : null;
+
+  if (!token || token !== expected) {
+    return res.status(401).json({
+      success: false,
+      error: { code: 'BROKER_AUTH_INVALID', message: 'Invalid or missing broker ingest token' },
+    });
+  }
+
+  next();
+}
+
 module.exports = {
   authMiddleware,
   tenantMiddleware,
   rbacMiddleware,
   auditMiddleware,
+  brokerAuthMiddleware,
 };
