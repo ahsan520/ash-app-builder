@@ -36,6 +36,11 @@ spec:
                 secretKeyRef:
                   name: postgresql-secret
                   key: POSTGRES_PASSWORD
+            - name: BROKER_INGEST_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: broker-ingest-secret
+                  key: BROKER_INGEST_TOKEN
           resources:
             requests:
               cpu: "250m"
