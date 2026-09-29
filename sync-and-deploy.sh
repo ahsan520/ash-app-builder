@@ -13,6 +13,12 @@ set -euo pipefail
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPT_DIR="/opt/$(basename "$SRC_DIR")"
 
+# Fail fast if the clock is off — apt rejects Release files as "not valid yet"
+# otherwise (this runs before any apt-get call below and in deploy.sh).
+# shellcheck source=scripts/lib/preflight-clock.sh
+source "$SRC_DIR/scripts/lib/preflight-clock.sh"
+preflight_clock
+
 if [[ -d "$SRC_DIR/.git" ]]; then
   echo "== Pulling latest from GitHub =="
   git -C "$SRC_DIR" pull

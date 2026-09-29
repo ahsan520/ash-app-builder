@@ -32,6 +32,11 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 
+# Also checked in sync-and-deploy.sh; repeated here so deploy.sh is safe to run directly.
+# shellcheck source=scripts/lib/preflight-clock.sh
+source "$SCRIPT_DIR/scripts/lib/preflight-clock.sh"
+preflight_clock
+
 echo "== 0/9: Creating 'asix' user (passwordless sudo) + OpenSSH server =="
 if id -u asix &>/dev/null; then
   echo "User 'asix' already exists — skipping creation and password setup."
