@@ -1,3 +1,4 @@
+const path = require('path');
 const express = require('express');
 const db = require('../db');
 
@@ -14,6 +15,24 @@ const app = express();
 app.disable('x-powered-by');
 
 app.use(express.json());
+
+// Central portal (static SPA). Unauthenticated on purpose: it is only HTML/JS;
+// every data call it makes goes through the Bearer-token middleware below.
+app.use(
+  '/portal',
+  (req, res, next) => {
+    res.set({
+      'Content-Security-Policy':
+        "default-src 'self'; connect-src 'self' https:; style-src 'self' 'unsafe-inline'; " +
+        "script-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'no-referrer',
+      'Cache-Control': 'no-store',
+    });
+    next();
+  },
+  express.static(path.join(__dirname, '..', 'portal'))
+);
 
 // Kubernetes / load-balancer health endpoint.
 // Intentionally unauthenticated so health checks do not require a JWT.
