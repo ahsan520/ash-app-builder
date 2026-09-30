@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ASIX Portal</title>
+<style>
+  :root { --bg:#0e1420; --panel:#151d2e; --line:#243049; --text:#dbe4f5; --mute:#8a98b5; --acc:#4da3ff; --ok:#3ecf8e; --bad:#ff6b6b; --warn:#f5b642; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif; }
+  header { display:flex; align-items:center; gap:24px; padding:0 20px; height:52px; background:var(--panel); border-bottom:1px solid var(--line); position:sticky; top:0; }
+  .brand { font-weight:700; letter-spacing:.5px; } .brand b { color:var(--acc); }
+  nav { display:flex; gap:4px; flex:1; }
+  nav button { background:none; border:0; color:var(--mute); padding:16px 12px; cursor:pointer; font:inherit; border-bottom:2px solid transparent; }
+  nav button.on { color:var(--text); border-color:var(--acc); }
+  .who { color:var(--mute); font-size:12px; display:flex; gap:12px; align-items:center; }
+  main { padding:20px; max-width:1300px; margin:0 auto; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:16px; }
+  h2 { margin:0 0 12px; font-size:15px; } h3 { margin:0 0 8px; font-size:13px; color:var(--mute); text-transform:uppercase; letter-spacing:.6px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; }
+  .kv { display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid var(--line); } .kv:last-child { border:0; }
+  .kv span:first-child { color:var(--mute); }
+  input, select, button.btn { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:8px 10px; font:inherit; }
+  button.btn { cursor:pointer; } button.btn.pri { background:var(--acc); border-color:var(--acc); color:#04121f; font-weight:600; }
+  button.btn:disabled { opacity:.4; cursor:default; }
+  form.search { display:grid; grid-template-columns:2fr 1fr 1fr 1fr 90px auto; gap:8px; align-items:end; }
+  label { display:flex; flex-direction:column; gap:4px; color:var(--mute); font-size:12px; }
+  table { width:100%; border-collapse:collapse; } th { text-align:left; color:var(--mute); font-weight:500; padding:6px 8px; border-bottom:1px solid var(--line); }
+  td { padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  tr.row { cursor:pointer; } tr.row:hover td { background:#1a2438; }
+  td.msg { font-family:ui-monospace,Menlo,monospace; font-size:12px; word-break:break-all; }
+  pre { margin:0; padding:10px; background:var(--bg); border-radius:6px; overflow:auto; font-size:12px; }
+  .pill { padding:2px 8px; border-radius:10px; font-size:12px; } .ok { background:#12382a; color:var(--ok); } .bad { background:#3d1a1a; color:var(--bad); } .off { background:#222b3f; color:var(--mute); }
+  .center { min-height:70vh; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; text-align:center; }
+  .err { color:var(--bad); } .mute { color:var(--mute); } .hidden { display:none !important; }
+  .pager { display:flex; gap:8px; align-items:center; margin-top:12px; justify-content:flex-end; }
+  @media (max-width:900px) { form.search { grid-template-columns:1fr 1fr; } }
+</style>
+</head>
+<body>
+<div id="login" class="center hidden">
+  <div class="brand" style="font-size:28px">ASIX <b>Portal</b></div>
+  <div class="mute">SIEM control plane and log search</div>
+  <button class="btn pri" id="signin">Sign in</button>
+  <div id="loginerr" class="err"></div>
+</div>
+
+<div id="app" class="hidden">
+  <header>
+    <div class="brand">ASIX <b>Portal</b></div>
+    <nav id="nav">
+      <button data-v="overview" class="on">Overview</button>
+      <button data-v="search">Log search</button>
+      <button data-v="control">Control plane</button>
+    </nav>
+    <div class="who"><span id="whoami"></span><button class="btn" id="signout">Sign out</button></div>
+  </header>
+  <main>
+    <section id="v-overview">
+      <div class="grid">
+        <div class="card"><h3>Platform</h3><div id="ov-health" class="mute">Loading...</div></div>
+        <div class="card"><h3>Your identity</h3><div id="ov-me" class="mute">Loading...</div></div>
+      </div>
+    </section>
+
+    <section id="v-search" class="hidden">
+      <div class="card">
+        <form class="search" id="sform">
+          <label>Text contains<input name="q" placeholder="e.g. Failed password"></label>
+          <label>Source type<input name="source_type" placeholder="syslog"></label>
+          <label>Collector<input name="collector_id"></label>
+          <label>Time range
+            <select name="range"><option value="15">Last 15 min</option><option value="60">Last hour</option><option value="1440" selected>Last 24 hours</option><option value="10080">Last 7 days</option><option value="">All time</option></select>
+          </label>
+          <label>Rows<select name="limit"><option>50</option><option>100</option><option>250</option><option>500</option></select></label>
+          <button class="btn pri" type="submit">Search</button>
+        </form>
+        <div class="mute" style="margin-top:8px;font-size:12px">Free text is a substring match over the raw line (sequential scan). Newest events first.</div>
+      </div>
+      <div class="card">
+        <div id="sinfo" class="mute">Run a search to see events.</div>
+        <table id="stable" class="hidden"><thead><tr><th style="width:170px">Time (UTC)</th><th style="width:90px">Source</th><th style="width:140px">Collector</th><th>Event</th></tr></thead><tbody></tbody></table>
+        <div class="pager"><button class="btn" id="prev">Prev</button><span id="pageinfo" class="mute"></span><button class="btn" id="next">Next</button></div>
+      </div>
+    </section>
+
+    <section id="v-control" class="hidden">
+      <div class="card"><h2>Platform components</h2><div id="ctl-health" class="mute">Loading...</div></div>
+      <div class="card"><h2>Modules</h2>
+        <div class="mute" style="margin-bottom:8px">Only modules with a working backend are enabled here.</div>
+        <div class="kv"><span>Log search</span><span class="pill ok">available</span></div>
+        <div class="kv"><span>Cases and incidents</span><span class="pill off">no backend yet</span></div>
+        <div class="kv"><span>Detection rules</span><span class="pill off">no backend yet</span></div>
+        <div class="kv"><span>Playbooks</span><span class="pill off">no backend yet</span></div>
+        <div class="kv"><span>Collectors and agents</span><span class="pill off">no backend yet</span></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+'use strict';
+// ---- config -----------------------------------------------------------------
+// Keycloak is published by nginx on its own HTTPS port (see k8s/40-nginx.yaml).
+const KC_PORT = 30444;
+const ISSUER = 'https://' + location.hostname + ':' + KC_PORT + '/realms/asix';
+const OIDC = ISSUER + '/protocol/openid-connect';
+const CLIENT_ID = 'asix-portal';
+const REDIRECT = location.origin + '/portal/';
+const $ = (id) => document.getElementById(id);
+const S = sessionStorage;
+
+// ---- helpers (all dynamic text goes through textContent: log lines are untrusted) --
+function el(tag, props, ...kids) {
+  const e = document.createElement(tag);
+  Object.assign(e, props || {});
+  kids.flat().forEach((k) => e.append(k));
+  return e;
+}
+const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const rand = () => b64url(crypto.getRandomValues(new Uint8Array(32)));
+function kv(obj) {
+  const box = el('div');
+  Object.entries(obj).forEach(([k, v]) => box.append(el('div', { className: 'kv' }, el('span', { textContent: k }), el('span', { textContent: v === null || v === undefined ? '-' : typeof v === 'object' ? JSON.stringify(v) : String(v) }))));
+  return box;
+}
+function jwtClaims(t) { try { return JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))); } catch { return {}; } }
+
+// ---- OIDC authorization code + PKCE ----------------------------------------------
+async function login() {
+  const verifier = rand(), state = rand();
+  S.setItem('pkce', JSON.stringify({ verifier, state }));
+  const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+  location.href = OIDC + '/auth?' + new URLSearchParams({ client_id: CLIENT_ID, redirect_uri: REDIRECT, response_type: 'code', scope: 'openid profile', state, code_challenge: challenge, code_challenge_method: 'S256' });
+}
+async function tokenRequest(params) {
+  const r = await fetch(OIDC + '/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: CLIENT_ID, ...params }) });
+  if (!r.ok) throw new Error('token endpoint returned ' + r.status);
+  const t = await r.json();
+  S.setItem('tok', JSON.stringify({ access: t.access_token, refresh: t.refresh_token, id: t.id_token, exp: Date.now() + (t.expires_in - 10) * 1000 }));
+}
+async function finishLogin() {
+  const q = new URLSearchParams(location.search);
+  if (!q.get('code')) return;
+  const saved = JSON.parse(S.getItem('pkce') || '{}');
+  S.removeItem('pkce');
+  history.replaceState(null, '', REDIRECT);
+  if (!saved.state || saved.state !== q.get('state')) throw new Error('login state mismatch');
+  await tokenRequest({ grant_type: 'authorization_code', code: q.get('code'), redirect_uri: REDIRECT, code_verifier: saved.verifier });
+}
+async function accessToken() {
+  let t = JSON.parse(S.getItem('tok') || 'null');
+  if (!t) return null;
+  if (Date.now() >= t.exp && t.refresh) {
+    try { await tokenRequest({ grant_type: 'refresh_token', refresh_token: t.refresh }); t = JSON.parse(S.getItem('tok')); }
+    catch { S.removeItem('tok'); return null; }
+  }
+  return t.access;
+}
+function logout() {
+  const t = JSON.parse(S.getItem('tok') || '{}');
+  S.removeItem('tok');
+  const p = { client_id: CLIENT_ID, post_logout_redirect_uri: REDIRECT };
+  if (t.id) p.id_token_hint = t.id;
+  location.href = OIDC + '/logout?' + new URLSearchParams(p);
+}
+async function api(path) {
+  const tok = await accessToken();
+  if (!tok) { showLogin(); throw new Error('signed out'); }
+  const r = await fetch(path, { headers: { Authorization: 'Bearer ' + tok } });
+  let body = null; try { body = await r.json(); } catch {}
+  if (!r.ok) {
+    const msg = (body && body.error && body.error.message) || r.statusText;
+    const e = new Error(r.status + ' ' + msg + (body && body.error && body.error.code ? ' (' + body.error.code + ')' : '')); e.status = r.status; throw e;
+  }
+  return body;
+}
+
+// ---- views ------------------------------------------------------------------------
+function showLogin(msg) { $('app').classList.add('hidden'); $('login').classList.remove('hidden'); $('loginerr').textContent = msg || ''; }
+function show(view) {
+  document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.v === view));
+  ['overview', 'search', 'control'].forEach((v) => $('v-' + v).classList.toggle('hidden', v !== view));
+  if (view === 'overview' || view === 'control') loadHealth();
+}
+async function loadHealth() {
+  let h;
+  try { const r = await fetch('/v1/health/status'); h = await r.json(); } catch (e) { h = { status: 'unreachable' }; }
+  const flat = { status: h.status, service: h.service, version: h.version, ...Object.fromEntries(Object.entries(h.dependencies || {}).map(([k, v]) => ['dependency: ' + k, v])) };
+  $('ov-health').replaceChildren(kv(flat));
+  const rows = el('div');
+  Object.entries(h.dependencies || {}).concat([['asix-api', h.status === 'ok' ? 'ok' : 'error']]).forEach(([k, v]) =>
+    rows.append(el('div', { className: 'kv' }, el('span', { textContent: k }), el('span', { className: 'pill ' + (v === 'ok' ? 'ok' : 'bad'), textContent: v }))));
+  $('ctl-health').replaceChildren(rows);
+}
+async function loadMe() {
+  try {
+    const me = await api('/v1/auth/me');
+    $('ov-me').replaceChildren(kv({ tenant: me.tenant_name, tenant_status: me.tenant_status, user_id: me.user_id, session: me.session_id }));
+    $('whoami').textContent = (jwtClaims(await accessToken()).preferred_username || '') + ' @ ' + me.tenant_name;
+  } catch (e) {
+    $('ov-me').replaceChildren(el('div', { className: 'err', textContent: e.message }), el('div', { className: 'mute', textContent: 'Signed in to Keycloak, but this user is not mapped to an ASIX user/role yet (run scripts/deploy/bootstrap-portal.sh).' }));
+  }
+}
+
+let page = 0, lastQuery = null;
+async function runSearch(offset) {
+  const f = new FormData($('sform')), p = new URLSearchParams();
+  ['q', 'source_type', 'collector_id'].forEach((k) => f.get(k).trim() && p.set(k, f.get(k).trim()));
+  const mins = f.get('range');
+  if (mins) p.set('from', new Date(Date.now() - Number(mins) * 60000).toISOString());
+  const limit = Number(f.get('limit')); p.set('limit', limit); p.set('offset', offset);
+  $('sinfo').textContent = 'Searching...'; $('stable').classList.add('hidden');
+  try {
+    const r = await api('/v1/search/events?' + p);
+    page = offset; lastQuery = { limit, n: r.count };
+    const tb = $('stable').querySelector('tbody'); tb.replaceChildren();
+    r.events.forEach((ev) => {
+      const t = ev.event_time || ev.received_at || '';
+      const detail = el('tr', { className: 'hidden' }, el('td', { colSpan: 4 }, el('pre', { textContent: JSON.stringify({ id: ev.id, received_at: ev.received_at, parsed: ev.parsed }, null, 2) })));
+      const row = el('tr', { className: 'row', onclick: () => detail.classList.toggle('hidden') },
+        el('td', { textContent: String(t).replace('T', ' ').replace(/\.\d+Z?$/, '') }), el('td', { textContent: ev.source_type }),
+        el('td', { textContent: ev.collector_id || '-' }), el('td', { className: 'msg', textContent: ev.raw }));
+      tb.append(row, detail);
+    });
+    $('stable').classList.toggle('hidden', r.count === 0);
+    $('sinfo').textContent = r.count === 0 ? 'No events matched.' : 'Showing ' + (offset + 1) + '-' + (offset + r.count) + '. Click a row for parsed fields.';
+    $('prev').disabled = offset === 0; $('next').disabled = r.count < limit; $('pageinfo').textContent = 'page ' + (offset / limit + 1);
+  } catch (e) { $('sinfo').replaceChildren(el('span', { className: 'err', textContent: e.message })); }
+}
+
+// ---- boot ---------------------------------------------------------------------------
+$('signin').onclick = login; $('signout').onclick = logout;
+$('nav').onclick = (e) => e.target.dataset.v && show(e.target.dataset.v);
+$('sform').onsubmit = (e) => { e.preventDefault(); runSearch(0); };
+$('prev').onclick = () => runSearch(Math.max(0, page - lastQuery.limit));
+$('next').onclick = () => runSearch(page + lastQuery.limit);
+(async () => {
+  try {
+    if (!crypto.subtle) throw new Error('This page needs HTTPS (secure context). Use the https:// address.');
+    await finishLogin();
+    if (!(await accessToken())) return showLogin();
+    $('login').classList.add('hidden'); $('app').classList.remove('hidden');
+    show('overview'); loadMe();
+  } catch (e) { showLogin(e.message); }
+})();
+</script>
+</body>
+</html>
