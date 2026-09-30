@@ -6,6 +6,17 @@
 #
 #   http://<server-ip>:30880/        -> asix-api
 #   http://<server-ip>:30880/auth/   -> Keycloak
+#   https://<server-ip>:30443/       -> asix-api            (self-signed TLS)
+#   https://<server-ip>:30443/auth/  -> Keycloak
+#   https://<server-ip>:30444/       -> Keycloak at the root (admin console /
+#                                       login pages; Keycloak's master realm
+#                                       refuses plain HTTP from non-localhost)
+#
+# TLS: the certificate lives in Secret nginx-tls (namespace asix-platform),
+# created by scripts/deploy/make-nginx-tls.sh (deploy.sh calls it before this
+# file is applied). It is self-signed, so browsers/curl need to accept it
+# (curl -k) or be given the cert (curl --cacert). Swap in a real cert later by
+# replacing the Secret contents - nothing else here changes.
 #
 # The pod-template annotation below is filled in by deploy.sh with a hash of
 # this file: nginx does not reload on ConfigMap changes, so a changed config
@@ -20,37 +31,88 @@ metadata:
   name: nginx-control-config
   namespace: asix-platform
 data:
+  # Routes shared by the plain-HTTP (80) and TLS (443) servers. Deliberately
+  # NOT named *.conf: the stock nginx.conf includes conf.d/*.conf at http
+  # level, and this fragment is only valid inside a server block.
+  locations.inc: |
+    location / {
+      proxy_pass http://asix-api.asix-platform.svc.cluster.local:3000;
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location /auth/ {
+      proxy_pass http://keycloak.asix-platform.svc.cluster.local:8080/;
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    # /search was the old skeleton route (removed when server.js switched to
+    # the gateway). Map it to the real, authenticated search endpoint: the
+    # Authorization header is passed through and asix-api still enforces
+    # login, tenant and permission checks. Exact matches only, so
+    # /search/anything-else is not rewritten.
+    location = /search {
+      proxy_pass http://asix-api.asix-platform.svc.cluster.local:3000/v1/search/events;
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location = /search/ {
+      proxy_pass http://asix-api.asix-platform.svc.cluster.local:3000/v1/search/events;
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-Proto $scheme;
+    }
   default.conf: |
     upstream keycloak {
       server keycloak.asix-platform.svc.cluster.local:8080;
     }
+
+    # Plain HTTP - unchanged behaviour (NodePort 30880).
     server {
       listen 80;
+      include /etc/nginx/conf.d/locations.inc;
+    }
+
+    # TLS front door for asix-api + Keycloak under /auth/ (NodePort 30443).
+    server {
+      listen 443 ssl;
+      ssl_certificate     /etc/nginx/tls/tls.crt;
+      ssl_certificate_key /etc/nginx/tls/tls.key;
+      ssl_protocols       TLSv1.2 TLSv1.3;
+      ssl_session_cache   shared:SSL:5m;
+      ssl_session_timeout 10m;
+      include /etc/nginx/conf.d/locations.inc;
+    }
+
+    # TLS front door for Keycloak served at the ROOT (NodePort 30444). Keycloak
+    # builds its own redirect URLs (/admin/, /realms/...) without the /auth/
+    # prefix, so it gets a port to itself instead of a sub-path. Keycloak runs
+    # with --proxy-headers=xforwarded and reads the public host/scheme from the
+    # headers below.
+    server {
+      listen 8443 ssl;
+      ssl_certificate     /etc/nginx/tls/tls.crt;
+      ssl_certificate_key /etc/nginx/tls/tls.key;
+      ssl_protocols       TLSv1.2 TLSv1.3;
+      ssl_session_cache   shared:SSL:5m;
+      ssl_session_timeout 10m;
+
+      # Keycloak sets large cookies / headers.
+      proxy_buffer_size          128k;
+      proxy_buffers              4 256k;
+      proxy_busy_buffers_size    256k;
+
       location / {
-        proxy_pass http://asix-api.asix-platform.svc.cluster.local:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-      }
-      location /auth/ {
-        proxy_pass http://keycloak.asix-platform.svc.cluster.local:8080/;
-        proxy_set_header Host $host;
+        proxy_pass http://keycloak.asix-platform.svc.cluster.local:8080;
+        proxy_set_header Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-      }
-      # /search was the old skeleton route (removed when server.js switched to
-      # the gateway). Map it to the real, authenticated search endpoint: the
-      # Authorization header is passed through and asix-api still enforces
-      # login, tenant and permission checks. Exact matches only, so
-      # /search/anything-else is not rewritten.
-      location = /search {
-        proxy_pass http://asix-api.asix-platform.svc.cluster.local:3000/v1/search/events;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-      }
-      location = /search/ {
-        proxy_pass http://asix-api.asix-platform.svc.cluster.local:3000/v1/search/events;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Forwarded-Proto https;
       }
     }
 ---
@@ -82,9 +144,14 @@ spec:
               name: http
             - containerPort: 443
               name: https
+            - containerPort: 8443
+              name: https-keycloak
           volumeMounts:
             - name: nginx-config
               mountPath: /etc/nginx/conf.d
+            - name: nginx-tls
+              mountPath: /etc/nginx/tls
+              readOnly: true
           resources:
             requests:
               memory: "64Mi"
@@ -96,6 +163,9 @@ spec:
         - name: nginx-config
           configMap:
             name: nginx-control-config
+        - name: nginx-tls
+          secret:
+            secretName: nginx-tls
 ---
 apiVersion: v1
 kind: Service
@@ -114,4 +184,8 @@ spec:
     - name: https
       port: 443
       targetPort: 443
-      nodePort: 30443   # nothing listens on 443 in the nginx config yet (no TLS)
+      nodePort: 30443
+    - name: https-keycloak
+      port: 8443
+      targetPort: 8443
+      nodePort: 30444

@@ -44,10 +44,11 @@ spec:
           image: quay.io/keycloak/keycloak:26.0
           # Production mode (kc.sh start) instead of start-dev.
           # --http-enabled/--hostname-strict=false keep it reachable over plain
-          # HTTP on the internal network for now — put a TLS-terminating
-          # reverse proxy/ingress in front and set KC_HOSTNAME before exposing
-          # this beyond the cluster.
-          args: ["start", "--import-realm", "--health-enabled=true", "--http-enabled=true", "--hostname-strict=false"]
+          # HTTP on the internal network; TLS is terminated by nginx-control
+          # (self-signed, see 40-nginx.yaml), which passes X-Forwarded-Host/
+          # -Proto - hence --proxy-headers=xforwarded. Set KC_HOSTNAME once
+          # there is a real DNS name.
+          args: ["start", "--import-realm", "--health-enabled=true", "--http-enabled=true", "--hostname-strict=false", "--proxy-headers=xforwarded"]
           ports:
             - containerPort: 8080
               name: http
