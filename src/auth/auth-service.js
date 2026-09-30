@@ -10,6 +10,20 @@ const KEYCLOAK_JWKS_URL =
   process.env.KEYCLOAK_JWKS_URL ||
   `${KEYCLOAK_ISSUER}/protocol/openid-connect/certs`;
 
+// Tokens minted for the browser portal carry the PUBLIC issuer (Keycloak derives
+// it from the Host header nginx forwards, e.g. https://10.1.1.3:30444/realms/asix),
+// while in-cluster clients get http://keycloak:8080/realms/asix. Signatures are
+// still verified against this realm's own JWKS above, so the host part of `iss`
+// cannot be forged into acceptance - we only allow the same realm name under
+// any https origin. Override with KEYCLOAK_ALLOWED_ISSUER_REGEX.
+const ALLOWED_ISSUER_RE = new RegExp(
+  process.env.KEYCLOAK_ALLOWED_ISSUER_REGEX || '^https://[^/]+/realms/asix$'
+);
+
+function issuerAllowed(iss) {
+  return iss === KEYCLOAK_ISSUER || ALLOWED_ISSUER_RE.test(String(iss || ''));
+}
+
 const KEYCLOAK_AUDIENCE =
   process.env.KEYCLOAK_AUDIENCE ||
   'asix-api';
@@ -19,9 +33,12 @@ const JWKS = createRemoteJWKSet(new URL(KEYCLOAK_JWKS_URL));
 async function validateToken(token) {
   try {
     const { payload } = await jwtVerify(token, JWKS, {
-      issuer: KEYCLOAK_ISSUER,
       audience: KEYCLOAK_AUDIENCE,
     });
+
+    if (!issuerAllowed(payload.iss)) {
+      throw new Error(`unexpected token issuer: ${payload.iss}`);
+    }
 
     return {
       valid: true,
