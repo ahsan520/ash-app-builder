@@ -300,6 +300,170 @@ app.get(
   }
 );
 
+// Data sources: what has actually been ingested, per source type + collector.
+// Derived from the events table (there is no separate collector registry yet).
+app.get(
+  '/v1/data-sources',
+  (req, res, next) => {
+    req.required_permission = 'search:events:read';
+    next();
+  },
+  authMiddleware,
+  tenantMiddleware,
+  rbacMiddleware,
+  auditMiddleware,
+  async (req, res) => {
+    try {
+      const result = await db.withTenant(req.tenant_id, (client) =>
+        client.query(
+          `
+          SELECT source_type,
+                 collector_id,
+                 COUNT(*)::int AS events_total,
+                 COUNT(*) FILTER (
+                   WHERE COALESCE(event_time, received_at) > now() - interval '24 hours'
+                 )::int AS events_24h,
+                 MAX(received_at) AS last_received
+          FROM events
+          WHERE tenant_id = $1
+          GROUP BY source_type, collector_id
+          ORDER BY MAX(received_at) DESC
+          `,
+          [req.tenant_id]
+        )
+      );
+      res.status(200).json({ success: true, sources: result.rows });
+    } catch (error) {
+      console.error('Data source listing failed:', error.message);
+      res.status(500).json({
+        success: false,
+        error: { code: 'DATA_SOURCES_ERROR', message: 'Failed to list data sources' },
+      });
+    }
+  }
+);
+
+// Settings > Users & roles (read-only): the tenant's users and roles.
+app.get(
+  '/v1/settings/access',
+  (req, res, next) => {
+    req.required_permission = 'settings:access:read';
+    next();
+  },
+  authMiddleware,
+  tenantMiddleware,
+  rbacMiddleware,
+  auditMiddleware,
+  async (req, res) => {
+    try {
+      const out = await db.withTenant(req.tenant_id, async (client) => {
+        const users = await client.query(
+          `
+          SELECT u.id, u.username, u.email, u.mfa_enabled, u.created_at,
+                 COALESCE(
+                   (SELECT array_agg(r.name ORDER BY r.name)
+                      FROM roles r WHERE r.id = ANY(u.role_ids)),
+                   '{}'
+                 ) AS roles
+          FROM users u
+          WHERE u.tenant_id = $1
+          ORDER BY u.username
+          `,
+          [req.tenant_id]
+        );
+        const roles = await client.query(
+          `SELECT id, name, permissions FROM roles WHERE tenant_id = $1 ORDER BY name`,
+          [req.tenant_id]
+        );
+        return { users: users.rows, roles: roles.rows };
+      });
+      res.status(200).json({ success: true, ...out });
+    } catch (error) {
+      console.error('Access listing failed:', error.message);
+      res.status(500).json({
+        success: false,
+        error: { code: 'ACCESS_LIST_ERROR', message: 'Failed to list users and roles' },
+      });
+    }
+  }
+);
+
+// Command Center data: ingestion totals, hourly volume and a breakdown by
+// source type or collector, all derived from the events table.
+app.get(
+  '/v1/dashboard/ingestion',
+  (req, res, next) => {
+    req.required_permission = 'search:events:read';
+    next();
+  },
+  authMiddleware,
+  tenantMiddleware,
+  rbacMiddleware,
+  auditMiddleware,
+  async (req, res) => {
+    // Column comes from a whitelist, never from user input.
+    const col = req.query.by === 'collector' ? 'collector_id' : 'source_type';
+    try {
+      const out = await db.withTenant(req.tenant_id, async (client) => {
+        const totals = await client.query(
+          `
+          SELECT COUNT(*)::int AS events_24h,
+                 COALESCE(SUM(octet_length(raw)), 0)::bigint AS bytes_24h,
+                 COUNT(*) FILTER (WHERE received_at > localtimestamp - interval '1 hour')::int AS events_1h,
+                 COUNT(DISTINCT source_type)::int AS source_types,
+                 COUNT(DISTINCT collector_id)::int AS collectors,
+                 MAX(received_at) AS last_received
+          FROM events
+          WHERE tenant_id = $1
+            AND COALESCE(event_time, received_at) > localtimestamp - interval '24 hours'
+          `,
+          [req.tenant_id]
+        );
+        const hourly = await client.query(
+          `
+          SELECT g.h AS hour, COALESCE(c.n, 0)::int AS n
+          FROM generate_series(
+                 date_trunc('hour', localtimestamp) - interval '23 hours',
+                 date_trunc('hour', localtimestamp),
+                 interval '1 hour') AS g(h)
+          LEFT JOIN (
+            SELECT date_trunc('hour', COALESCE(event_time, received_at)) AS h, COUNT(*) AS n
+            FROM events
+            WHERE tenant_id = $1
+              AND COALESCE(event_time, received_at) >= date_trunc('hour', localtimestamp) - interval '23 hours'
+            GROUP BY 1
+          ) c ON c.h = g.h
+          ORDER BY g.h
+          `,
+          [req.tenant_id]
+        );
+        const groups = await client.query(
+          `
+          SELECT COALESCE(${col}, '(none)') AS key,
+                 COUNT(*)::int AS events_24h,
+                 COALESCE(SUM(octet_length(raw)), 0)::bigint AS bytes_24h
+          FROM events
+          WHERE tenant_id = $1
+            AND COALESCE(event_time, received_at) > localtimestamp - interval '24 hours'
+          GROUP BY 1
+          ORDER BY 2 DESC
+          LIMIT 12
+          `,
+          [req.tenant_id]
+        );
+        return { totals: totals.rows[0], hourly: hourly.rows, groups: groups.rows };
+      });
+      res.status(200).json({ success: true, by: col, ...out });
+    } catch (error) {
+      console.error('Ingestion summary failed:', error.message);
+      res.status(500).json({
+        success: false,
+        error: { code: 'INGESTION_SUMMARY_ERROR', message: 'Failed to build ingestion summary' },
+      });
+    }
+  }
+);
+
 // Basic service endpoint.
 app.get('/', (req, res) => {
   res.json({
