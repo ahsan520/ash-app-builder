@@ -5,99 +5,68 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ASIX Portal</title>
 <style>
-  :root { --bg:#0e1420; --panel:#151d2e; --line:#243049; --text:#dbe4f5; --mute:#8a98b5; --acc:#4da3ff; --ok:#3ecf8e; --bad:#ff6b6b; --warn:#f5b642; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif; }
-  header { display:flex; align-items:center; gap:24px; padding:0 20px; height:52px; background:var(--panel); border-bottom:1px solid var(--line); position:sticky; top:0; }
-  .brand { font-weight:700; letter-spacing:.5px; } .brand b { color:var(--acc); }
-  nav { display:flex; gap:4px; flex:1; }
-  nav button { background:none; border:0; color:var(--mute); padding:16px 12px; cursor:pointer; font:inherit; border-bottom:2px solid transparent; }
-  nav button.on { color:var(--text); border-color:var(--acc); }
-  .who { color:var(--mute); font-size:12px; display:flex; gap:12px; align-items:center; }
-  main { padding:20px; max-width:1300px; margin:0 auto; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:16px; }
-  h2 { margin:0 0 12px; font-size:15px; } h3 { margin:0 0 8px; font-size:13px; color:var(--mute); text-transform:uppercase; letter-spacing:.6px; }
+  :root { --bg0:#070b14; --side:#0d1424; --panel:#0f1729; --card:#141d31; --line:#222e47; --text:#dbe4f5; --mute:#8391ae; --acc:#4da3ff; --acc2:#8b7bff; --ok:#3ecf8e; --bad:#ff6b6b; --warn:#f5b642; --hover:#16213a; --sel:#18284a; --bg:#0a1120; }
+  [data-theme=light] { --bg0:#e9eef7; --side:#ffffff; --panel:#f7f9fd; --card:#ffffff; --line:#d5deee; --text:#1a2438; --mute:#5d6b88; --acc:#1f7ae0; --acc2:#6a55e8; --hover:#eef3fb; --sel:#e1ecfb; --bg:#f0f4fb; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg0); color:var(--text); font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif; }
+  #app { display:grid; grid-template-columns:250px 1fr; gap:10px; padding:10px; height:100vh; }
+  #side { background:var(--side); border-radius:12px; display:flex; flex-direction:column; overflow:hidden; border:1px solid var(--line); }
+  .brand { height:56px; display:flex; align-items:center; padding:0 18px; font-weight:700; letter-spacing:.6px; flex:none; } .brand b { color:var(--acc); margin-left:5px; }
+  #nav { flex:1; overflow-y:auto; padding-bottom:8px; } #bottom { flex:none; border-top:1px solid var(--line); padding:6px 0 0; }
+  .n { display:flex; align-items:center; gap:12px; padding:9px 18px; color:var(--mute); cursor:pointer; user-select:none; border-left:3px solid transparent; }
+  .n:hover { background:var(--hover); color:var(--text); } .n.on { color:var(--text); background:var(--sel); border-left-color:var(--acc); }
+  .n.soon { opacity:.45; cursor:default; } .n.soon:hover { background:none; color:var(--mute); }
+  .n .ic { width:18px; text-align:center; } .n small { margin-left:auto; font-size:10px; border:1px solid var(--line); padding:0 5px; border-radius:8px; }
+  .grp { padding:14px 18px 4px; font-size:10px; text-transform:uppercase; letter-spacing:.8px; color:var(--mute); opacity:.7; }
+  .userbox { display:flex; align-items:center; gap:10px; padding:10px 14px; border-top:1px solid var(--line); margin-top:6px; }
+  .avatar { width:32px; height:32px; border-radius:6px; background:#2b3a5c; color:#fff; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:600; flex:none; }
+  .userbox .nm { flex:1; min-width:0; line-height:1.2; } .userbox .nm div { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .userbox .nm div:last-child { font-size:11px; color:var(--mute); }
+  .tg { background:none; border:1px solid var(--line); color:var(--mute); border-radius:6px; cursor:pointer; padding:4px 7px; }
+  #mainp { background:var(--panel); border-radius:12px; border:1px solid var(--line); display:flex; flex-direction:column; overflow:hidden; min-width:0; }
+  #top { display:flex; align-items:center; gap:14px; padding:14px 26px 0; flex:none; }
+  #crumb { font-size:12px; color:var(--mute); flex:1; } #crumb b { color:var(--text); font-weight:500; }
+  #content { overflow:auto; padding:10px 26px 26px; flex:1; } .wrap { max-width:1400px; margin:0 auto; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  h1 { margin:6px 0 2px; font-size:24px; font-weight:400; } h2 { margin:0 0 4px; font-size:20px; font-weight:500; } .desc { color:var(--mute); margin:0 0 18px; }
+  h3 { margin:0 0 10px; font-size:12px; color:var(--mute); text-transform:uppercase; letter-spacing:.7px; }
   .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; }
-  .kv { display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid var(--line); } .kv:last-child { border:0; }
-  .kv span:first-child { color:var(--mute); }
+  .stat { font-size:28px; font-weight:600; } .stat small { display:block; font-size:12px; color:var(--mute); font-weight:400; }
+  .kv { display:flex; justify-content:space-between; gap:16px; padding:5px 0; border-bottom:1px solid var(--line); } .kv:last-child { border:0; }
+  .kv span:first-child { color:var(--mute); } .kv span:last-child { text-align:right; word-break:break-all; }
   input, select, button.btn { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:8px 10px; font:inherit; }
-  button.btn { cursor:pointer; } button.btn.pri { background:var(--acc); border-color:var(--acc); color:#04121f; font-weight:600; }
-  button.btn:disabled { opacity:.4; cursor:default; }
+  button.btn { cursor:pointer; } button.btn.pri { background:var(--acc); border-color:var(--acc); color:#04121f; font-weight:600; } button.btn:disabled { opacity:.4; cursor:default; }
   form.search { display:grid; grid-template-columns:2fr 1fr 1fr 1fr 90px auto; gap:8px; align-items:end; }
   label { display:flex; flex-direction:column; gap:4px; color:var(--mute); font-size:12px; }
   table { width:100%; border-collapse:collapse; } th { text-align:left; color:var(--mute); font-weight:500; padding:6px 8px; border-bottom:1px solid var(--line); }
   td { padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
-  tr.row { cursor:pointer; } tr.row:hover td { background:#1a2438; }
-  td.msg { font-family:ui-monospace,Menlo,monospace; font-size:12px; word-break:break-all; }
+  tr.row { cursor:pointer; } tr.row:hover td { background:var(--hover); }
+  td.msg, .mono { font-family:ui-monospace,Menlo,monospace; font-size:12px; word-break:break-all; }
   pre { margin:0; padding:10px; background:var(--bg); border-radius:6px; overflow:auto; font-size:12px; }
-  .pill { padding:2px 8px; border-radius:10px; font-size:12px; } .ok { background:#12382a; color:var(--ok); } .bad { background:#3d1a1a; color:var(--bad); } .off { background:#222b3f; color:var(--mute); }
-  .center { min-height:70vh; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; text-align:center; }
+  .pill { padding:2px 8px; border-radius:10px; font-size:12px; display:inline-block; margin:1px 2px 1px 0; } .ok { background:#12382a; color:var(--ok); } .bad { background:#3d1a1a; color:var(--bad); } .off { background:#222b3f; color:var(--mute); }
+  .center { min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; text-align:center; }
   .err { color:var(--bad); } .mute { color:var(--mute); } .hidden { display:none !important; }
   .pager { display:flex; gap:8px; align-items:center; margin-top:12px; justify-content:flex-end; }
-  @media (max-width:900px) { form.search { grid-template-columns:1fr 1fr; } }
+  .cc { display:grid; grid-template-columns:minmax(260px,340px) 1fr; gap:30px; margin-top:16px; }
+  .viewby { display:flex; align-items:center; gap:12px; color:var(--mute); margin-bottom:22px; }
+  .kpi { padding:16px 18px; border-right:2px solid var(--line); } .kpi.sel { background:linear-gradient(90deg,transparent,var(--sel)); border-right-color:var(--acc2); }
+  .kpi .v { font-size:44px; font-weight:300; line-height:1.1; } .kpi .l { color:var(--mute); font-size:16px; } .kpi .v small { font-size:16px; color:var(--mute); margin-left:6px; }
+  .ing { margin-top:40px; padding-left:18px; } .ing .v { font-size:40px; font-weight:300; } .ing small { color:var(--mute); font-size:13px; margin-left:4px; }
+  .radial { display:flex; flex-direction:column; align-items:center; } .radial svg { width:100%; max-width:560px; height:auto; }
+  .legend { display:flex; flex-wrap:wrap; gap:6px 18px; justify-content:center; margin-top:6px; font-size:13px; } .legend i { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
+  @media (max-width:1000px) { #app { grid-template-columns:1fr; } #side { display:none; } form.search { grid-template-columns:1fr 1fr; } .cc { grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
 <div id="login" class="center hidden">
-  <div class="brand" style="font-size:28px">ASIX <b>Portal</b></div>
+  <div class="brand" style="font-size:28px;border:0">ASIX <b>Portal</b></div>
   <div class="mute">SIEM control plane and log search</div>
   <button class="btn pri" id="signin">Sign in</button>
   <div id="loginerr" class="err"></div>
 </div>
-
 <div id="app" class="hidden">
-  <header>
-    <div class="brand">ASIX <b>Portal</b></div>
-    <nav id="nav">
-      <button data-v="overview" class="on">Overview</button>
-      <button data-v="search">Log search</button>
-      <button data-v="control">Control plane</button>
-    </nav>
-    <div class="who"><span id="whoami"></span><button class="btn" id="signout">Sign out</button></div>
-  </header>
-  <main>
-    <section id="v-overview">
-      <div class="grid">
-        <div class="card"><h3>Platform</h3><div id="ov-health" class="mute">Loading...</div></div>
-        <div class="card"><h3>Your identity</h3><div id="ov-me" class="mute">Loading...</div></div>
-      </div>
-    </section>
-
-    <section id="v-search" class="hidden">
-      <div class="card">
-        <form class="search" id="sform">
-          <label>Text contains<input name="q" placeholder="e.g. Failed password"></label>
-          <label>Source type<input name="source_type" placeholder="syslog"></label>
-          <label>Collector<input name="collector_id"></label>
-          <label>Time range
-            <select name="range"><option value="15">Last 15 min</option><option value="60">Last hour</option><option value="1440" selected>Last 24 hours</option><option value="10080">Last 7 days</option><option value="">All time</option></select>
-          </label>
-          <label>Rows<select name="limit"><option>50</option><option>100</option><option>250</option><option>500</option></select></label>
-          <button class="btn pri" type="submit">Search</button>
-        </form>
-        <div class="mute" style="margin-top:8px;font-size:12px">Free text is a substring match over the raw line (sequential scan). Newest events first.</div>
-      </div>
-      <div class="card">
-        <div id="sinfo" class="mute">Run a search to see events.</div>
-        <table id="stable" class="hidden"><thead><tr><th style="width:170px">Time (UTC)</th><th style="width:90px">Source</th><th style="width:140px">Collector</th><th>Event</th></tr></thead><tbody></tbody></table>
-        <div class="pager"><button class="btn" id="prev">Prev</button><span id="pageinfo" class="mute"></span><button class="btn" id="next">Next</button></div>
-      </div>
-    </section>
-
-    <section id="v-control" class="hidden">
-      <div class="card"><h2>Platform components</h2><div id="ctl-health" class="mute">Loading...</div></div>
-      <div class="card"><h2>Modules</h2>
-        <div class="mute" style="margin-bottom:8px">Only modules with a working backend are enabled here.</div>
-        <div class="kv"><span>Log search</span><span class="pill ok">available</span></div>
-        <div class="kv"><span>Cases and incidents</span><span class="pill off">no backend yet</span></div>
-        <div class="kv"><span>Detection rules</span><span class="pill off">no backend yet</span></div>
-        <div class="kv"><span>Playbooks</span><span class="pill off">no backend yet</span></div>
-        <div class="kv"><span>Collectors and agents</span><span class="pill off">no backend yet</span></div>
-      </div>
-    </section>
-  </main>
+  <aside id="side"><div class="brand">ASIX <b>Portal</b></div><div id="nav"></div><div id="bottom"></div></aside>
+  <div id="mainp"><div id="top"><div id="crumb"></div></div><main id="content"></main></div>
 </div>
-
 <script>
 'use strict';
 // ---- config -----------------------------------------------------------------
@@ -176,34 +145,184 @@ async function api(path) {
   return body;
 }
 
-// ---- views ------------------------------------------------------------------------
-function showLogin(msg) { $('app').classList.add('hidden'); $('login').classList.remove('hidden'); $('loginerr').textContent = msg || ''; }
-function show(view) {
-  document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.v === view));
-  ['overview', 'search', 'control'].forEach((v) => $('v-' + v).classList.toggle('hidden', v !== view));
-  if (view === 'overview' || view === 'control') loadHealth();
+// ---- navigation registry -----------------------------------------------------------
+// Main menu: append an entry to NAV. Settings has its own menu (SETTINGS): a leaf is
+// {id,label,page}; {group:'Name'} adds a heading. `soon:true` = shown disabled until the
+// backend exists (no fake pages).
+const NAV = [
+  { id: 'dashboard', label: 'Dashboards & Reports', ic: '\u25A6', page: pgDashboard, crumb: ['Dashboards & Reports', 'Command Center'] },
+  { id: 'incidents', label: 'Cases & Issues', ic: '\u2691', soon: true },
+  { id: 'search', label: 'Investigation & Response', ic: '\u25C9', page: pgSearch, crumb: ['Investigation & Response', 'Log search'] },
+  { id: 'threat', label: 'Threat Management', ic: '\u25CE', soon: true },
+  { id: 'posture', label: 'Posture Management', ic: '\u2630', soon: true },
+  { id: 'inventory', label: 'Inventory', ic: '\u25A3', soon: true },
+  { id: 'modules', label: 'Modules', ic: '\u2756', soon: true },
+];
+const SETTINGS = [
+  { group: 'General' },
+  { id: 'status', label: 'Platform status', page: pgStatus },
+  { id: 'account', label: 'My account', page: pgAccount },
+  { group: 'Data collection' },
+  { id: 'sources', label: 'Data sources', page: pgSources },
+  { id: 'collectors', label: 'Collectors & agents', soon: true },
+  { id: 'retention', label: 'Storage & retention', soon: true },
+  { group: 'Access' },
+  { id: 'access', label: 'Users & roles', page: pgAccess },
+  { id: 'tenants', label: 'Tenants', soon: true },
+  { id: 'apikeys', label: 'API keys & service accounts', soon: true },
+  { group: 'Compliance' },
+  { id: 'audit', label: 'Audit log', soon: true },
+  { id: 'ai', label: 'AI providers', soon: true },
+];
+const leaves = NAV.filter((n) => n.page).map((n) => ({ ...n, path: n.id }))
+  .concat(SETTINGS.filter((n) => n.page).map((n) => ({ ...n, path: 'settings/' + n.id, crumb: ['Settings', n.label] })));
+const theme = () => { try { return localStorage.getItem('asix-theme') || 'dark'; } catch { return 'dark'; } };
+function setTheme(t) { document.documentElement.dataset.theme = t; try { localStorage.setItem('asix-theme', t); } catch {} }
+
+function navRow(n, active, path, onclick) {
+  const r = el('div', { className: 'n' + (n.soon ? ' soon' : '') + (active === path ? ' on' : '') },
+    el('span', { className: 'ic', textContent: n.ic || '' }), el('span', { textContent: n.label }), n.soon ? el('small', { textContent: 'soon' }) : '');
+  if (!n.soon) r.onclick = onclick;
+  return r;
 }
-async function loadHealth() {
-  let h;
-  try { const r = await fetch('/v1/health/status'); h = await r.json(); } catch (e) { h = { status: 'unreachable' }; }
-  const flat = { status: h.status, service: h.service, version: h.version, ...Object.fromEntries(Object.entries(h.dependencies || {}).map(([k, v]) => ['dependency: ' + k, v])) };
-  $('ov-health').replaceChildren(kv(flat));
-  const rows = el('div');
-  Object.entries(h.dependencies || {}).concat([['asix-api', h.status === 'ok' ? 'ok' : 'error']]).forEach(([k, v]) =>
-    rows.append(el('div', { className: 'kv' }, el('span', { textContent: k }), el('span', { className: 'pill ' + (v === 'ok' ? 'ok' : 'bad'), textContent: v }))));
-  $('ctl-health').replaceChildren(rows);
+let tenantName = '', username = '';
+function buildNav(active) {
+  const nav = $('nav'); nav.replaceChildren();
+  if (active.startsWith('settings/')) {
+    nav.append(navRow({ label: 'Back to portal', ic: '\u2190' }, active, '', () => { location.hash = '#/dashboard'; }), el('div', { className: 'grp', textContent: 'Settings' }));
+    SETTINGS.forEach((n) => nav.append(n.group ? el('div', { className: 'grp', textContent: n.group }) : navRow(n, active, 'settings/' + n.id, () => { location.hash = '#/settings/' + n.id; })));
+  } else NAV.forEach((n) => nav.append(navRow(n, active, n.id, () => { location.hash = '#/' + n.id; })));
+  $('bottom').replaceChildren(
+    navRow({ label: 'Settings', ic: '\u2699' }, active.startsWith('settings/') ? 'settings' : '', 'settings', () => { location.hash = '#/settings/status'; }),
+    el('div', { className: 'userbox' }, el('div', { className: 'avatar', textContent: (username || '?').slice(0, 2).toUpperCase() }),
+      el('div', { className: 'nm' }, el('div', { textContent: username }), el('div', { textContent: tenantName })),
+      el('button', { className: 'tg', title: 'Toggle light/dark', textContent: theme() === 'dark' ? '\u263E' : '\u2600', onclick: () => { setTheme(theme() === 'dark' ? 'light' : 'dark'); buildNav(active); } }),
+      el('button', { className: 'tg', title: 'Sign out', textContent: '\u23FB', onclick: logout })));
 }
-async function loadMe() {
-  try {
-    const me = await api('/v1/auth/me');
-    $('ov-me').replaceChildren(kv({ tenant: me.tenant_name, tenant_status: me.tenant_status, user_id: me.user_id, session: me.session_id }));
-    $('whoami').textContent = (jwtClaims(await accessToken()).preferred_username || '') + ' @ ' + me.tenant_name;
-  } catch (e) {
-    $('ov-me').replaceChildren(el('div', { className: 'err', textContent: e.message }), el('div', { className: 'mute', textContent: 'Signed in to Keycloak, but this user is not mapped to an ASIX user/role yet (run scripts/deploy/bootstrap-portal.sh).' }));
-  }
+async function route() {
+  const path = (location.hash.replace(/^#\/?/, '') || 'dashboard');
+  const leaf = leaves.find((l) => l.path === path) || leaves[0];
+  buildNav(leaf.path);
+  const c = leaf.crumb || [leaf.label];
+  $('crumb').replaceChildren(...c.flatMap((x, i) => (i ? [' \u203A ', el('b', { textContent: x })] : [x])));
+  $('content').replaceChildren(el('div', { className: 'mute', textContent: 'Loading...' }));
+  try { const view = await leaf.page(); $('content').replaceChildren(el('div', { className: 'wrap' }, view)); }
+  catch (e) { $('content').replaceChildren(el('div', { className: 'wrap' }, errBox(e))); }
+}
+
+// ---- shared UI helpers -------------------------------------------------------------
+const head = (t, d) => [el('h2', { textContent: t }), el('p', { className: 'desc', textContent: d })];
+function card(title, ...kids) { return el('div', { className: 'card' }, title ? el('h3', { textContent: title }) : '', ...kids); }
+function errBox(e) {
+  const denied = e.status === 403;
+  return card('', el('div', { className: 'err', textContent: e.message }),
+    el('div', { className: 'mute', textContent: denied ? 'Your role does not include the permission for this page (or your user is not mapped in ASIX yet). Re-run scripts/deploy/bootstrap-portal.sh if permissions were added recently.' : 'The request failed.' }));
+}
+function table(cols, rows, empty) {
+  if (!rows.length) return el('div', { className: 'mute', textContent: empty || 'Nothing to show yet.' });
+  const t = el('table');
+  t.append(el('thead', {}, el('tr', {}, cols.map((c) => el('th', { textContent: c.h })))));
+  t.append(el('tbody', {}, rows.map((r) => el('tr', {}, cols.map((c) => { const v = c.f(r); return el('td', { className: c.cls || '' }, v instanceof Node ? v : String(v ?? '-')); })))));
+  return t;
+}
+const pill = (t, c) => el('span', { className: 'pill ' + (c || 'off'), textContent: t });
+const when = (v) => (v ? String(v).replace('T', ' ').replace(/\.\d+Z?$/, '') : '-');
+async function health() { try { return await (await fetch('/v1/health/status')).json(); } catch { return { status: 'unreachable', dependencies: {} }; } }
+
+// ---- pages ------------------------------------------------------------------------
+const PALETTE = ['#4da3ff', '#8b7bff', '#3ecf8e', '#f5b642', '#ff7aa2', '#2fd4d4', '#ff9a4d', '#a3e635'];
+const fmtBytes = (n) => { n = Number(n) || 0; return n >= 1048576 ? [(n / 1048576).toFixed(n >= 10485760 ? 0 : 1), 'MB'] : [(n / 1024).toFixed(0), 'KB']; };
+const ago = (v) => { if (!v) return '-'; const s = Math.max(0, (Date.now() - new Date(String(v).endsWith('Z') ? v : v + 'Z')) / 1000); return s < 90 ? Math.round(s) + ' sec' : s < 5400 ? Math.round(s / 60) + ' min' : Math.round(s / 3600) + ' h'; };
+const svg = (tag, attrs, ...kids) => { const e = document.createElementNS('http://www.w3.org/2000/svg', tag); Object.entries(attrs || {}).forEach(([k, v]) => e.setAttribute(k, v)); kids.forEach((k) => e.append(k)); return e; };
+
+function radial(d, total) {
+  const C = 280, root = svg('svg', { viewBox: '0 0 560 560' });
+  const max = Math.max(1, ...d.hourly.map((x) => x.n));
+  d.hourly.forEach((x, i) => {                       // outer ring: hourly volume, oldest -> newest clockwise from the top
+    const a = (i / 24) * 2 * Math.PI - Math.PI / 2, len = 6 + 44 * (x.n / max), r0 = 214;
+    root.append(svg('line', { x1: C + r0 * Math.cos(a), y1: C + r0 * Math.sin(a), x2: C + (r0 + len) * Math.cos(a), y2: C + (r0 + len) * Math.sin(a), stroke: i === 23 ? '#8b7bff' : '#4da3ff', 'stroke-width': 7, 'stroke-linecap': 'round', opacity: x.n ? 0.9 : 0.25 },
+      svg('title', {}, document.createTextNode(when(x.hour).slice(0, 13) + ':00 - ' + x.n.toLocaleString() + ' events'))));
+  });
+  root.append(svg('circle', { cx: C, cy: C, r: 150, fill: 'none', stroke: 'var(--line)', 'stroke-width': 1, 'stroke-dasharray': '1 6' }));
+  const R = 185, circ = 2 * Math.PI * R; let off = 0;  // middle ring: share of events per group
+  d.groups.forEach((g, i) => {
+    const len = total ? (g.events_24h / total) * circ : 0;
+    root.append(svg('circle', { cx: C, cy: C, r: R, fill: 'none', stroke: PALETTE[i % PALETTE.length], 'stroke-width': 22, 'stroke-dasharray': Math.max(0, len - 2) + ' ' + circ, 'stroke-dashoffset': -off, transform: 'rotate(-90 ' + C + ' ' + C + ')' },
+      svg('title', {}, document.createTextNode(g.key + ': ' + g.events_24h.toLocaleString() + ' events'))));
+    off += len;
+  });
+  const t = (y, size, txt, fill) => { const e = svg('text', { x: C, y, 'text-anchor': 'middle', 'font-size': size, fill: fill || 'var(--text)', 'font-weight': 300 }); e.textContent = txt; return e; };
+  root.append(t(C + 6, 58, total.toLocaleString()), t(C + 38, 18, 'Events (24h)'), t(C + 62, 13, d.totals.source_types + ' source types | ' + d.totals.collectors + ' collectors', 'var(--mute)'));
+  return root;
+}
+function spark(hourly) {
+  const W = 120, H = 34, max = Math.max(1, ...hourly.map((x) => x.n));
+  const pts = hourly.map((x, i) => (i * W / 23).toFixed(1) + ',' + (H - 3 - (H - 8) * x.n / max).toFixed(1)).join(' ');
+  return svg('svg', { width: W, height: H, viewBox: '0 0 ' + W + ' ' + H }, svg('polyline', { points: pts, fill: 'none', stroke: 'var(--acc)', 'stroke-width': 1.5 }));
+}
+let viewBy = 'source';
+async function pgDashboard() {
+  const d = await api('/v1/dashboard/ingestion?by=' + viewBy), tt = d.totals, total = tt.events_24h;
+  const sel = el('select', { onchange: () => { viewBy = sel.value; route(); } }, el('option', { value: 'source', textContent: 'Source type' }), el('option', { value: 'collector', textContent: 'Collector' }));
+  sel.value = viewBy;
+  const kpi = (v, l, on) => el('div', { className: 'kpi' + (on ? ' sel' : '') }, el('div', { className: 'v', textContent: v }), el('div', { className: 'l', textContent: l }));
+  const [mb, unit] = fmtBytes(tt.bytes_24h);
+  const legend = el('div', { className: 'legend' }, d.groups.map((g, i) => el('span', {}, el('i', { style: 'background:' + PALETTE[i % PALETTE.length] }), g.key + ' - ' + g.events_24h.toLocaleString())));
+  return [el('h1', { textContent: 'Command Center' }), el('div', { className: 'mute', textContent: 'Live view of events ingested into this tenant over the last 24 hours.' }),
+    el('div', { className: 'cc' },
+      el('div', {}, el('div', { className: 'viewby' }, 'View by', sel),
+        kpi(total.toLocaleString(), 'All events (24h)', true), kpi(tt.events_1h.toLocaleString(), 'Events in the last hour'),
+        kpi(String(tt.source_types), 'Source types reporting'), kpi(ago(tt.last_received), 'Since last event received'),
+        el('div', { className: 'ing' }, el('div', { className: 'mute', textContent: 'Data ingestion' }), el('div', { className: 'v' }, mb, el('small', { textContent: unit + '/24H' }), ' ', spark(d.hourly)))),
+      el('div', { className: 'radial' }, total ? radial(d, total) : el('div', { className: 'mute', textContent: 'No events in the last 24 hours. Point rsyslog at the collector (deploy/60-asix-forward.conf).' }),
+        total ? legend : '', el('div', { className: 'mute', style: 'font-size:12px;margin-top:8px', textContent: 'Outer ring: events per hour (oldest to newest, clockwise from the top). Middle ring: share by ' + (d.by === 'collector_id' ? 'collector' : 'source type') + '.' })))];
+}
+async function pgStatus() {
+  const h = await health();
+  const deps = Object.entries(h.dependencies || {}).concat([['asix-api', h.status === 'ok' ? 'ok' : 'error']]);
+  return [...head('Platform status', 'Health of the ASIX services reported by /v1/health/status.'),
+    card('Services', table([{ h: 'Component', f: (r) => r[0] }, { h: 'State', f: (r) => pill(r[1], r[1] === 'ok' ? 'ok' : 'bad') }], deps)),
+    card('Build', kv({ service: h.service, version: h.version, status: h.status }))];
+}
+async function pgAccount() {
+  const me = await api('/v1/auth/me'), c = jwtClaims(await accessToken());
+  return [...head('My account', 'Your signed-in identity and ASIX tenant scope.'),
+    card('ASIX identity', kv({ tenant: me.tenant_name, tenant_status: me.tenant_status, user_id: me.user_id, session: me.session_id })),
+    card('Keycloak token', kv({ username: c.preferred_username, subject: c.sub, issuer: c.iss, audience: [].concat(c.aud || []).join(', '), expires: c.exp ? new Date(c.exp * 1000).toLocaleString() : '-' }))];
+}
+async function pgSources() {
+  const r = await api('/v1/data-sources');
+  return [...head('Data sources', 'What has been ingested per source type and collector (derived from stored events).'),
+    card('', table([{ h: 'Source type', f: (s) => s.source_type }, { h: 'Collector', f: (s) => s.collector_id }, { h: 'Events (24h)', f: (s) => s.events_24h.toLocaleString() }, { h: 'Events (total)', f: (s) => s.events_total.toLocaleString() }, { h: 'Last received (UTC)', f: (s) => when(s.last_received) }], r.sources, 'No events ingested yet. Point rsyslog at the collector (see deploy/60-asix-forward.conf).'))];
+}
+async function pgAccess() {
+  const r = await api('/v1/settings/access');
+  return [...head('Users & roles', 'Read-only view of this tenant\'s users and role permissions. Editing comes with the user-management backend.'),
+    card('Users', table([{ h: 'Username', f: (u) => u.username }, { h: 'Email', f: (u) => u.email }, { h: 'Roles', f: (u) => el('span', {}, (u.roles || []).map((x) => pill(x, 'ok'))) }, { h: 'MFA', f: (u) => (u.mfa_enabled ? 'on' : 'off') }, { h: 'Created (UTC)', f: (u) => when(u.created_at) }], r.users)),
+    card('Roles', table([{ h: 'Role', f: (x) => x.name }, { h: 'Permissions', cls: 'mono', f: (x) => (x.permissions || []).join('  ') }], r.roles))];
 }
 
 let page = 0, lastQuery = null;
+async function pgSearch() {
+  const wrap = el('div');
+  wrap.innerHTML = `<h2>Log search</h2><p class="desc">Search stored events. Free text is a substring match over the raw line; newest first.</p>
+  <div class="card"><form class="search" id="sform">
+    <label>Text contains<input name="q" placeholder="e.g. Failed password"></label>
+    <label>Source type<input name="source_type" placeholder="syslog"></label>
+    <label>Collector<input name="collector_id"></label>
+    <label>Time range<select name="range"><option value="15">Last 15 min</option><option value="60">Last hour</option><option value="1440" selected>Last 24 hours</option><option value="10080">Last 7 days</option><option value="">All time</option></select></label>
+    <label>Rows<select name="limit"><option>50</option><option>100</option><option>250</option><option>500</option></select></label>
+    <button class="btn pri" type="submit">Search</button></form></div>
+  <div class="card"><div id="sinfo" class="mute">Run a search to see events.</div>
+    <table id="stable" class="hidden"><thead><tr><th style="width:170px">Time (UTC)</th><th style="width:90px">Source</th><th style="width:140px">Collector</th><th>Event</th></tr></thead><tbody></tbody></table>
+    <div class="pager"><button class="btn" id="prev" disabled>Prev</button><span id="pageinfo" class="mute"></span><button class="btn" id="next" disabled>Next</button></div></div>`; // static markup only
+  setTimeout(() => {
+    $('sform').onsubmit = (e) => { e.preventDefault(); runSearch(0); };
+    $('prev').onclick = () => runSearch(Math.max(0, page - lastQuery.limit));
+    $('next').onclick = () => runSearch(page + lastQuery.limit);
+  });
+  return wrap;
+}
 async function runSearch(offset) {
   const f = new FormData($('sform')), p = new URLSearchParams();
   ['q', 'source_type', 'collector_id'].forEach((k) => f.get(k).trim() && p.set(k, f.get(k).trim()));
@@ -216,12 +335,10 @@ async function runSearch(offset) {
     page = offset; lastQuery = { limit, n: r.count };
     const tb = $('stable').querySelector('tbody'); tb.replaceChildren();
     r.events.forEach((ev) => {
-      const t = ev.event_time || ev.received_at || '';
       const detail = el('tr', { className: 'hidden' }, el('td', { colSpan: 4 }, el('pre', { textContent: JSON.stringify({ id: ev.id, received_at: ev.received_at, parsed: ev.parsed }, null, 2) })));
-      const row = el('tr', { className: 'row', onclick: () => detail.classList.toggle('hidden') },
-        el('td', { textContent: String(t).replace('T', ' ').replace(/\.\d+Z?$/, '') }), el('td', { textContent: ev.source_type }),
-        el('td', { textContent: ev.collector_id || '-' }), el('td', { className: 'msg', textContent: ev.raw }));
-      tb.append(row, detail);
+      tb.append(el('tr', { className: 'row', onclick: () => detail.classList.toggle('hidden') },
+        el('td', { textContent: when(ev.event_time || ev.received_at) }), el('td', { textContent: ev.source_type }),
+        el('td', { textContent: ev.collector_id || '-' }), el('td', { className: 'msg', textContent: ev.raw })), detail);
     });
     $('stable').classList.toggle('hidden', r.count === 0);
     $('sinfo').textContent = r.count === 0 ? 'No events matched.' : 'Showing ' + (offset + 1) + '-' + (offset + r.count) + '. Click a row for parsed fields.';
@@ -230,20 +347,21 @@ async function runSearch(offset) {
 }
 
 // ---- boot ---------------------------------------------------------------------------
-$('signin').onclick = login; $('signout').onclick = logout;
-$('nav').onclick = (e) => e.target.dataset.v && show(e.target.dataset.v);
-$('sform').onsubmit = (e) => { e.preventDefault(); runSearch(0); };
-$('prev').onclick = () => runSearch(Math.max(0, page - lastQuery.limit));
-$('next').onclick = () => runSearch(page + lastQuery.limit);
+$('signin').onclick = login;
+window.addEventListener('hashchange', () => { if (!$('app').classList.contains('hidden')) route(); });
 (async () => {
   try {
     if (!crypto.subtle) throw new Error('This page needs HTTPS (secure context). Use the https:// address.');
     await finishLogin();
-    if (!(await accessToken())) return showLogin();
+    const tok = await accessToken();
+    if (!tok) return showLogin();
     $('login').classList.add('hidden'); $('app').classList.remove('hidden');
-    show('overview'); loadMe();
+    username = jwtClaims(tok).preferred_username || '';
+    setTheme(theme());
+    api('/v1/auth/me').then((m) => { tenantName = m.tenant_name; }).catch(() => { tenantName = 'no tenant'; }).finally(route);
   } catch (e) { showLogin(e.message); }
 })();
+function showLogin(msg) { $('app').classList.add('hidden'); $('login').classList.remove('hidden'); $('loginerr').textContent = msg || ''; }
 </script>
 </body>
 </html>
