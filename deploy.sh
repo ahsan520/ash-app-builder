@@ -231,6 +231,9 @@ echo "== 9b/9: Deploying the nginx reverse proxy (asix-api + Keycloak front door
 # Applied last: nginx resolves its upstream service names at startup. The pod
 # template carries a hash of the manifest so a changed nginx config rolls the
 # pod (nginx doesn't reload on ConfigMap changes) and an unchanged one doesn't.
+# The pod mounts Secret nginx-tls, so the self-signed cert must exist first
+# (no-op if it is already there).
+bash "$SCRIPT_DIR/scripts/deploy/make-nginx-tls.sh"
 NGINX_SHA="$(sha256sum "$K8S_DIR/40-nginx.yaml" | cut -c1-16)"
 sed "s|__NGINX_CONFIG_SHA__|${NGINX_SHA}|" "$K8S_DIR/40-nginx.yaml" | $K kubectl apply -f -
 $K kubectl -n "$NAMESPACE" rollout status deployment/nginx-control --timeout=120s
@@ -242,6 +245,9 @@ NODEPORT=$($K kubectl -n "$NAMESPACE" get svc asix-api -o jsonpath='{.spec.ports
 echo
 echo "asix-api reachable at: http://<server-ip>:${NODEPORT}/v1/health/status"
 echo "nginx front door:  http://<server-ip>:30880/  (asix-api)   http://<server-ip>:30880/auth/  (Keycloak)"
+echo "nginx TLS (self-signed): https://<server-ip>:30443/  (asix-api)   https://<server-ip>:30443/auth/  (Keycloak)"
+echo "                         https://<server-ip>:30444/  (Keycloak admin console at the root)"
+echo "                         public cert: /root/asix-nginx-tls.crt"
 echo "Syslog broker/collector reachable at: <server-ip>:30514 (UDP + TCP)"
 echo "  Point rsyslog at it: auth,authpriv.*  @@127.0.0.1:30514   (see deploy/60-asix-forward.conf)"
 echo "  Broker ingest token (for any external broker VM) is in: /root/asix-broker-ingest-token.txt"
