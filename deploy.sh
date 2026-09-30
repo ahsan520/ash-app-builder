@@ -248,6 +248,8 @@ echo "nginx front door:  http://<server-ip>:30880/  (asix-api)   http://<server-
 echo "nginx TLS (self-signed): https://<server-ip>:30443/  (asix-api)   https://<server-ip>:30443/auth/  (Keycloak)"
 echo "                         https://<server-ip>:30444/  (Keycloak admin console at the root)"
 echo "                         public cert: /root/asix-nginx-tls.crt"
+echo "Portal (log search + control plane): https://<server-ip>:30443/portal/"
+echo "  First-time login setup:  sudo scripts/deploy/bootstrap-portal.sh <username>"
 echo "Syslog broker/collector reachable at: <server-ip>:30514 (UDP + TCP)"
 echo "  Point rsyslog at it: auth,authpriv.*  @@127.0.0.1:30514   (see deploy/60-asix-forward.conf)"
 echo "  Broker ingest token (for any external broker VM) is in: /root/asix-broker-ingest-token.txt"
