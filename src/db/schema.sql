@@ -297,3 +297,21 @@ CREATE INDEX IF NOT EXISTS idx_events_source_type ON events(source_type);
 CREATE INDEX IF NOT EXISTS idx_events_parsed_gin ON events USING GIN (parsed);
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON events TO asix_admin;
+
+-- Parsing rules: one user-defined ruleset per tenant (XQL-style text, validated on save).
+CREATE TABLE IF NOT EXISTS parsing_rules (
+    tenant_id UUID PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    updated_by UUID,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+ALTER TABLE parsing_rules ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS parsing_rules_tenant_isolation ON parsing_rules;
+CREATE POLICY parsing_rules_tenant_isolation ON parsing_rules
+    FOR ALL TO PUBLIC
+    USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+    WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON parsing_rules TO asix_admin;
