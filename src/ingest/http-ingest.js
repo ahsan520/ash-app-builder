@@ -14,6 +14,8 @@
 const crypto = require('crypto');
 const express = require('express');
 const db = require('../db');
+const parsingRules = require('../ingestion/parsing-rules');
+const rulesStore = require('../ingestion/rules-store');
 
 const KEY_PREFIX = 'asix_ik_';
 const MAX_EVENTS = 1000;
@@ -135,13 +137,26 @@ router.post(
     const ip = clientIp(req);
     for (const it of items) Object.assign(it.parsed, { transport: 'http', remote_address: ip, collector_id: collector });
 
+    // Parsing rules (user-defined first, then built-in defaults). A rule can enrich fields, set the
+    // event time, move the event to another dataset, or drop it. Errors here never block ingestion.
+    let kept = items, dropped = 0;
+    try {
+      const sets = await rulesStore.getActiveSets(key.tenant_id);
+      kept = [];
+      for (const it of items) {
+        const o = parsingRules.apply(sets, { source_type: sourceType, raw: it.raw, time: it.time, parsed: it.parsed });
+        if (o.dropped) { dropped++; continue; }
+        kept.push({ raw: it.raw, time: o.time, parsed: o.parsed, source_type: o.source_type });
+      }
+    } catch (e) { console.error('Parsing rules failed, ingesting unparsed:', e.message); kept = items; dropped = 0; }
+
     try {
       await db.withTenant(key.tenant_id, async (client) => {
-        await client.query(
+        if (kept.length) await client.query(
           `INSERT INTO events (tenant_id, source_type, collector_id, event_time, raw, parsed)
-           SELECT $1, $2, $3, x.t, x.r, x.p::jsonb
-           FROM unnest($4::timestamp[], $5::text[], $6::text[]) AS x(t, r, p)`,
-          [key.tenant_id, sourceType, collector, items.map((i) => i.time), items.map((i) => i.raw), items.map((i) => JSON.stringify(i.parsed))]);
+           SELECT $1, x.s, $2, x.t, x.r, x.p::jsonb
+           FROM unnest($3::timestamp[], $4::text[], $5::text[], $6::text[]) AS x(t, r, p, s)`,
+          [key.tenant_id, collector, kept.map((i) => i.time), kept.map((i) => i.raw), kept.map((i) => JSON.stringify(i.parsed)), kept.map((i) => i.source_type || sourceType)]);
         await client.query(
           `INSERT INTO collectors (tenant_id, key_id, name, platform, os, version, last_ip, events_total)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -149,13 +164,13 @@ router.post(
              key_id = EXCLUDED.key_id, platform = COALESCE(EXCLUDED.platform, collectors.platform),
              os = COALESCE(EXCLUDED.os, collectors.os), version = COALESCE(EXCLUDED.version, collectors.version),
              last_ip = EXCLUDED.last_ip, last_seen = localtimestamp, events_total = collectors.events_total + EXCLUDED.events_total`,
-          [key.tenant_id, key.id, collector, platform, os, version, ip, items.length]);
+          [key.tenant_id, key.id, collector, platform, os, version, ip, kept.length]);
         await client.query('UPDATE ingestion_keys SET last_used_at = localtimestamp WHERE id = $1', [key.id]);
         await client.query(
           "INSERT INTO audit_events (tenant_id, action, resource, result) VALUES ($1, 'ingest:http:create', $2, 'success')",
           [key.tenant_id, `${sourceType}:${collector}`]);
       });
-      res.status(202).json({ success: true, accepted: items.length });
+      res.status(202).json({ success: true, accepted: kept.length, dropped });
     } catch (e) {
       console.error('HTTP ingestion failed:', e.message);
       err(res, 500, 'INGEST_ERROR', 'Failed to persist events');
@@ -171,4 +186,4 @@ router.use('/v1/ingest/http', (e, req, res, next) => {
   next(e);
 });
 
-module.exports = { router, generateKey, hashKey, PLATFORMS, KEY_PREFIX };
+module.exports = { router, generateKey, hashKey, PLATFORMS, KEY_PREFIX, parseLine, jsonEvent };
