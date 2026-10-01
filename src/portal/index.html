@@ -54,6 +54,15 @@
   .radial { display:flex; flex-direction:column; align-items:center; } .radial svg { width:100%; max-width:560px; height:auto; }
   .legend { display:flex; flex-wrap:wrap; gap:6px 18px; justify-content:center; margin-top:6px; font-size:13px; } .legend i { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
   @media (max-width:1000px) { #app { grid-template-columns:1fr; } #side { display:none; } form.search { grid-template-columns:1fr 1fr; } .cc { grid-template-columns:1fr; } }
+  textarea { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:8px; font:inherit; }
+  .ovl { position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:50; display:flex; align-items:center; justify-content:center; }
+  .modal { background:var(--card); border:1px solid var(--line); border-radius:12px; width:min(1100px,94vw); height:min(88vh,880px); display:flex; flex-direction:column; }
+  .mh { padding:14px 22px; border-bottom:1px solid var(--line); font-size:18px; font-style:italic; display:flex; justify-content:space-between; align-items:center; }
+  .mwrap { flex:1; display:grid; grid-template-columns:180px 1fr; min-height:0; } .mside { padding:18px; border-right:1px solid var(--line); } .mside div { padding:6px 0; cursor:pointer; color:var(--mute); font-style:italic; } .mside div:hover { color:var(--text); }
+  .mbody { overflow:auto; padding:18px 24px; } .mf { padding:12px 22px; border-top:1px solid var(--line); display:flex; gap:12px; align-items:center; justify-content:flex-end; }
+  .fs { border:1px solid var(--line); border-radius:8px; padding:6px 18px 18px; margin:0 0 20px; } .fs legend { padding:0 8px; font-size:16px; font-style:italic; }
+  .fld { margin:12px 0; } .row2 { display:flex; gap:14px; flex-wrap:wrap; align-items:flex-end; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:6px; overflow:hidden; } .seg button { border:0; background:var(--bg); color:var(--mute); padding:7px 16px; cursor:pointer; font:inherit; } .seg button.on { background:var(--acc); color:#04121f; font-weight:600; }
 </style>
 </head>
 <body>
@@ -183,8 +192,8 @@ const THREAT = [
   { id: 'tidash', label: 'Dashboard', soon: true },
   { group: 'Detection Rules' },
   { id: 'ioc', label: 'IOC', page: pgIoc },
-  { id: 'bioc', label: 'BIOC', soon: true },
-  { id: 'correlations', label: 'Correlations', page: pgRules },
+  { id: 'bioc', label: 'BIOC', page: pgBioc },
+  { id: 'correlations', label: 'Correlations', page: pgCorrelations },
   { id: 'indicatorrules', label: 'Indicator Rules', soon: true },
 ];
 const leaves = NAV.filter((n) => n.page).map((n) => ({ ...n, path: n.id }))
@@ -350,7 +359,7 @@ async function pgIndicators() {
   const exp = el('input', { type: 'number', min: '0', placeholder: 'expires in days (blank = never)', style: 'width:230px' });
   const box = el('textarea', { rows: 6, placeholder: 'One indicator per line - IPv4, domain, URL, MD5/SHA1/SHA256, email.\nDefanged forms like hxxp://evil[.]com are accepted. Lines starting with # are ignored.', style: 'width:100%;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:8px;font:12px ui-monospace,Menlo,monospace' });
   const imp = el('button', { className: 'btn pri', textContent: 'Import', onclick: () => act(async () => {
-    const x = await api('/v1/threat-intel/indicators', { method: 'POST', body: JSON.stringify({ indicators: box.value, source: src.value, severity: sev.value, description: desc.value || undefined, expires_in_days: exp.value ? Number(exp.value) : undefined }) });
+    const x = await api('/v1/threat-intel/indicators', { method: 'POST', body: { indicators: box.value, source: src.value, severity: sev.value, description: desc.value || undefined, expires_in_days: exp.value ? Number(exp.value) : undefined } });
     indMsg = 'Imported: ' + x.added + ' new, ' + x.updated + ' updated' + (x.invalid_count ? ', ' + x.invalid_count + ' not recognised (' + x.invalid.join(', ') + ')' : '') + '.'; indF.offset = 0;
   }) });
   const typeSel = el('select', {}, el('option', { value: '', textContent: 'All types' }), IND_TYPES.map((t) => el('option', { value: t, textContent: t })));
@@ -368,7 +377,7 @@ async function pgIndicators() {
         { h: 'Source', f: (x) => x.source }, { h: 'Added (UTC)', f: (x) => when(x.created_at) }, { h: 'Expires (UTC)', f: (x) => (x.expires_at ? when(x.expires_at) : 'never') },
         { h: 'State', f: (x) => pill(x.enabled ? 'enabled' : 'disabled', x.enabled ? 'ok' : 'off') },
         { h: '', f: (x) => el('span', { style: 'white-space:nowrap' },
-          el('button', { className: 'btn', textContent: x.enabled ? 'Disable' : 'Enable', onclick: () => act(() => api('/v1/threat-intel/indicators/' + x.id, { method: 'PATCH', body: JSON.stringify({ enabled: !x.enabled }) })) }), ' ',
+          el('button', { className: 'btn', textContent: x.enabled ? 'Disable' : 'Enable', onclick: () => act(() => api('/v1/threat-intel/indicators/' + x.id, { method: 'PATCH', body: { enabled: !x.enabled } })) }), ' ',
           el('button', { className: 'btn', textContent: 'Delete', onclick: () => { if (confirm('Delete indicator ' + x.value + '?')) act(() => api('/v1/threat-intel/indicators/' + x.id, { method: 'DELETE' })); } })) },
       ], r.indicators, 'No indicators yet. Use "Add indicators" above.'),
       el('div', { className: 'pager' },
@@ -394,17 +403,108 @@ async function pgIoc() {
     el('div', { style: 'display:flex;gap:8px' }, el('button', { className: 'btn pri', textContent: 'View alerts', onclick: () => { location.hash = '#/incidents'; } }), el('button', { className: 'btn', textContent: 'Manage indicators', onclick: () => { location.hash = '#/threat/indicators'; } }))];
 }
 
-async function pgRules() {
-  const r = await api('/v1/detections/rules');
-  const cond = (d) => '>= ' + d.threshold + ' match' + (d.threshold > 1 ? 'es' : '') + ' in ' + d.window_minutes + ' min' + (d.group_by && d.group_by !== 'none' ? ', per ' + d.group_by.replace('_', ' ') : '');
-  const toggle = (x) => el('button', { className: 'btn', textContent: x.enabled ? 'Disable' : 'Enable', onclick: async () => { try { await api('/v1/detections/rules/' + x.id, { method: 'PATCH', body: { enabled: !x.enabled } }); route(); } catch (e) { window.alert(e.message); } } });
-  return [...head('Detection rules', 'Rules are evaluated against stored events every minute. Matches raise alerts under Cases & Issues.'),
+// ---- correlation / BIOC rules: list + XSIAM-style builder --------------------------------
+const CATS = ['Credential Access', 'Execution', 'Persistence', 'Privilege Escalation', 'Defense Evasion', 'Discovery', 'Lateral Movement', 'Collection', 'Command and Control', 'Exfiltration', 'Impact', 'Other'];
+const KIND_LABEL = { correlation: 'Correlation', bioc: 'BIOC' };
+const fld = (label, input, hint) => el('label', { className: 'fld' }, el('span', { textContent: label }), input, hint ? el('small', { className: 'mute', textContent: hint }) : '');
+const selOf = (opts, val) => { const s = el('select', {}, opts.map((o) => el('option', { value: o[0], textContent: o[1] }))); s.value = String(val); return s; };
+const toUnit = (m) => (m >= 60 && m % 60 === 0 ? [m / 60, 'hours'] : [m, 'minutes']);
+const fromUnit = (n, u) => Number(n) * (u === 'hours' ? 60 : 1);
+const UNITS = [['minutes', 'Minute/s'], ['hours', 'Hour/s']];
+
+function openRuleForm(kind, rule, editing) {
+  const d = (rule && rule.definition) || {}, sup = d.suppression || {};
+  let mode = d.mode === 'scheduled' ? 'scheduled' : 'realtime', filters = (d.filters || []).map((f) => ({ ...f }));
+  const tf = toUnit(d.window_minutes || 5), sd = toUnit(sup.minutes || 60);
+  const name = el('input', { value: rule ? rule.name : '', placeholder: kind === 'bioc' ? 'e.g. Reverse shell one-liner' : 'e.g. Repeated failed logins from one source' });
+  const desc = el('textarea', { rows: 2, value: rule ? rule.description || '' : '', style: 'width:100%' });
+  const regex = el('textarea', { rows: 3, value: d.regex || '', placeholder: 'Regular expression matched (case-insensitive) against the raw event, e.g. Failed password|Invalid user', style: 'width:100%;font-family:ui-monospace,Menlo,monospace' });
+  const stype = el('input', { value: d.source_type || '', placeholder: 'e.g. syslog (optional)' });
+  const fbox = el('div');
+  const drawFilters = () => fbox.replaceChildren(...filters.map((f, i) => el('div', { className: 'row2', style: 'margin-bottom:8px' },
+    el('input', { value: f.field, placeholder: 'field, e.g. host or user.name', style: 'width:220px', oninput: (e) => { f.field = e.target.value; } }),
+    (() => { const s = selOf([['contains', 'contains'], ['equals', 'equals'], ['not_equals', 'not equals'], ['regex', 'matches regex']], f.op || 'contains'); s.onchange = () => { f.op = s.value; }; f.op = s.value; return s; })(),
+    el('input', { value: f.value || '', placeholder: 'value', style: 'width:260px', oninput: (e) => { f.value = e.target.value; } }),
+    el('button', { className: 'btn', type: 'button', textContent: '\u2715', onclick: () => { filters.splice(i, 1); drawFilters(); } }))));
+  drawFilters();
+  const gb0 = d.group_by || 'none', gbSel = selOf([['none', 'Nothing (one alert for the rule)'], ['host', 'Host'], ['source_ip', 'Source IP address'], ['field', 'Custom field...']], gb0.startsWith('field:') ? 'field' : gb0);
+  const gbField = el('input', { value: gb0.startsWith('field:') ? gb0.slice(6) : '', placeholder: 'parsed field, e.g. user.name', style: 'width:200px' });
+  const thr = el('input', { type: 'number', min: '1', value: d.threshold || 1, style: 'width:100px' });
+  const tfN = el('input', { type: 'number', min: '1', value: tf[0], style: 'width:90px' }), tfU = selOf(UNITS, tf[1]);
+  const runEvery = selOf([[1, '1 minute'], [5, '5 minutes'], [15, '15 minutes'], [30, '30 minutes'], [60, '1 hour']], d.run_every_minutes || 5);
+  const runBox = el('div', { className: 'fld' }, el('label', {}, 'Run every', runEvery));
+  const segRT = el('button', { type: 'button', textContent: 'Real Time' }), segSC = el('button', { type: 'button', textContent: 'Scheduled' });
+  const setMode = (m) => { mode = m; segRT.className = m === 'realtime' ? 'on' : ''; segSC.className = m === 'scheduled' ? 'on' : ''; runBox.classList.toggle('hidden', m === 'realtime'); };
+  segRT.onclick = () => setMode('realtime'); segSC.onclick = () => setMode('scheduled'); setMode(mode);
+  const gbUpd = () => gbField.classList.toggle('hidden', gbSel.value !== 'field'); gbSel.onchange = gbUpd; gbUpd();
+  const supOn = el('input', { type: 'checkbox', checked: !!sup.enabled }), supN = el('input', { type: 'number', min: '1', value: sd[0], style: 'width:90px' }), supU = selOf(UNITS, sd[1]);
+  const sev = selOf([['critical', 'Critical'], ['high', 'High'], ['medium', 'Medium'], ['low', 'Low']], rule ? rule.severity : 'medium');
+  const cat = selOf(CATS.map((c) => [c, c]), rule && rule.category ? rule.category : (kind === 'bioc' ? 'Execution' : 'Credential Access'));
+  const mitre = el('input', { value: ((rule && rule.mitre) || []).join(', '), placeholder: 'e.g. T1110, T1059.004', style: 'width:320px' });
+  const off = el('input', { type: 'checkbox', checked: rule ? !rule.enabled : false });
+  const out = el('div', { className: 'mute', style: 'margin-top:10px' }), errLine = el('div', { className: 'err', style: 'margin-right:auto' });
+  const defn = () => ({ regex: regex.value, source_type: stype.value, filters: filters.filter((f) => f.field && f.field.trim()),
+    group_by: gbSel.value === 'field' ? 'field:' + gbField.value.trim() : gbSel.value, threshold: Number(thr.value), window_minutes: fromUnit(tfN.value, tfU.value),
+    mode, run_every_minutes: mode === 'scheduled' ? Number(runEvery.value) : 1, suppression: { enabled: supOn.checked, minutes: fromUnit(supN.value, supU.value) } });
+  const body = () => ({ name: name.value, description: desc.value, kind, severity: sev.value, category: cat.value, enabled: !off.checked,
+    mitre: mitre.value.split(',').map((x) => x.trim()).filter(Boolean), definition: defn() });
+  const test = async () => {
+    out.className = 'mute'; out.textContent = 'Running against the last ' + (tfN.value || '?') + ' ' + tfU.value + ' of events...';
+    try {
+      const r = await api('/v1/detections/rules/test', { method: 'POST', body: { definition: defn() } });
+      out.replaceChildren(el('div', { className: r.alerts_would_raise ? 'ok pill' : 'pill off', textContent: r.alerts_would_raise + ' alert' + (r.alerts_would_raise === 1 ? '' : 's') + ' would be raised' }),
+        ...r.groups.slice(0, 5).map((g) => el('div', { className: 'mono', style: 'margin-top:6px', textContent: (g.group === 'all' ? '' : g.group + ' - ') + g.events + ' events' + (g.sample ? ' | ' + g.sample : '') })));
+    } catch (e) { out.className = 'err'; out.textContent = e.message; }
+  };
+  const save = async () => {
+    errLine.textContent = '';
+    try { await api('/v1/detections/rules' + (editing ? '/' + rule.id : ''), { method: editing ? 'PUT' : 'POST', body: body() }); ovl.remove(); route(); }
+    catch (e) { errLine.textContent = e.message; }
+  };
+  const sec = (t, sub, ...kids) => el('fieldset', { className: 'fs' }, el('legend', { textContent: t }), sub ? el('div', { className: 'mute', style: 'font-style:italic', textContent: sub }) : '', ...kids);
+  const secs = [
+    sec('General', '', fld('Rule name *', name), fld('Rule description', desc)),
+    sec('Query', 'Define the ' + KIND_LABEL[kind] + ' rule', el('div', { className: 'seg', style: 'float:right' }, segRT, segSC),
+      fld('Match text (regex)', regex), el('div', { className: 'row2' }, fld('Source type', stype)),
+      el('div', { className: 'fld' }, el('span', { className: 'mute', style: 'font-size:12px', textContent: 'Field filters (all must match). Fields: raw, source_type, collector_id, or any parsed field such as host.' }), fbox,
+        el('button', { className: 'btn', type: 'button', textContent: '+ Add filter', onclick: () => { filters.push({ field: '', op: 'contains', value: '' }); drawFilters(); } })),
+      el('div', { className: 'row2' }, fld('Group by', gbSel), gbField, fld('Raise when matches >=', thr), el('div', { className: 'fld' }, el('label', {}, 'Query time frame', el('span', { className: 'row2' }, tfN, tfU))), runBox),
+      el('div', { className: 'mute', style: 'font-size:12px', textContent: mode === 'realtime' ? 'Real time: evaluated every minute.' : 'Scheduled: evaluated on the chosen interval.' }),
+      el('div', { style: 'margin-top:10px' }, el('button', { className: 'btn', type: 'button', textContent: 'Test query', onclick: test }), out)),
+    sec('Issue Suppression', 'Do not raise another alert for the same rule and group within a time after the last one',
+      el('label', { style: 'flex-direction:row;align-items:center;gap:8px;margin:12px 0' }, supOn, 'Enable issue suppression'), el('div', { className: 'row2' }, fld('Duration time', el('span', { className: 'row2' }, supN, supU)))),
+    sec('Action', 'Generate alert (shown under Cases & Issues)', el('div', { className: 'row2' }, fld('Severity *', sev), fld('Category *', cat), fld('MITRE techniques', mitre))),
+  ];
+  const side = el('div', { className: 'mside' }, ['General', 'Query', 'Issue Suppression', 'Action'].map((t, i) => el('div', { textContent: t, onclick: () => secs[i].scrollIntoView({ behavior: 'smooth', block: 'start' }) })));
+  const ovl = el('div', { className: 'ovl' }, el('div', { className: 'modal' },
+    el('div', { className: 'mh' }, el('span', { textContent: (editing ? 'Edit ' : 'New ') + KIND_LABEL[kind] + ' Rule' }), el('button', { className: 'tg', textContent: '\u2715', onclick: () => ovl.remove() })),
+    el('div', { className: 'mwrap' }, side, el('div', { className: 'mbody' }, secs)),
+    el('div', { className: 'mf' }, errLine, el('label', { style: 'flex-direction:row;align-items:center;gap:6px' }, off, 'Disable'),
+      el('button', { className: 'btn', textContent: 'Cancel', onclick: () => ovl.remove() }), el('button', { className: 'btn pri', textContent: editing ? 'Save' : 'Create', onclick: save }))));
+  document.body.append(ovl);
+}
+
+async function pgRuleList(kind) {
+  const r = await api('/v1/detections/rules?kind=' + kind), act = async (fn) => { try { await fn(); route(); } catch (e) { window.alert(e.message); } };
+  const cond = (d) => (d.regex ? '/' + (d.regex.length > 46 ? d.regex.slice(0, 46) + '...' : d.regex) + '/ ' : '') + (d.filters && d.filters.length ? '+' + d.filters.length + ' filter' + (d.filters.length > 1 ? 's' : '') + ' ' : '')
+    + '>= ' + d.threshold + ' in ' + d.window_minutes + ' min' + (d.group_by && d.group_by !== 'none' ? ', per ' + d.group_by.replace('field:', '').replace('_', ' ') : '');
+  const btn = (t, f) => el('button', { className: 'btn', style: 'margin-right:4px', textContent: t, onclick: f });
+  const acts = (x) => el('span', { style: 'white-space:nowrap' },
+    btn(x.enabled ? 'Disable' : 'Enable', () => act(() => api('/v1/detections/rules/' + x.id, { method: 'PATCH', body: { enabled: !x.enabled } }))),
+    x.custom ? btn('Edit', () => openRuleForm(kind, x, true)) : btn('Clone', () => openRuleForm(kind, { ...x, name: x.name + ' (copy)', enabled: true }, false)),
+    x.custom ? btn('Delete', () => { if (window.confirm('Delete rule "' + x.name + '" and its alerts?')) act(() => api('/v1/detections/rules/' + x.id, { method: 'DELETE' })); }) : '');
+  const T = kind === 'bioc'
+    ? ['BIOC rules', 'Behavioral indicators of compromise: flag a suspicious action (a command, a tampering step) as soon as it appears in an event. Matches raise alerts under Cases & Issues.']
+    : ['Correlation rules', 'Count matching events over a time frame, optionally per host or source, and raise an alert when a threshold is reached. Matches raise alerts under Cases & Issues.'];
+  return [...head(T[0], T[1]),
+    el('div', { style: 'display:flex;justify-content:flex-end;margin-bottom:12px' }, el('button', { className: 'btn pri', textContent: '+ Add ' + KIND_LABEL[kind], onclick: () => openRuleForm(kind, null, false) })),
     card('', table([
-      { h: 'Rule', f: (x) => el('div', {}, el('div', { textContent: x.name }), el('div', { className: 'mute', style: 'font-size:12px', textContent: x.description })) },
+      { h: 'Rule', f: (x) => el('div', {}, el('div', { textContent: x.name }), el('div', { className: 'mute', style: 'font-size:12px', textContent: (x.category ? x.category + ' - ' : '') + (x.description || '') + (x.custom ? '' : ' (built-in)') })) },
       { h: 'Severity', f: (x) => sevPill(x.severity) }, { h: 'Condition', cls: 'mono', f: (x) => cond(x.definition) }, { h: 'MITRE', f: (x) => (x.mitre || []).join(', ') },
       { h: 'Active alerts', f: (x) => x.open_alerts }, { h: 'Last run (UTC)', f: (x) => (x.last_error ? el('span', { className: 'err', textContent: 'error: ' + x.last_error }) : when(x.last_run_at)) },
-      { h: 'State', f: (x) => pill(x.enabled ? 'enabled' : 'disabled', x.enabled ? 'ok' : 'off') }, { h: '', f: toggle }], r.rules))];
+      { h: 'State', f: (x) => pill(x.enabled ? 'enabled' : 'disabled', x.enabled ? 'ok' : 'off') }, { h: '', f: acts }], r.rules, 'No rules yet. Use the button above to add one.'))];
 }
+const pgCorrelations = () => pgRuleList('correlation'), pgBioc = () => pgRuleList('bioc');
 async function pgStatus() {
   const h = await health();
   const deps = Object.entries(h.dependencies || {}).concat([['asix-api', h.status === 'ok' ? 'ok' : 'error']]);
