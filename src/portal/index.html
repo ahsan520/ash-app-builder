@@ -466,7 +466,7 @@ function createInstaller() {
   const create = el('button', { className: 'btn pri', textContent: 'Create', onclick: async () => {
     err.textContent = ''; create.disabled = true;
     try {
-      const r = await api('/v1/ingestion-keys', { method: 'POST', body: JSON.stringify({ name: name.value.trim(), description: desc.value.trim() || undefined, platform: plat.value }) });
+      const r = await api('/v1/ingestion-keys', { method: 'POST', body: { name: name.value.trim(), description: desc.value.trim() || undefined, platform: plat.value } });
       const script = installerScript(plat.value, r.key);
       m.set(el('h2', { textContent: 'Installer created: ' + r.installer.name }),
         el('p', { className: 'warn', textContent: 'Copy the key and script now. For security the key is shown only once; if you lose it, revoke this installer and create a new one.' }),
@@ -498,7 +498,7 @@ async function pgCollectors() {
         { h: 'Operating system', f: osOf }, { h: 'Collector version', f: (c) => c.version || '-' }, { h: 'IP address', f: (c) => c.last_ip || '-' }, { h: 'Collector alias', f: (c) => c.alias || '' },
         { h: 'Last seen (UTC)', f: (c) => when(c.last_seen) }, { h: 'Events (24h)', f: (c) => c.events_24h.toLocaleString() }, { h: 'Installer', f: (c) => c.installer || (c.origin === 'built-in' ? 'built-in' : '-') },
         { h: '', f: (c) => (c.id ? el('span', { style: 'white-space:nowrap' },
-          el('button', { className: 'btn', textContent: 'Alias', onclick: () => { const a = prompt('Alias for ' + c.name, c.alias || ''); if (a !== null) act(() => api('/v1/collectors/' + c.id, { method: 'PATCH', body: JSON.stringify({ alias: a.trim() || null }) })); } }), ' ',
+          el('button', { className: 'btn', textContent: 'Alias', onclick: () => { const a = prompt('Alias for ' + c.name, c.alias || ''); if (a !== null) act(() => api('/v1/collectors/' + c.id, { method: 'PATCH', body: { alias: a.trim() || null } })); } }), ' ',
           el('button', { className: 'btn', textContent: 'Delete', onclick: () => { if (confirm('Remove collector ' + c.name + ' from the list? Its events are kept, and it re-appears if it sends data again.')) act(() => api('/v1/collectors/' + c.id, { method: 'DELETE' })); } })) : '') },
       ], r.collectors, 'No collectors yet. Create an installer, run its script on a machine, and it will appear here within a minute.'))];
 }
