@@ -1,0 +1,35 @@
+[Unit]
+Description=ASIX Syslog Collector (first live ingestion source)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/asix
+ExecStart=/usr/bin/node src/ingestion/syslog-server.js
+Restart=on-failure
+RestartSec=5
+
+# Fill in for your environment. SYSLOG_TENANT_ID is required.
+Environment=SYSLOG_TENANT_ID=REPLACE_WITH_TENANT_UUID
+Environment=SYSLOG_COLLECTOR_ID=vm1-syslog
+Environment=SYSLOG_UDP_PORT=5514
+Environment=SYSLOG_TCP_PORT=5514
+Environment=SYSLOG_SPOOL_PATH=/var/lib/asix/syslog-spool.ndjson
+Environment=DB_HOST=127.0.0.1
+Environment=DB_NAME=asix_platform
+Environment=DB_USER=asix_admin
+# DB_PASSWORD should come from an EnvironmentFile, not committed here:
+EnvironmentFile=-/etc/asix/syslog-collector.env
+
+# Runs unprivileged (ports default to 5514, not 514) — create this user first:
+#   useradd --system --no-create-home asix
+User=asix
+Group=asix
+
+# Needs write access to the spool directory
+RuntimeDirectory=asix
+StateDirectory=asix
+
+[Install]
+WantedBy=multi-user.target

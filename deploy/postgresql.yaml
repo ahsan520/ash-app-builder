@@ -1,0 +1,14 @@
+# PostgreSQL Deployment — Level 2 Approved (user instruction: deploy PostgreSQL)
+# FACT: PostgreSQL Cluster with replication (primary + replicas); RLS enforced
+# ASSUMPTION: Production cluster requires separate DB admin; not executed (no cluster access)
+description: "PostgreSQL production cluster — RLS enforced — deployment descriptor"
+version: "16-alpine"
+environment:
+  POSTGRES_DB: asix_platform
+  POSTGRES_USER: asix_admin
+  POSTGRES_PASSWORD: "${DB_PASSWORD}" # SecretsProvider — Vault/K8s Secret (not plain)
+replicaCount: 2 # Primary + replica
+rls_enabled: true
+migrations: "src/db/schema.sql" # 5 RLS policies applied
+rollback_plan: "DB snapshot before migration; restore to previous version if verification fails"
+audit: "deployment/postgresql/level-2/user-approval"

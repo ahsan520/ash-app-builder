@@ -1,0 +1,13 @@
+# Keycloak HA Deployment — Level 2 Approved
+# FACT: Keycloak 26+ external container; realm: asix; client: asix-api; PKCE
+# DESIGN: External (not embedded) for HA; embedded option only for dev
+description: "Keycloak HA — external container — realm import from keycloak/realm-export.json"
+image: "quay.io/keycloak/keycloak:26.0"
+replicas: 2
+command: ["start"]
+realm_import: "keycloak/realm-export.json"
+realm_name: "asix"
+client_id: "asix-api"
+auth_flows: ["oidc-pkce", "saml", "mfa-totp", "webauthn"]
+rollback_plan: "Keycloak config backup; restore realm export"
+audit: "deployment/keycloak/level-2/user-approval"
