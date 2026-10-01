@@ -289,6 +289,65 @@ data:
 
     GRANT SELECT, INSERT, UPDATE, DELETE ON events TO asix_admin;
 
+    -- ============================================================
+    -- Detections: rules and the alerts they raise
+    -- ============================================================
+
+    CREATE TABLE IF NOT EXISTS detection_rules (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) NOT NULL,
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+        severity VARCHAR(20) NOT NULL DEFAULT 'medium',
+        enabled BOOLEAN NOT NULL DEFAULT true,
+        builtin_key VARCHAR(100),
+        mitre TEXT[] DEFAULT '{}',
+        definition JSONB NOT NULL,
+        last_run_at TIMESTAMP,
+        last_error TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (tenant_id, builtin_key)
+    );
+
+    ALTER TABLE detection_rules ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS detection_rules_tenant_isolation ON detection_rules;
+    CREATE POLICY detection_rules_tenant_isolation ON detection_rules
+        FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    CREATE TABLE IF NOT EXISTS alerts (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) NOT NULL,
+        rule_id UUID REFERENCES detection_rules(id) ON DELETE CASCADE,
+        rule_name VARCHAR(255) NOT NULL,
+        severity VARCHAR(20) NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'open',
+        title TEXT NOT NULL,
+        summary TEXT,
+        group_key TEXT NOT NULL DEFAULT 'all',
+        event_count INTEGER NOT NULL DEFAULT 0,
+        first_event_at TIMESTAMP,
+        last_event_at TIMESTAMP,
+        details JSONB DEFAULT '{}'::jsonb,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    ALTER TABLE alerts ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS alerts_tenant_isolation ON alerts;
+    CREATE POLICY alerts_tenant_isolation ON alerts
+        FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    CREATE INDEX IF NOT EXISTS idx_alerts_tenant_status ON alerts(tenant_id, status, last_event_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_alerts_rule_group ON alerts(rule_id, group_key);
+
+    GRANT SELECT, INSERT, UPDATE, DELETE ON detection_rules TO asix_admin;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON alerts TO asix_admin;
+
 ---
 apiVersion: batch/v1
 kind: Job
