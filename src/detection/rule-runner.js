@@ -8,23 +8,16 @@
 //   from the fixed GROUP_EXPR whitelist below, never from user input.
 
 const db = require('../db');
+const { buildMatch } = require('./rule-query');
 
 const LOCK_KEY = 7412001; // arbitrary app-wide advisory lock id
-
-// Attacker/source address as written in typical sshd / pam / firewall lines.
-const SOURCE_IP_SQL =
-  "substring(raw from '(?:from|rhost=|src=)\\s*([0-9]{1,3}(?:\\.[0-9]{1,3}){3})')";
-
-const GROUP_EXPR = {
-  none: "'all'",
-  host: "COALESCE(parsed->>'host', 'unknown')",
-  source_ip: `COALESCE(${SOURCE_IP_SQL}, 'unknown')`,
-};
 
 // Shipped with the platform; created per tenant on first run (by builtin_key).
 const BUILTIN_RULES = [
   {
     key: 'ssh-brute-force',
+    kind: 'correlation',
+    category: 'Credential Access',
     name: 'SSH brute force',
     description: 'Repeated failed SSH logins from one source address.',
     severity: 'high',
@@ -38,6 +31,8 @@ const BUILTIN_RULES = [
   },
   {
     key: 'root-escalation',
+    kind: 'correlation',
+    category: 'Privilege Escalation',
     name: 'Privilege escalation to root',
     description: 'sudo command execution or su/session opened as root.',
     severity: 'medium',
@@ -51,6 +46,8 @@ const BUILTIN_RULES = [
   },
   {
     key: 'new-user-account',
+    kind: 'correlation',
+    category: 'Persistence',
     name: 'New user account created',
     description: 'useradd/adduser activity on a host.',
     severity: 'medium',
@@ -62,51 +59,77 @@ const BUILTIN_RULES = [
       window_minutes: 5,
     },
   },
+  {
+    key: 'bioc-reverse-shell',
+    kind: 'bioc',
+    category: 'Execution',
+    name: 'Reverse shell one-liner',
+    description: 'Command line that opens an interactive shell over a network socket.',
+    severity: 'high',
+    mitre: ['T1059'],
+    definition: {
+      regex: '(bash -i >& /dev/tcp/|nc(at)? [^ ]+ [0-9]+ -e /bin/(ba)?sh|socket\\.connect.*(pty\\.spawn|/bin/sh))',
+      threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+    },
+  },
+  {
+    key: 'bioc-log-clearing',
+    kind: 'bioc',
+    category: 'Defense Evasion',
+    name: 'Log or shell history clearing',
+    description: 'Deleting system logs or wiping shell history.',
+    severity: 'medium',
+    mitre: ['T1070'],
+    definition: {
+      regex: '(rm( -[a-z]+)* [^ ]*(/var/log/|\\.bash_history)|history -c|journalctl --vacuum|truncate -s 0 /var/log)',
+      group_by: 'host', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+    },
+  },
+  {
+    key: 'bioc-decode-and-exec',
+    kind: 'bioc',
+    category: 'Execution',
+    name: 'Decode and execute payload',
+    description: 'Base64-decoded content piped straight into a shell.',
+    severity: 'medium',
+    mitre: ['T1027', 'T1059'],
+    definition: {
+      regex: 'base64 (-d|--decode)[^|]*\\|\\s*(ba|z)?sh',
+      group_by: 'host', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+    },
+  },
 ];
 
 async function ensureBuiltinRules(client, tenantId) {
   for (const r of BUILTIN_RULES) {
     await client.query(
       `INSERT INTO detection_rules
-         (tenant_id, name, description, severity, builtin_key, mitre, definition)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+         (tenant_id, name, description, severity, builtin_key, mitre, definition, kind, category)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
        ON CONFLICT (tenant_id, builtin_key) DO NOTHING`,
-      [tenantId, r.name, r.description, r.severity, r.key, r.mitre, JSON.stringify(r.definition)]
+      [tenantId, r.name, r.description, r.severity, r.key, r.mitre, JSON.stringify(r.definition), r.kind, r.category]
     );
   }
 }
 
 async function evaluateRule(client, tenantId, rule) {
   const d = rule.definition;
-  const groupExpr = GROUP_EXPR[d.group_by] || GROUP_EXPR.none;
-  const hits = await client.query(
-    `
-    SELECT ${groupExpr} AS gkey,
-           COUNT(*)::int AS n,
-           MIN(ts) AS first_at,
-           MAX(ts) AS last_at,
-           (array_agg(id ORDER BY ts DESC))[1:5] AS sample_ids
-    FROM (
-      SELECT id, raw, parsed, COALESCE(event_time, received_at) AS ts
-      FROM events
-      WHERE tenant_id = $1
-        AND COALESCE(event_time, received_at) > localtimestamp - make_interval(mins => $2::int)
-        AND raw ~* $3
-    ) e
-    GROUP BY 1
-    HAVING COUNT(*) >= $4::int
-    `,
-    [tenantId, d.window_minutes, d.regex, d.threshold]
-  );
+  const q = buildMatch(tenantId, d);
+  const hits = await client.query(q.text, q.values);
+  const supp = d.suppression && d.suppression.enabled ? d.suppression.minutes : 0;
 
   let created = 0;
   let updated = 0;
+  let suppressed = 0;
   for (const row of hits.rows) {
     const details = JSON.stringify({
       sample_event_ids: row.sample_ids || [],
       window_minutes: d.window_minutes,
       threshold: d.threshold,
       group_by: d.group_by,
+      kind: rule.kind,
+      category: rule.category || null,
+      sample_raw: row.sample_raw ? String(row.sample_raw).slice(0, 500) : null,
     });
     // Merge into a still-active alert for the same rule + group instead of
     // raising a new alert every cycle.
@@ -127,6 +150,15 @@ async function evaluateRule(client, tenantId, rule) {
       );
       updated += 1;
     } else {
+      if (supp) {
+        // Issue suppression: no new alert for this rule + group within the suppression window.
+        const recent = await client.query(
+          `SELECT 1 FROM alerts WHERE tenant_id = $1 AND rule_id = $2 AND group_key = $3
+             AND created_at > localtimestamp - make_interval(mins => $4::int) LIMIT 1`,
+          [tenantId, rule.id, row.gkey, supp]
+        );
+        if (recent.rows.length) { suppressed += 1; continue; }
+      }
       const title = row.gkey === 'all' ? rule.name : `${rule.name}: ${row.gkey}`;
       await client.query(
         `INSERT INTO alerts
@@ -135,14 +167,14 @@ async function evaluateRule(client, tenantId, rule) {
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)`,
         [
           tenantId, rule.id, rule.name, rule.severity, title,
-          `${row.n} matching events within ${d.window_minutes} minutes`,
+          `${row.n} matching event${row.n > 1 ? 's' : ''} within ${d.window_minutes} minutes` + (rule.description ? ' - ' + rule.description : ''),
           row.gkey, row.n, row.first_at, row.last_at, details,
         ]
       );
       created += 1;
     }
   }
-  return { created, updated };
+  return { created, updated, suppressed };
 }
 
 async function runTenant(tenantId) {
@@ -151,11 +183,15 @@ async function runTenant(tenantId) {
     await ensureBuiltinRules(client, tenantId);
     const rules = await client.query(
       // Explicit tenant filter: the API connects as the table owner, which bypasses RLS.
-      'SELECT id, name, severity, definition FROM detection_rules WHERE enabled = true AND tenant_id = $1',
+      `SELECT id, name, description, severity, definition, kind, category,
+              (last_run_at IS NULL OR last_run_at <= localtimestamp
+                 - make_interval(secs => GREATEST(COALESCE((definition->>'run_every_minutes')::int, 1), 1) * 60 - 30)) AS due
+       FROM detection_rules WHERE enabled = true AND tenant_id = $1`,
       [tenantId]
     );
     const out = { rules: rules.rows.length, created: 0, updated: 0, errors: 0 };
     for (const rule of rules.rows) {
+      if (!rule.due) continue; // scheduled rules run on their own interval
       await client.query('SAVEPOINT rule_eval');
       try {
         const r = await evaluateRule(client, tenantId, rule);
