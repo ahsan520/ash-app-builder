@@ -77,6 +77,12 @@
   .xv { margin:2px 0 8px 22px; } .xvr { display:flex; justify-content:space-between; gap:8px; padding:3px 6px; cursor:pointer; border-radius:4px; font-size:12px; } .xvr:hover { background:var(--sel); }
   .xdisp { position:relative; } .xdisp summary { list-style:none; cursor:pointer; } .xmenu { position:absolute; right:0; z-index:5; background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 12px; max-height:300px; overflow:auto; min-width:200px; }
   .xchk { flex-direction:row; align-items:center; gap:8px; padding:3px 0; color:var(--text); } .xex { font:12px ui-monospace,Menlo,monospace; background:var(--bg); padding:6px 8px; border-radius:6px; margin-top:6px; cursor:pointer; white-space:pre-wrap; } .xex:hover { outline:1px solid var(--acc); }
+  .modal-bg { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; z-index:50; }
+  .modal { background:var(--card); border:1px solid var(--line); border-radius:12px; width:min(760px,94vw); max-height:90vh; overflow:auto; padding:24px 28px; }
+  .modal h2 { font-style:italic; } .modal .row2 { display:grid; grid-template-columns:1fr 1fr; gap:20px; } .modal .fld { display:flex; flex-direction:column; gap:4px; margin-bottom:14px; color:var(--mute); font-size:12px; }
+  .modal input, .modal select { width:100%; } .modal .actions { display:flex; gap:10px; justify-content:flex-end; margin-top:8px; }
+  .keybox { font:13px ui-monospace,Menlo,monospace; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:10px; word-break:break-all; user-select:all; }
+  .warn { color:var(--warn); }
 </style>
 </head>
 <body>
@@ -187,7 +193,8 @@ const SETTINGS = [
   { id: 'account', label: 'My account', page: pgAccount },
   { group: 'Data collection' },
   { id: 'sources', label: 'Data sources', page: pgSources },
-  { id: 'collectors', label: 'Collectors & agents', soon: true },
+  { id: 'collectors', label: 'Collectors', page: pgCollectors },
+  { id: 'installers', label: 'Installers', page: pgInstallers },
   { id: 'retention', label: 'Storage & retention', soon: true },
   { group: 'Access' },
   { id: 'access', label: 'Users & roles', page: pgAccess },
@@ -360,6 +367,157 @@ async function pgAlerts() {
     card('', el('div', { style: 'display:flex;gap:10px;align-items:center' }, el('span', { className: 'mute', textContent: 'Show' }), stSel, sevSel, el('span', { className: 'mute', style: 'margin-left:auto', textContent: r.count + ' shown' }))),
     card('', list), holder];
 }
+// ---- Collectors & installers (XSIAM-style administration) -------------------------------
+const PLATFORM_LABEL = { linux: 'Linux', macos: 'macOS', windows: 'Windows', generic: 'Generic (HTTP)' };
+
+const SCRIPT_UNIX = String.raw`#!/usr/bin/env bash
+# ASIX forwarder (@LABEL@). Ships new log lines to ASIX over HTTPS.
+#   Run:     chmod +x asix-forwarder.sh && sudo ./asix-forwarder.sh
+#   Keep it running with systemd/launchd, or: nohup ./asix-forwarder.sh &
+# The self-signed certificate is accepted with -k. Once you trust it, replace -k with
+#   --cacert /path/to/asix-nginx-tls.crt
+ASIX_URL="@URL@"
+ASIX_KEY="@KEY@"
+COLLECTOR="$(hostname -s)"
+PLATFORM="@PLATFORM@"
+@SOURCE@
+BUF="$(mktemp)"
+trap 'rm -f "$BUF"' EXIT
+send() {
+  [ -s "$BUF" ] || return 0
+  if curl -fsS -k -m 20 -X POST "$ASIX_URL" \
+       -H "Authorization: Bearer $ASIX_KEY" -H "Content-Type: text/plain" \
+       -H "X-ASIX-Collector: $COLLECTOR" -H "X-ASIX-Platform: $PLATFORM" \
+       -H "X-ASIX-Os: $(uname -sr)" -H "X-ASIX-Version: 1.0" \
+       -H "X-ASIX-Source-Type: syslog" --data-binary @"$BUF" >/dev/null; then
+    : > "$BUF"
+  elif [ "$(wc -c < "$BUF")" -gt 5000000 ]; then
+    : > "$BUF"   # endpoint unreachable for too long: drop the backlog instead of filling the disk
+  fi
+}
+n=0; last=$SECONDS
+$SOURCE_CMD 2>/dev/null | while true; do
+  if IFS= read -r -t 5 line; then
+    [ -n "$line" ] && { printf '%s\n' "$line" >> "$BUF"; n=$((n+1)); }
+  else
+    [ $? -gt 128 ] || break          # >128 means read timed out; anything else means the stream ended
+  fi
+  if [ "$n" -ge 200 ] || { [ "$n" -gt 0 ] && [ $((SECONDS-last)) -ge 5 ]; }; then send; n=0; last=$SECONDS; fi
+done
+send
+`;
+const SRC_LINUX = 'if command -v journalctl >/dev/null 2>&1; then SOURCE_CMD="journalctl -f -n 0 -o short-iso"\nelse SOURCE_CMD="tail -q -n 0 -F /var/log/auth.log /var/log/syslog /var/log/secure /var/log/messages"; fi';
+const SRC_MAC = 'SOURCE_CMD="log stream --style syslog --level info"   # run with sudo to see system-wide logs';
+const SCRIPT_WIN = String.raw`# ASIX forwarder (Windows). Run in an elevated PowerShell (the Security log needs it).
+# The self-signed ASIX certificate is accepted on the next line; remove it once you trust the certificate.
+$Url = "@URL@"
+$Key = "@KEY@"
+$Computer = $env:COMPUTERNAME
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$Os = (Get-CimInstance Win32_OperatingSystem).Caption
+$last = (Get-Date).AddMinutes(-1)
+while ($true) {
+  $now = Get-Date
+  $events = Get-WinEvent -FilterHashtable @{ LogName = @('Security','System','Application'); StartTime = $last } -ErrorAction SilentlyContinue | Select-Object -First 500
+  if ($events) {
+    $batch = @($events | ForEach-Object {
+      @{ time = $_.TimeCreated.ToUniversalTime().ToString('o'); host = $Computer
+         message = ('[{0}] {1} id={2} {3}' -f $_.LogName, $_.ProviderName, $_.Id, ($_.Message -replace '\s+', ' ')) } })
+    $body = @{ collector = @{ name = $Computer; platform = 'windows'; os = $Os; version = '1.0' }; source_type = 'windows-event'; events = $batch } | ConvertTo-Json -Depth 5
+    try { Invoke-RestMethod -Method Post -Uri $Url -Headers @{ Authorization = "Bearer $Key" } -ContentType 'application/json' -Body $body | Out-Null; $last = $now }
+    catch { Write-Warning $_.Exception.Message }
+  } else { $last = $now }
+  Start-Sleep -Seconds 30
+}
+`;
+const SCRIPT_GENERIC = String.raw`# Send events from anything that can make an HTTPS request (-k accepts the self-signed certificate).
+curl -k -X POST "@URL@" \
+  -H "Authorization: Bearer @KEY@" -H "Content-Type: application/json" \
+  -d '{"collector":{"name":"my-app-01","platform":"generic"},"source_type":"myapp","events":[{"message":"hello from my app"}]}'
+
+# Plain log lines work too (one event per line):
+curl -k -X POST "@URL@" -H "Authorization: Bearer @KEY@" \
+  -H "Content-Type: text/plain" -H "X-ASIX-Collector: my-app-01" --data-binary @app.log
+`;
+function installerScript(platform, key) {
+  const fill = (t, o) => Object.entries({ URL: location.origin + '/v1/ingest/http', KEY: key, ...o }).reduce((s, [k, v]) => s.split('@' + k + '@').join(v), t);
+  if (platform === 'windows') return fill(SCRIPT_WIN, {});
+  if (platform === 'generic') return fill(SCRIPT_GENERIC, {});
+  return fill(SCRIPT_UNIX, { LABEL: PLATFORM_LABEL[platform], PLATFORM: platform, SOURCE: platform === 'macos' ? SRC_MAC : SRC_LINUX });
+}
+
+function openModal(...kids) {
+  const bg = el('div', { className: 'modal-bg' }), box = el('div', { className: 'modal' }, ...kids);
+  bg.append(box); document.body.append(bg);
+  return { box, close: () => bg.remove(), set: (...k) => box.replaceChildren(...k) };
+}
+function copyBtn(getText, label) {
+  const b = el('button', { className: 'btn', textContent: label || 'Copy' });
+  b.onclick = async () => { try { await navigator.clipboard.writeText(getText()); b.textContent = 'Copied'; } catch { b.textContent = 'Select and copy manually'; } setTimeout(() => { b.textContent = label || 'Copy'; }, 1800); };
+  return b;
+}
+function createInstaller() {
+  const name = el('input', { placeholder: 'e.g. web-servers' }), desc = el('input'), err = el('div', { className: 'err' });
+  const plat = el('select', {}, ['linux', 'windows', 'macos', 'generic'].map((k) => el('option', { value: k, textContent: PLATFORM_LABEL[k] })));
+  const fld = (l, n) => el('label', { className: 'fld' }, l, n);
+  const m = openModal(el('h2', { textContent: 'Create Collection Installer' }), el('div', { className: 'row2' }, el('div', {}, fld('Name *', name), fld('Description (optional)', desc)), el('div', {}, fld('Platform *', plat))), err);
+  const cancel = el('button', { className: 'btn', textContent: 'Cancel', onclick: m.close });
+  const create = el('button', { className: 'btn pri', textContent: 'Create', onclick: async () => {
+    err.textContent = ''; create.disabled = true;
+    try {
+      const r = await api('/v1/ingestion-keys', { method: 'POST', body: JSON.stringify({ name: name.value.trim(), description: desc.value.trim() || undefined, platform: plat.value }) });
+      const script = installerScript(plat.value, r.key);
+      m.set(el('h2', { textContent: 'Installer created: ' + r.installer.name }),
+        el('p', { className: 'warn', textContent: 'Copy the key and script now. For security the key is shown only once; if you lose it, revoke this installer and create a new one.' }),
+        el('div', { className: 'mute', textContent: 'Ingestion key' }), el('div', { className: 'keybox', textContent: r.key }), el('div', { style: 'margin:8px 0 16px' }, copyBtn(() => r.key, 'Copy key')),
+        el('div', { className: 'mute', textContent: 'Installer script (' + PLATFORM_LABEL[plat.value] + ')' }), el('pre', { style: 'max-height:260px', textContent: script }),
+        el('div', { className: 'actions' }, copyBtn(() => script, 'Copy script'), el('button', { className: 'btn pri', textContent: 'Done', onclick: () => { m.close(); route(); } })));
+    } catch (e) { err.textContent = e.message; create.disabled = false; }
+  } });
+  m.box.append(el('div', { className: 'actions' }, cancel, create));
+  name.focus();
+}
+
+let colF = { status: '', q: '' };
+async function pgCollectors() {
+  const p = new URLSearchParams({ limit: 200 }); if (colF.status) p.set('status', colF.status); if (colF.q) p.set('q', colF.q);
+  const r = await api('/v1/collectors?' + p);
+  const act = async (fn) => { try { await fn(); route(); } catch (e) { alert(e.message); } };
+  const st = el('select', {}, el('option', { value: '', textContent: 'Status: all' }), el('option', { value: 'connected', textContent: 'Status: Connected' }), el('option', { value: 'disconnected', textContent: 'Status: Disconnected' }));
+  st.value = colF.status;
+  const q = el('input', { value: colF.q, placeholder: 'Search name, OS, IP, alias', style: 'min-width:260px', onkeydown: (e) => { if (e.key === 'Enter') go.click(); } });
+  const go = el('button', { className: 'btn', textContent: 'Apply', onclick: () => { colF = { status: st.value, q: q.value.trim() }; route(); } });
+  const osOf = (c) => c.os || (c.origin === 'built-in' ? 'Syslog collector (built-in)' : PLATFORM_LABEL[c.platform] || c.platform || '-');
+  return [el('div', { style: 'display:flex;align-items:baseline;gap:12px' }, el('h2', { textContent: 'Collectors' }), el('span', { className: 'mute', textContent: 'Found ' + r.total + ' out of ' + r.overall + ' results' }),
+      el('button', { className: 'btn pri', style: 'margin-left:auto', textContent: 'Create installer', onclick: () => { location.hash = '#/settings/installers'; } })),
+    el('p', { className: 'desc', textContent: 'Everything that sends events to ASIX. A collector counts as Connected if it sent data in the last ' + r.connected_within_minutes + ' minutes.' }),
+    card('', el('div', { style: 'display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap' }, st, q, go, el('button', { className: 'btn', textContent: 'Refresh', onclick: () => route() })),
+      table([
+        { h: 'Name', f: (c) => c.name }, { h: 'Status', f: (c) => pill((c.status === 'connected' ? '\u2713 Connected' : '\u2715 Disconnected'), c.status === 'connected' ? 'ok' : 'off') },
+        { h: 'Operating system', f: osOf }, { h: 'Collector version', f: (c) => c.version || '-' }, { h: 'IP address', f: (c) => c.last_ip || '-' }, { h: 'Collector alias', f: (c) => c.alias || '' },
+        { h: 'Last seen (UTC)', f: (c) => when(c.last_seen) }, { h: 'Events (24h)', f: (c) => c.events_24h.toLocaleString() }, { h: 'Installer', f: (c) => c.installer || (c.origin === 'built-in' ? 'built-in' : '-') },
+        { h: '', f: (c) => (c.id ? el('span', { style: 'white-space:nowrap' },
+          el('button', { className: 'btn', textContent: 'Alias', onclick: () => { const a = prompt('Alias for ' + c.name, c.alias || ''); if (a !== null) act(() => api('/v1/collectors/' + c.id, { method: 'PATCH', body: JSON.stringify({ alias: a.trim() || null }) })); } }), ' ',
+          el('button', { className: 'btn', textContent: 'Delete', onclick: () => { if (confirm('Remove collector ' + c.name + ' from the list? Its events are kept, and it re-appears if it sends data again.')) act(() => api('/v1/collectors/' + c.id, { method: 'DELETE' })); } })) : '') },
+      ], r.collectors, 'No collectors yet. Create an installer, run its script on a machine, and it will appear here within a minute.'))];
+}
+async function pgInstallers() {
+  const r = await api('/v1/ingestion-keys');
+  const act = async (fn) => { try { await fn(); route(); } catch (e) { alert(e.message); } };
+  return [el('div', { style: 'display:flex;align-items:baseline;gap:12px' }, el('h2', { textContent: 'Installers' }), el('span', { className: 'mute', textContent: 'Found ' + r.keys.length + ' results' }),
+      el('button', { className: 'btn pri', style: 'margin-left:auto', textContent: 'Create', onclick: createInstaller })),
+    el('p', { className: 'desc', textContent: 'An installer is an ingestion key plus a ready-to-run forwarder script for one platform. Revoke an installer to cut off every sender that uses its key.' }),
+    card('', table([
+      { h: 'Creation time (UTC)', f: (k) => when(k.created_at) }, { h: 'Status', f: (k) => pill(k.status === 'active' ? 'Active' : 'Revoked', k.status === 'active' ? 'ok' : 'bad') },
+      { h: 'Name', f: (k) => k.name }, { h: 'Description', f: (k) => k.description || '' }, { h: 'Platform', f: (k) => PLATFORM_LABEL[k.platform] || k.platform },
+      { h: 'Key', cls: 'mono', f: (k) => k.key_prefix + '...' }, { h: 'Last used (UTC)', f: (k) => (k.last_used_at ? when(k.last_used_at) : 'never') }, { h: 'Collectors', f: (k) => k.collectors },
+      { h: '', f: (k) => el('span', { style: 'white-space:nowrap' },
+        k.status === 'active' ? el('button', { className: 'btn', textContent: 'Revoke', onclick: () => { if (confirm('Revoke "' + k.name + '"? Senders using this key will be rejected immediately.')) act(() => api('/v1/ingestion-keys/' + k.id + '/revoke', { method: 'POST' })); } }) : '', ' ',
+        el('button', { className: 'btn', textContent: 'Delete', onclick: () => { if (confirm('Delete installer "' + k.name + '"?')) act(() => api('/v1/ingestion-keys/' + k.id, { method: 'DELETE' })); } })) },
+    ], r.keys, 'No installers yet. Click Create to add your first.'))];
+}
+
 // ---- Threat intelligence pages ---------------------------------------------------------
 const IND_TYPES = ['ip', 'domain', 'url', 'md5', 'sha1', 'sha256', 'email'];
 let indF = { type: '', q: '', offset: 0 }, indMsg = '';
