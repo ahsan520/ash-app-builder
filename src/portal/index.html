@@ -71,6 +71,10 @@
   .xk { color:var(--ok); font-style:italic; } .xo { color:var(--acc); font-style:italic; } .xs { color:#f5b642; } .xn { color:#ff7aa2; } .xp { color:var(--acc2); }
   .xbtns { display:flex; justify-content:flex-end; gap:8px; margin:12px 0 4px; }
   .xtabs { display:flex; gap:4px; margin-top:14px; border-bottom:1px solid var(--line); } .xtab { padding:10px 18px; cursor:pointer; color:var(--mute); border-radius:8px 8px 0 0; } .xtab:hover { color:var(--text); } .xtab.on { color:var(--acc); background:var(--card); box-shadow:inset 0 2px 0 var(--acc); }
+  .pc { color:var(--mute); font-style:italic; } .ph { color:#2fd4d4; font-weight:600; } .pf { color:var(--acc); font-style:italic; }
+  .pr-head { display:flex; align-items:center; gap:12px; margin:10px 0 6px; } .pr-ed { height:58vh; min-height:320px; }
+  .pr-sim { display:grid; grid-template-columns:minmax(260px,1fr) 2fr; gap:14px; align-items:start; }
+  .pr-chg { color:var(--ok); font-weight:600; } .pr-new { color:var(--acc); font-weight:600; }
   .xbar { display:flex; align-items:center; gap:14px; padding:12px 4px; } .xres { display:grid; grid-template-columns:230px 1fr; gap:14px; align-items:start; } .xtbl { overflow:auto; max-height:62vh; border:1px solid var(--line); border-radius:8px; }
   .xtbl th { position:sticky; top:0; background:var(--card); white-space:nowrap; } .xtbl td { max-width:420px; overflow:hidden; text-overflow:ellipsis; } .xtbl td.msg { white-space:nowrap; }
   .xfp { border:1px solid var(--line); border-radius:8px; padding:10px; max-height:62vh; overflow:auto; } .xf { display:flex; gap:8px; padding:5px 4px; cursor:pointer; border-radius:4px; font-style:italic; } .xf:hover, .xf.on { background:var(--hover); } .ft { color:var(--mute); font-style:normal; font-weight:700; width:14px; }
@@ -195,6 +199,7 @@ const SETTINGS = [
   { id: 'sources', label: 'Data sources', page: pgSources },
   { id: 'collectors', label: 'Collectors', page: pgCollectors },
   { id: 'installers', label: 'Installers', page: pgInstallers },
+  { id: 'parsing', label: 'Parsing rules', page: pgParsing },
   { id: 'retention', label: 'Storage & retention', soon: true },
   { group: 'Access' },
   { id: 'access', label: 'Users & roles', page: pgAccess },
@@ -502,6 +507,123 @@ async function pgCollectors() {
           el('button', { className: 'btn', textContent: 'Delete', onclick: () => { if (confirm('Remove collector ' + c.name + ' from the list? Its events are kept, and it re-appears if it sends data again.')) act(() => api('/v1/collectors/' + c.id, { method: 'DELETE' })); } })) : '') },
       ], r.collectors, 'No collectors yet. Create an installer, run its script on a machine, and it will appear here within a minute.'))];
 }
+// ---- Parsing rules (XSIAM-style) -----------------------------------------------------------
+const PKW = /(\/\*[\s\S]*?\*\/|\/\/[^\n]*)|(\[INGEST:[^\]]*\])|("(?:\\.|[^"\\])*"?)|\b(filter|alter|fields)\b|\b(if|to_string|to_integer|lowercase|uppercase|trim|len|regextract|arrayindex|array_length|parse_timestamp|replace|concat|coalesce)(?=\s*\()|\b(and|or|not|contains|in|null|true|false)\b|(\b\d+(?:\.\d+)?\b)|(~=|!=|>=|<=|=|>|<|\||;)/g;
+function pHighlight(text) {
+  const frag = document.createDocumentFragment(); let last = 0, m; PKW.lastIndex = 0;
+  while ((m = PKW.exec(text))) {
+    if (m.index > last) frag.append(text.slice(last, m.index));
+    frag.append(el('span', { className: m[1] ? 'pc' : m[2] ? 'ph' : m[3] ? 'xs' : m[4] ? 'xk' : m[5] ? 'pf' : m[6] ? 'xo' : m[7] ? 'xn' : 'xp', textContent: m[0] }));
+    last = m.index + m[0].length;
+  }
+  frag.append(text.slice(last) + '\n');
+  return frag;
+}
+// Line-numbered, syntax-highlighted editor (transparent textarea over a highlighted <pre>).
+function codeEditor(value, { readOnly, onInput } = {}) {
+  const ta = el('textarea', { className: 'xta', value, spellcheck: false, wrap: 'off', readOnly: !!readOnly });
+  const hl = el('pre', { className: 'xhl' }), gut = el('div', { className: 'xg' });
+  const sync = () => {
+    hl.replaceChildren(pHighlight(ta.value));
+    gut.textContent = Array.from({ length: Math.max(3, ta.value.split('\n').length) }, (_, i) => i + 1).join('\n');
+    hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; gut.scrollTop = ta.scrollTop;
+  };
+  ta.oninput = () => { sync(); if (onInput) onInput(ta.value); };
+  ta.onscroll = () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; gut.scrollTop = ta.scrollTop; };
+  ta.onkeydown = (e) => { if (e.key === 'Tab' && !readOnly) { e.preventDefault(); ta.setRangeText('  ', ta.selectionStart, ta.selectionEnd, 'end'); ta.oninput(); } };
+  sync();
+  return { node: el('div', { className: 'xed pr-ed' }, gut, el('div', { className: 'xwrap' }, hl, ta)), get: () => ta.value, set: (v) => { ta.value = v; sync(); }, goto: (line) => { ta.scrollTop = Math.max(0, (line - 4) * 20); sync(); } };
+}
+const SIM_SAMPLE = [
+  'Oct  1 10:00:01 web01 sshd[2201]: Failed password for invalid user admin from 203.0.113.9 port 51234 ssh2',
+  'Oct  1 10:00:09 web01 sshd[2203]: Accepted publickey for deploy from 10.0.0.5 port 40122 ssh2: RSA SHA256:abc',
+  'Oct  1 10:01:44 web01 sudo:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/bin/cat /etc/shadow',
+  'Oct  1 10:02:00 web01 CRON[3110]: (root) CMD (/usr/local/bin/backup.sh)',
+  'Oct  1 10:02:05 web01 kernel: eth0: link up',
+].join('\n');
+
+async function pgParsing() {
+  const d = await api('/v1/parsing-rules');
+  let tab = (routeQuery && routeQuery.get('tab')) || 'user', dirty = false, saved = d.user_defined.content;
+  const status = el('span', { className: 'mute' }), errLine = el('div', { className: 'err', style: 'margin-top:8px;white-space:pre-wrap' });
+  const body = el('div'), tabs = el('div', { className: 'xtabs' });
+  const userEd = codeEditor(saved, { onInput: (v) => { dirty = v !== saved; setStatus(); } });
+  const setStatus = () => { status.textContent = dirty ? 'Unsaved changes' : (d.user_defined.version ? 'Saved \u00B7 version ' + d.user_defined.version + (d.user_defined.updated_at ? ' \u00B7 ' + when(d.user_defined.updated_at) + ' UTC' : '') : 'No user-defined rules yet'); };
+  setStatus();
+
+  const save = async (btn) => {
+    errLine.textContent = ''; btn.disabled = true; btn.textContent = 'Saving...';
+    try {
+      const r = await api('/v1/parsing-rules', { method: 'PUT', body: { content: userEd.get() } });
+      saved = userEd.get(); dirty = false; d.user_defined.version = r.version; d.user_defined.updated_at = r.updated_at; d.user_defined.rules = r.rules; setStatus();
+    } catch (e) {
+      errLine.textContent = e.message.replace(/^\d+ /, '').replace(/ \(PARSE_RULES_INVALID\)$/, '');
+      const m = /line (\d+)/.exec(e.message); if (m) userEd.goto(Number(m[1]));
+    }
+    btn.disabled = false; btn.textContent = 'Save';
+  };
+
+  const ruleTable = (rules) => table([
+    { h: 'Content ID', f: (r) => r.content_id }, { h: 'Vendor', f: (r) => r.vendor }, { h: 'Product', f: (r) => r.product },
+    { h: 'Dataset', f: (r) => r.target_dataset || r.source_type || '(unchanged)' }, { h: 'No hit', f: (r) => pill(r.no_hit, r.no_hit === 'drop' ? 'bad' : 'off') }, { h: 'Pipelines', f: (r) => r.pipelines },
+  ], rules, 'No rules.');
+
+  function viewUser() {
+    const saveBtn = el('button', { className: 'btn pri', textContent: 'Save' }); saveBtn.onclick = () => save(saveBtn);
+    return [
+      el('p', { className: 'desc', textContent: 'Rules run on every event as it arrives and are tried before the default rules. Example: [INGEST:vendor="acme", product="app", content_id="acme_app"] then filter ... | alter ... ;' }),
+      userEd.node, errLine,
+      el('div', { className: 'pr-head' }, status, el('span', { style: 'margin-left:auto' }), saveBtn),
+      d.user_defined.rules.length ? card('Active user-defined rules', ruleTable(d.user_defined.rules)) : '',
+    ];
+  }
+  function viewDefault() {
+    const copy = el('button', { className: 'btn', textContent: 'Copy to User Defined', onclick: () => { userEd.set((userEd.get().trim() ? userEd.get().replace(/\s+$/, '') + '\n\n' : '') + d.default.content); dirty = userEd.get() !== saved; setStatus(); tab = 'user'; draw(); } });
+    return [el('div', { className: 'pr-head' }, el('span', { className: 'mute', textContent: 'Installed rules shipped with ASIX (read-only).' }), el('span', { style: 'margin-left:auto' }), copy),
+      codeEditor(d.default.content, { readOnly: true }).node, card('Default rules', ruleTable(d.default.rules))];
+  }
+  function viewBoth() {
+    const u = userEd.get().trim();
+    return [el('p', { className: 'desc', textContent: 'Order of evaluation: user-defined rules first, then default rules. The first rule whose filter matches an event is applied.' }),
+      codeEditor((u ? '/* ------------ User defined ------------ */\n' + u + '\n\n' : '') + d.default.content, { readOnly: true }).node];
+  }
+  function viewSimulate() {
+    const logs = el('textarea', { rows: 9, value: SIM_SAMPLE, spellcheck: false, wrap: 'off', style: 'width:100%;font:12px ui-monospace,Menlo,monospace' });
+    const scope = el('select', {}, [['both', 'User defined + default'], ['user', 'User defined only'], ['default', 'Default only']].map(([v, t]) => el('option', { value: v, textContent: t })));
+    const src = el('input', { value: 'syslog', style: 'width:100%' }), out = el('div'), err = el('div', { className: 'err', style: 'margin-top:8px;white-space:pre-wrap' });
+    const run = el('button', { className: 'btn pri', textContent: 'Simulate' });
+    run.onclick = async () => {
+      err.textContent = ''; run.disabled = true; run.textContent = 'Running...';
+      try {
+        const r = await api('/v1/parsing-rules/simulate', { method: 'POST', body: { logs: logs.value, scope: scope.value, source_type: src.value.trim() || 'syslog', content: userEd.get() } });
+        out.replaceChildren(...r.results.map((x) => {
+          const keys = Object.keys(x.after).sort();
+          const rows = keys.map((k) => { const a = x.after[k], b = x.before[k], isNew = !(k in x.before), chg = !isNew && JSON.stringify(a) !== JSON.stringify(b); return { k, v: typeof a === 'object' ? JSON.stringify(a) : String(a), cls: isNew ? 'pr-new' : chg ? 'pr-chg' : '' }; });
+          return el('div', { className: 'card' },
+            el('div', { style: 'display:flex;gap:8px;align-items:center;margin-bottom:8px' }, x.dropped ? pill('Dropped (no_hit=drop)', 'bad') : x.matched ? pill(x.matched.content_id, 'ok') : pill('No rule matched', 'off'),
+              x.source_type ? el('span', { className: 'mute', textContent: 'dataset: ' + x.source_type }) : '', x.time ? el('span', { className: 'mute', textContent: '_time: ' + x.time }) : ''),
+            el('pre', { style: 'white-space:pre-wrap;word-break:break-all;margin:0 0 8px;font:12px ui-monospace,Menlo,monospace;color:var(--mute)', textContent: x.raw }),
+            x.errors.length ? el('div', { className: 'err', textContent: x.errors.join('\n') }) : '',
+            table([{ h: 'Field', f: (r) => el('span', { className: r.cls, textContent: r.k }) }, { h: 'Value', f: (r) => el('span', { className: r.cls, textContent: r.v }) }], rows, 'No fields.'));
+        }));
+      } catch (e) { err.textContent = e.message.replace(/^\d+ /, ''); out.replaceChildren(); }
+      run.disabled = false; run.textContent = 'Simulate';
+    };
+    return [el('p', { className: 'desc', textContent: 'Paste log lines, pick which rules to test, and see the fields each event ends up with. Uses the unsaved text in the User Defined editor; nothing is stored. New fields are blue, changed fields green.' }),
+      el('div', { className: 'pr-sim' },
+        el('div', {}, el('label', { className: 'fld' }, 'Sample logs (one per line, max 50)', logs), el('label', { className: 'fld' }, 'Rules to use', scope), el('label', { className: 'fld' }, 'Source type (dataset)', src), el('div', { className: 'xbtns' }, run), err),
+        out)];
+  }
+
+  const TABS = [['user', 'User Defined', viewUser], ['default', 'Default Rules', viewDefault], ['both', 'Both', viewBoth], ['sim', 'Simulate', viewSimulate]];
+  function draw() {
+    tabs.replaceChildren(...TABS.map(([id, label]) => el('div', { className: 'xtab' + (tab === id ? ' on' : ''), textContent: label, onclick: () => { tab = id; draw(); } })));
+    body.replaceChildren(...(TABS.find((t) => t[0] === tab) || TABS[0])[2]());
+  }
+  draw();
+  return [el('h2', { textContent: 'Parsing Rules' }), tabs, el('div', { style: 'margin-top:12px' }, body)];
+}
+
 async function pgInstallers() {
   const r = await api('/v1/ingestion-keys');
   const act = async (fn) => { try { await fn(); route(); } catch (e) { alert(e.message); } };
