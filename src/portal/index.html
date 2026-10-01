@@ -63,6 +63,20 @@
   .fs { border:1px solid var(--line); border-radius:8px; padding:6px 18px 18px; margin:0 0 20px; } .fs legend { padding:0 8px; font-size:16px; font-style:italic; }
   .fld { margin:12px 0; } .row2 { display:flex; gap:14px; flex-wrap:wrap; align-items:flex-end; }
   .seg { display:inline-flex; border:1px solid var(--line); border-radius:6px; overflow:hidden; } .seg button { border:0; background:var(--bg); color:var(--mute); padding:7px 16px; cursor:pointer; font:inherit; } .seg button.on { background:var(--acc); color:#04121f; font-weight:600; }
+  .xed { display:flex; background:#050a16; border:1px solid var(--line); border-radius:8px; height:190px; overflow:hidden; font:13px/20px ui-monospace,Menlo,monospace; }
+  [data-theme=light] .xed { background:#f3f6fc; }
+  .xg { width:46px; flex:none; padding:10px 8px 10px 0; text-align:right; color:var(--mute); background:#0b1426; overflow:hidden; white-space:pre; user-select:none; } [data-theme=light] .xg { background:#e6ecf7; }
+  .xwrap { position:relative; flex:1; min-width:0; } .xhl, .xta { position:absolute; inset:0; margin:0; padding:10px 12px; font:inherit; white-space:pre; border:0; border-radius:0; background:transparent; overflow:auto; tab-size:2; }
+  .xhl { overflow:hidden; pointer-events:none; color:var(--text); } .xta { color:transparent; caret-color:var(--text); resize:none; outline:none; } .xta::placeholder { color:var(--mute); opacity:.6; }
+  .xk { color:var(--ok); font-style:italic; } .xo { color:var(--acc); font-style:italic; } .xs { color:#f5b642; } .xn { color:#ff7aa2; } .xp { color:var(--acc2); }
+  .xbtns { display:flex; justify-content:flex-end; gap:8px; margin:12px 0 4px; }
+  .xtabs { display:flex; gap:4px; margin-top:14px; border-bottom:1px solid var(--line); } .xtab { padding:10px 18px; cursor:pointer; color:var(--mute); border-radius:8px 8px 0 0; } .xtab:hover { color:var(--text); } .xtab.on { color:var(--acc); background:var(--card); box-shadow:inset 0 2px 0 var(--acc); }
+  .xbar { display:flex; align-items:center; gap:14px; padding:12px 4px; } .xres { display:grid; grid-template-columns:230px 1fr; gap:14px; align-items:start; } .xtbl { overflow:auto; max-height:62vh; border:1px solid var(--line); border-radius:8px; }
+  .xtbl th { position:sticky; top:0; background:var(--card); white-space:nowrap; } .xtbl td { max-width:420px; overflow:hidden; text-overflow:ellipsis; } .xtbl td.msg { white-space:nowrap; }
+  .xfp { border:1px solid var(--line); border-radius:8px; padding:10px; max-height:62vh; overflow:auto; } .xf { display:flex; gap:8px; padding:5px 4px; cursor:pointer; border-radius:4px; font-style:italic; } .xf:hover, .xf.on { background:var(--hover); } .ft { color:var(--mute); font-style:normal; font-weight:700; width:14px; }
+  .xv { margin:2px 0 8px 22px; } .xvr { display:flex; justify-content:space-between; gap:8px; padding:3px 6px; cursor:pointer; border-radius:4px; font-size:12px; } .xvr:hover { background:var(--sel); }
+  .xdisp { position:relative; } .xdisp summary { list-style:none; cursor:pointer; } .xmenu { position:absolute; right:0; z-index:5; background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 12px; max-height:300px; overflow:auto; min-width:200px; }
+  .xchk { flex-direction:row; align-items:center; gap:8px; padding:3px 0; color:var(--text); } .xex { font:12px ui-monospace,Menlo,monospace; background:var(--bg); padding:6px 8px; border-radius:6px; margin-top:6px; cursor:pointer; white-space:pre-wrap; } .xex:hover { outline:1px solid var(--acc); }
 </style>
 </head>
 <body>
@@ -531,48 +545,140 @@ async function pgAccess() {
     card('Roles', table([{ h: 'Role', f: (x) => x.name }, { h: 'Permissions', cls: 'mono', f: (x) => (x.permissions || []).join('  ') }], r.roles))];
 }
 
-let page = 0, lastQuery = null;
-async function pgSearch() {
-  const wrap = el('div');
-  wrap.innerHTML = `<h2>Log search</h2><p class="desc">Search stored events. Free text is a substring match over the raw line; newest first.</p>
-  <div class="card"><form class="search" id="sform">
-    <label>Text contains<input name="q" placeholder="e.g. Failed password"></label>
-    <label>Source type<input name="source_type" placeholder="syslog"></label>
-    <label>Collector<input name="collector_id"></label>
-    <label>Time range<select name="range"><option value="15">Last 15 min</option><option value="60">Last hour</option><option value="1440" selected>Last 24 hours</option><option value="10080">Last 7 days</option><option value="">All time</option></select></label>
-    <label>Rows<select name="limit"><option>50</option><option>100</option><option>250</option><option>500</option></select></label>
-    <button class="btn pri" type="submit">Search</button></form></div>
-  <div class="card"><div id="sinfo" class="mute">Run a search to see events.</div>
-    <table id="stable" class="hidden"><thead><tr><th style="width:170px">Time (UTC)</th><th style="width:90px">Source</th><th style="width:140px">Collector</th><th>Event</th></tr></thead><tbody></tbody></table>
-    <div class="pager"><button class="btn" id="prev" disabled>Prev</button><span id="pageinfo" class="mute"></span><button class="btn" id="next" disabled>Next</button></div></div>`; // static markup only
-  setTimeout(() => {
-    $('sform').onsubmit = (e) => { e.preventDefault(); runSearch(0); };
-    $('prev').onclick = () => runSearch(Math.max(0, page - lastQuery.limit));
-    $('next').onclick = () => runSearch(page + lastQuery.limit);
-  });
-  return wrap;
+// ---- XQL-style search ----------------------------------------------------------------------
+const XS = { q: '', mins: 1440, res: null, err: '', busy: false, tab: 'results', fields: null, fq: '', open: '', hidden: new Set(), booted: false };
+const XSTORE = 'asix-xql-saved';
+const xSaved = () => { try { return JSON.parse(localStorage.getItem(XSTORE) || '[]'); } catch { return []; } };
+const xSetSaved = (a) => { try { localStorage.setItem(XSTORE, JSON.stringify(a.slice(0, 100))); } catch {} };
+const XTEMPLATES = [
+  { name: 'Failed SSH logins by host', q: 'dataset = syslog\n| filter _raw ~= "Failed password|Invalid user"\n| comp count() as failures by host\n| sort desc failures' },
+  { name: 'Event volume by app', q: 'dataset = syslog\n| comp count() as events by app_name\n| sort desc events\n| limit 20' },
+  { name: 'sudo / root session activity', q: 'dataset = syslog\n| filter _raw ~= "sudo: |session opened for user root"\n| fields _time, host, app_name, message\n| limit 200' },
+  { name: 'Noisiest collectors', q: 'dataset = syslog\n| comp count() as events, count_distinct(host) as hosts by collector_id\n| sort desc events' },
+  { name: 'Search raw text', q: 'dataset = syslog\n| filter _raw contains "error"\n| limit 100' },
+];
+const XHELP = [
+  ['dataset', 'Pick the data to query by source type.', ['dataset = syslog', 'dataset in (syslog, mac)']],
+  ['filter', 'Keep events that match. Operators: = != > < >= <= ~= (regex), contains, not contains, in, not in. Combine with and / or / not and parentheses.', ['| filter host = "web01" and _raw contains "failed"', '| filter app_name in ("sshd", "sudo") or severity <= 3']],
+  ['fields', 'Choose and rename the columns returned.', ['| fields _time, host, app_name as app, message']],
+  ['sort', 'Order the results.', ['| sort desc _time', '| sort asc host']],
+  ['limit', 'Maximum rows returned (default and max: 1000-5000).', ['| limit 100']],
+  ['comp', 'Aggregate. Functions: count(), count_distinct(f), sum(f), min(f), max(f), avg(f). Group with by.', ['| comp count() as hits by host', '| comp count() as events, count_distinct(host) as hosts by app_name']],
+  ['Built-in fields', '_time, _raw, _id, source_type (dataset), collector_id. Any other name reads the parsed event, e.g. host, app_name, message, severity, or nested a.b.', ['| filter _raw ~= "Failed password"']],
+];
+const XKW = /("(?:\\.|[^"\\])*"?|'(?:\\.|[^'\\])*'?)|\b(dataset|filter|fields|sort|limit|comp)\b|\b(and|or|not|contains|in|by|as|asc|desc|null)\b|(\b\d+(?:\.\d+)?\b)|(~=|!=|>=|<=|=|>|<|\|)/gi;
+function xHighlight(text) {
+  const frag = document.createDocumentFragment(); let last = 0, m;
+  XKW.lastIndex = 0;
+  while ((m = XKW.exec(text))) {
+    if (m.index > last) frag.append(text.slice(last, m.index));
+    frag.append(el('span', { className: m[1] ? 'xs' : m[2] ? 'xk' : m[3] ? 'xo' : m[4] ? 'xn' : 'xp', textContent: m[0] }));
+    last = m.index + m[0].length;
+  }
+  frag.append(text.slice(last) + '\n');
+  return frag;
 }
-async function runSearch(offset) {
-  const f = new FormData($('sform')), p = new URLSearchParams();
-  ['q', 'source_type', 'collector_id'].forEach((k) => f.get(k).trim() && p.set(k, f.get(k).trim()));
-  const mins = f.get('range');
-  if (mins) p.set('from', new Date(Date.now() - Number(mins) * 60000).toISOString());
-  const limit = Number(f.get('limit')); p.set('limit', limit); p.set('offset', offset);
-  $('sinfo').textContent = 'Searching...'; $('stable').classList.add('hidden');
-  try {
-    const r = await api('/v1/search/events?' + p);
-    page = offset; lastQuery = { limit, n: r.count };
-    const tb = $('stable').querySelector('tbody'); tb.replaceChildren();
-    r.events.forEach((ev) => {
-      const detail = el('tr', { className: 'hidden' }, el('td', { colSpan: 4 }, el('pre', { textContent: JSON.stringify({ id: ev.id, received_at: ev.received_at, parsed: ev.parsed }, null, 2) })));
-      tb.append(el('tr', { className: 'row', onclick: () => detail.classList.toggle('hidden') },
-        el('td', { textContent: when(ev.event_time || ev.received_at) }), el('td', { textContent: ev.source_type }),
-        el('td', { textContent: ev.collector_id || '-' }), el('td', { className: 'msg', textContent: ev.raw })), detail);
+const csvCell = (v) => { let s = v === null || v === undefined ? '' : String(v); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+
+async function pgSearch() {
+  const wrap = el('div'), body = el('div'), tabs = el('div', { className: 'xtabs' });
+  const ta = el('textarea', { className: 'xta', value: XS.q, spellcheck: false, wrap: 'off', placeholder: 'dataset = syslog\n| filter _raw contains "failed"\n| limit 100' });
+  const hl = el('pre', { className: 'xhl' }), gut = el('div', { className: 'xg' });
+  const errBox = el('div', { className: 'err', style: 'margin-top:8px' });
+  const sync = () => {
+    XS.q = ta.value; hl.replaceChildren(xHighlight(ta.value));
+    gut.textContent = Array.from({ length: Math.max(3, ta.value.split('\n').length) }, (_, i) => i + 1).join('\n');
+    hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; gut.scrollTop = ta.scrollTop;
+  };
+  ta.oninput = sync; ta.onscroll = () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; gut.scrollTop = ta.scrollTop; };
+  const setQ = (q) => { ta.value = q; sync(); };
+  const append = (stage, run) => { setQ(ta.value.replace(/\s+$/, '') + (ta.value.trim() ? '\n' : '') + stage); if (run) runQ(); };
+
+  async function runQ() {
+    if (XS.busy) return;
+    XS.busy = true; XS.err = ''; errBox.textContent = ''; runBtn.disabled = true; runBtn.textContent = 'Running...';
+    try { XS.res = await api('/v1/search/xql', { method: 'POST', body: { query: ta.value, minutes: XS.mins, limit: 1000 } }); XS.hidden = new Set(); XS.open = ''; XS.tab = 'results'; }
+    catch (e) { XS.err = e.message; XS.res = null; }
+    XS.busy = false; runBtn.disabled = false; runBtn.textContent = 'Run'; errBox.textContent = XS.err; draw();
+  }
+  ta.onkeydown = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); runQ(); } };
+  const runBtn = el('button', { className: 'btn pri', textContent: 'Run', onclick: runQ });
+  const range = el('select', {}, [[15, 'Last 15 minutes'], [60, 'Last 1 hour'], [1440, 'Last 1 day'], [10080, 'Last 7 days'], [43200, 'Last 30 days'], [0, 'All time']].map((o) => el('option', { value: o[0], textContent: o[1] })));
+  range.value = String(XS.mins); range.onchange = () => { XS.mins = Number(range.value); };
+  const saveAs = () => { const n = (window.prompt('Save query as:') || '').trim(); if (!n || !ta.value.trim()) return; xSetSaved([{ name: n.slice(0, 80), q: ta.value }, ...xSaved().filter((x) => x.name !== n)]); XS.tab = 'library'; draw(); };
+
+  function fieldsPanel() {
+    const rows = XS.res ? XS.res.rows : [], cols = XS.res ? XS.res.columns : null;
+    const list = cols ? cols.filter((c) => c !== '_id').map((c) => [c, rows.filter((r) => r[c] !== null && r[c] !== undefined).length]) : ((XS.fields && XS.fields.fields) || []).map((f) => [f.name, f.events]);
+    const q = el('input', { placeholder: 'Search fields', value: XS.fq, style: 'width:100%', oninput: (e) => { XS.fq = e.target.value; drawFieldList(); } }), box = el('div', { className: 'xfl' });
+    const drawFieldList = () => box.replaceChildren(...list.filter((f) => f[0].toLowerCase().includes(XS.fq.toLowerCase())).flatMap(([name]) => {
+      const out = [el('div', { className: 'xf' + (XS.open === name ? ' on' : ''), onclick: () => { XS.open = XS.open === name ? '' : name; drawFieldList(); } }, el('span', { className: 'ft', textContent: 'T' }), el('span', { textContent: name }))];
+      if (XS.open === name && cols) {
+        const cnt = new Map(); rows.forEach((r) => { const v = r[name]; if (v !== null && v !== undefined && v !== '') cnt.set(v, (cnt.get(v) || 0) + 1); });
+        const top = [...cnt.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
+        out.push(el('div', { className: 'xv' }, top.length ? top.map(([v, n]) => el('div', { className: 'xvr', title: 'Add as a filter', onclick: () => append('| filter ' + name + ' = "' + String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"', true) }, el('span', { textContent: String(v).slice(0, 40) }), el('b', { textContent: n }))) : el('div', { className: 'mute', textContent: 'No values' }), cols && !cnt.size ? '' : el('div', { className: 'mute', style: 'font-size:11px;margin-top:4px', textContent: 'Top values in these results. Click to filter.' })));
+      } else if (XS.open === name) out.push(el('div', { className: 'xv' }, el('div', { className: 'xvr', onclick: () => append('| fields ' + name), textContent: 'Add to a fields stage' })));
+      return out;
+    }));
+    drawFieldList();
+    return el('div', { className: 'xfp' }, el('div', { className: 'mute', style: 'font-size:11px;letter-spacing:.8px;margin-bottom:8px', textContent: 'FIELDS' }), q, box);
+  }
+  function resultsView() {
+    if (XS.err) return el('div', { className: 'card' }, el('div', { className: 'mute', textContent: 'Fix the query and run it again.' }));
+    const r = XS.res;
+    if (!r) return el('div', { className: 'card mute', textContent: 'Write a query and press Run (Ctrl/Cmd+Enter). Open XQL Helper for syntax or Query Library for ready-made queries.' });
+    const cols = r.columns.filter((c) => c !== '_id' && !XS.hidden.has(c)), SHOW = 500;
+    const disp = el('details', { className: 'xdisp' }, el('summary', { className: 'btn', textContent: 'Display' }),
+      el('div', { className: 'xmenu' }, r.columns.filter((c) => c !== '_id').map((c) => el('label', { className: 'xchk' }, el('input', { type: 'checkbox', checked: !XS.hidden.has(c), onchange: (e) => { e.target.checked ? XS.hidden.delete(c) : XS.hidden.add(c); draw(); } }), c))));
+    const dl = el('button', { className: 'btn', textContent: 'Download CSV', onclick: () => {
+      const csv = [cols.map(csvCell).join(',')].concat(r.rows.map((x) => cols.map((c) => csvCell(x[c])).join(','))).join('\r\n');
+      const a = el('a', { href: URL.createObjectURL(new Blob([csv], { type: 'text/csv' })), download: 'asix-query-results.csv' }); document.body.append(a); a.click(); a.remove();
+    } });
+    const t = el('table'); t.append(el('thead', {}, el('tr', {}, cols.map((c) => el('th', { textContent: c })))));
+    const tb = el('tbody');
+    r.rows.slice(0, SHOW).forEach((row) => {
+      const det = el('tr', { className: 'hidden' }, el('td', { colSpan: cols.length }, el('pre', { textContent: JSON.stringify(row, null, 2) })));
+      tb.append(el('tr', { className: 'row', onclick: () => det.classList.toggle('hidden') }, cols.map((c) => el('td', { className: c === '_raw' || c === 'message' ? 'msg' : '', textContent: row[c] === null || row[c] === undefined ? '' : row[c] }))), det);
     });
-    $('stable').classList.toggle('hidden', r.count === 0);
-    $('sinfo').textContent = r.count === 0 ? 'No events matched.' : 'Showing ' + (offset + 1) + '-' + (offset + r.count) + '. Click a row for parsed fields.';
-    $('prev').disabled = offset === 0; $('next').disabled = r.count < limit; $('pageinfo').textContent = 'page ' + (offset / limit + 1);
-  } catch (e) { $('sinfo').replaceChildren(el('span', { className: 'err', textContent: e.message })); }
+    t.append(tb);
+    return el('div', {}, el('div', { className: 'xbar' }, el('b', { textContent: r.count.toLocaleString() + ' results' + (r.truncated ? '+' : '') }), el('span', { className: 'mute', textContent: r.took_ms + ' ms' }),
+      r.truncated ? pill('truncated by limit', 'off') : '', r.count > SHOW ? el('span', { className: 'mute', textContent: 'showing first ' + SHOW + ' - download for all' }) : '', el('span', { style: 'flex:1' }), disp, dl),
+      el('div', { className: 'xres' }, fieldsPanel(), el('div', { className: 'xtbl' }, r.count ? t : el('div', { className: 'mute', style: 'padding:14px', textContent: 'No events matched in this time range.' }))));
+  }
+  function helperView() {
+    return el('div', { className: 'grid' }, XHELP.map(([t, d, ex]) => el('div', { className: 'card' }, el('h3', { textContent: t }), el('div', { className: 'mute', style: 'margin-bottom:8px', textContent: d }),
+      ex.map((x) => el('div', { className: 'xex', title: 'Click to add to the query', onclick: () => (x.startsWith('|') || x.startsWith('dataset') ? (x.startsWith('dataset') ? setQ(x) : append(x)) : append(x)), textContent: x })))));
+  }
+  function libraryView() {
+    const item = (x, del) => el('tr', {}, el('td', { textContent: x.name }), el('td', { className: 'mono', style: 'white-space:pre-wrap', textContent: x.q }), el('td', { style: 'white-space:nowrap' },
+      el('button', { className: 'btn', textContent: 'Load', onclick: () => { setQ(x.q); XS.tab = 'results'; draw(); } }), ' ', el('button', { className: 'btn pri', textContent: 'Run', onclick: () => { setQ(x.q); runQ(); } }),
+      del ? [' ', el('button', { className: 'btn', textContent: 'Delete', onclick: () => { xSetSaved(xSaved().filter((s) => s.name !== x.name)); draw(); } })] : ''));
+    const saved = xSaved(), tbl = (rows, del) => el('table', {}, el('tbody', {}, rows.map((x) => item(x, del))));
+    return el('div', {}, card('Saved queries (this browser)', saved.length ? tbl(saved, true) : el('div', { className: 'mute', textContent: 'Nothing saved yet. Use Save as above.' })), card('Templates', tbl(XTEMPLATES, false)));
+  }
+  function schemaView() {
+    const f = XS.fields; if (!f) return el('div', { className: 'card mute', textContent: 'Loading schema...' });
+    return el('div', {}, card('Datasets (last 7 days)', table([{ h: 'Dataset', f: (d) => d.name }, { h: 'Events', f: (d) => d.events.toLocaleString() }, { h: 'Last received (UTC)', f: (d) => when(d.last_seen) },
+      { h: '', f: (d) => el('button', { className: 'btn', textContent: 'Query', onclick: () => { setQ('dataset = ' + d.name + '\n| limit 100'); XS.tab = 'results'; draw(); } }) }], f.datasets, 'No events yet.')),
+      card('Fields (sampled from the latest ' + (f.sampled_events || 0).toLocaleString() + ' events)', el('div', { className: 'mute', style: 'margin-bottom:8px', textContent: 'Built-in: _time, _raw, _id, source_type, collector_id' }), table([{ h: 'Field', cls: 'mono', f: (x) => x.name }, { h: 'Seen in events', f: (x) => x.events.toLocaleString() }, { h: '', f: (x) => el('button', { className: 'btn', textContent: 'Add to fields', onclick: () => { append('| fields ' + x.name); XS.tab = 'results'; draw(); } }) }], f.fields, 'No parsed fields yet.')));
+  }
+  function draw() {
+    tabs.replaceChildren(...[['results', 'Query Results'], ['helper', 'XQL Helper'], ['library', 'Query Library'], ['schema', 'Schema']].map(([id, label]) => el('div', { className: 'xtab' + (XS.tab === id ? ' on' : ''), textContent: label, onclick: () => { XS.tab = id; draw(); } })));
+    body.replaceChildren(XS.tab === 'results' ? resultsView() : XS.tab === 'helper' ? helperView() : XS.tab === 'library' ? libraryView() : schemaView());
+  }
+  wrap.append(el('div', { style: 'display:flex;align-items:center;justify-content:space-between;gap:12px' }, el('h2', { textContent: 'XQL Query' }), range),
+    el('p', { className: 'desc', textContent: 'Query stored events with an XQL-style pipeline: dataset, filter, fields, sort, limit, comp.' }),
+    el('div', { className: 'xed' }, gut, el('div', { className: 'xwrap' }, hl, ta)), errBox,
+    el('div', { className: 'xbtns' }, el('button', { className: 'btn', textContent: 'Clear', onclick: () => { setQ(''); XS.res = null; XS.err = ''; errBox.textContent = ''; draw(); } }), el('button', { className: 'btn', textContent: 'Save as', onclick: saveAs }), runBtn),
+    tabs, body);
+  sync(); draw();
+  if (!XS.fields) {
+    api('/v1/search/fields').then((f) => {
+      XS.fields = f;
+      if (!XS.booted && !ta.value.trim() && f.datasets && f.datasets.length) { setQ('dataset = ' + f.datasets[0].name + '\n| limit 100'); XS.booted = true; runQ(); } else draw();
+    }).catch(() => { XS.fields = { fields: [], datasets: [] }; draw(); });
+  }
+  return wrap;
 }
 
 // ---- boot ---------------------------------------------------------------------------
