@@ -348,6 +348,11 @@ data:
     GRANT SELECT, INSERT, UPDATE, DELETE ON detection_rules TO asix_admin;
     GRANT SELECT, INSERT, UPDATE, DELETE ON alerts TO asix_admin;
 
+    -- Custom rules: correlation vs BIOC, plus an alert category (idempotent upgrade)
+    ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'correlation';
+    ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS category VARCHAR(100);
+    CREATE INDEX IF NOT EXISTS idx_detection_rules_kind ON detection_rules(tenant_id, kind);
+
     -- ============================================================
     -- Threat intelligence: indicators (IOCs) and the matcher's scan cursor
     -- ============================================================
