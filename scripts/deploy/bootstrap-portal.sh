@@ -73,13 +73,15 @@ PGPW="$("${K[@]}" get secret postgresql-secret -o jsonpath='{.data.POSTGRES_PASS
 "${K[@]}" exec -i postgresql-0 -- env PGPASSWORD="$PGPW" psql -U asix_admin -d asix_platform -v ON_ERROR_STOP=1 \
   -v kc_subject="$UID_KC" -v uname="$USERNAME" -v email="$EMAIL" <<'SQL'
 INSERT INTO roles (tenant_id, name, permissions)
-SELECT t.id, 'portal-admin', ARRAY['auth:identity:read', 'search:events:read', 'settings:access:read']
+SELECT t.id, 'portal-admin', ARRAY['auth:identity:read', 'search:events:read', 'settings:access:read',
+  'detections:rules:read', 'detections:rules:write', 'alerts:read', 'alerts:write']
 FROM tenants t
 WHERE t.name = 'Default Tenant'
   AND NOT EXISTS (SELECT 1 FROM roles r WHERE r.tenant_id = t.id AND r.name = 'portal-admin');
 
 -- keep the role current when new portal pages need new permissions
-UPDATE roles SET permissions = ARRAY['auth:identity:read', 'search:events:read', 'settings:access:read']
+UPDATE roles SET permissions = ARRAY['auth:identity:read', 'search:events:read', 'settings:access:read',
+  'detections:rules:read', 'detections:rules:write', 'alerts:read', 'alerts:write']
 WHERE name = 'portal-admin' AND tenant_id = (SELECT id FROM tenants WHERE name = 'Default Tenant');
 
 INSERT INTO users (tenant_id, username, email, role_ids)
