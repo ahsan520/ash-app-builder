@@ -397,6 +397,62 @@ data:
     GRANT SELECT, INSERT, UPDATE, DELETE ON threat_indicators TO asix_admin;
     GRANT SELECT, INSERT, UPDATE, DELETE ON ioc_scan_state TO asix_admin;
 
+    -- ============================================================
+    -- Collectors: ingestion keys (installers) and registered senders
+    -- ============================================================
+
+    CREATE TABLE IF NOT EXISTS ingestion_keys (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) NOT NULL,
+        name VARCHAR(100) NOT NULL,
+        description TEXT,
+        platform VARCHAR(20) NOT NULL DEFAULT 'linux',
+        key_prefix VARCHAR(16) NOT NULL,
+        key_hash CHAR(64) NOT NULL UNIQUE,
+        status VARCHAR(20) NOT NULL DEFAULT 'active',
+        created_by TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_used_at TIMESTAMP,
+        revoked_at TIMESTAMP,
+        UNIQUE (tenant_id, name)
+    );
+
+    CREATE TABLE IF NOT EXISTS collectors (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) NOT NULL,
+        key_id UUID REFERENCES ingestion_keys(id) ON DELETE SET NULL,
+        name VARCHAR(200) NOT NULL,
+        alias VARCHAR(200),
+        platform VARCHAR(20),
+        os VARCHAR(100),
+        version VARCHAR(50),
+        last_ip VARCHAR(64),
+        first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        events_total BIGINT NOT NULL DEFAULT 0,
+        UNIQUE (tenant_id, name)
+    );
+
+    ALTER TABLE ingestion_keys ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS ingestion_keys_tenant_isolation ON ingestion_keys;
+    CREATE POLICY ingestion_keys_tenant_isolation ON ingestion_keys
+        FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    ALTER TABLE collectors ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS collectors_tenant_isolation ON collectors;
+    CREATE POLICY collectors_tenant_isolation ON collectors
+        FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    CREATE INDEX IF NOT EXISTS idx_collectors_tenant_seen ON collectors(tenant_id, last_seen);
+    CREATE INDEX IF NOT EXISTS idx_collectors_key ON collectors(key_id);
+
+    GRANT SELECT, INSERT, UPDATE, DELETE ON ingestion_keys TO asix_admin;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON collectors TO asix_admin;
+
 ---
 apiVersion: batch/v1
 kind: Job
