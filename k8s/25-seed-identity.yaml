@@ -88,43 +88,46 @@ spec:
           args:
             - |
               set -eu
-              apk add --no-cache curl jq >/dev/null
+              # No apk/curl/jq: the pod may have no external DNS, so this uses
+              # only what ships in postgres:16-alpine (busybox wget + sed).
+              KC=http://keycloak:8080
+
+              # First "id" value in a JSON document.
+              first_id() { grep -o '"id":"[^"]*"' | head -n1 | cut -d'"' -f4; }
+
+              # Form-encode the admin password (base64 chars + / = are unsafe).
+              ENC_PW=$(printf '%s' "$KC_ADMIN_PASSWORD" \
+                | sed -e 's/%/%25/g' -e 's/+/%2B/g' -e 's/\//%2F/g' -e 's/=/%3D/g' -e 's/&/%26/g')
 
               # Keycloak may still be finishing startup even though the
-              # Deployment's own readiness probe passed moments ago — retry
-              # the admin login briefly rather than failing the whole Job.
+              # Deployment's readiness probe passed — retry the admin login.
               ADMIN_TOKEN=""
               for i in $(seq 1 10); do
-                ADMIN_TOKEN=$(curl -sf -X POST \
-                  http://keycloak:8080/realms/master/protocol/openid-connect/token \
-                  -d grant_type=password \
-                  -d client_id=admin-cli \
-                  -d username=admin \
-                  --data-urlencode "password=${KC_ADMIN_PASSWORD}" \
-                  | jq -r .access_token 2>/dev/null || true)
-                if [ -n "$ADMIN_TOKEN" ] && [ "$ADMIN_TOKEN" != "null" ]; then
+                ADMIN_TOKEN=$(wget -q -O - \
+                  --post-data "grant_type=password&client_id=admin-cli&username=admin&password=${ENC_PW}" \
+                  "$KC/realms/master/protocol/openid-connect/token" 2>/dev/null \
+                  | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4 || true)
+                if [ -n "$ADMIN_TOKEN" ]; then
                   break
                 fi
                 echo "Waiting for Keycloak admin API... ($i/10)"
                 sleep 6
               done
-              if [ -z "$ADMIN_TOKEN" ] || [ "$ADMIN_TOKEN" = "null" ]; then
+              if [ -z "$ADMIN_TOKEN" ]; then
                 echo "ERROR: could not authenticate to Keycloak admin API" >&2
                 exit 1
               fi
 
-              CLIENT_UUID=$(curl -sf -H "Authorization: Bearer $ADMIN_TOKEN" \
-                "http://keycloak:8080/admin/realms/asix/clients?clientId=asix-api" \
-                | jq -r '.[0].id')
-              if [ -z "$CLIENT_UUID" ] || [ "$CLIENT_UUID" = "null" ]; then
+              CLIENT_UUID=$(wget -q -O - --header "Authorization: Bearer $ADMIN_TOKEN" \
+                "$KC/admin/realms/asix/clients?clientId=asix-api" | first_id || true)
+              if [ -z "$CLIENT_UUID" ]; then
                 echo "ERROR: client 'asix-api' not found in realm 'asix'" >&2
                 exit 1
               fi
 
-              KC_SUBJECT=$(curl -sf -H "Authorization: Bearer $ADMIN_TOKEN" \
-                "http://keycloak:8080/admin/realms/asix/clients/${CLIENT_UUID}/service-account-user" \
-                | jq -r '.id')
-              if [ -z "$KC_SUBJECT" ] || [ "$KC_SUBJECT" = "null" ]; then
+              KC_SUBJECT=$(wget -q -O - --header "Authorization: Bearer $ADMIN_TOKEN" \
+                "$KC/admin/realms/asix/clients/${CLIENT_UUID}/service-account-user" | first_id || true)
+              if [ -z "$KC_SUBJECT" ]; then
                 echo "ERROR: could not resolve service-account-user for client 'asix-api'" >&2
                 exit 1
               fi
