@@ -133,10 +133,10 @@ function logout() {
   if (t.id) p.id_token_hint = t.id;
   location.href = OIDC + '/logout?' + new URLSearchParams(p);
 }
-async function api(path) {
+async function api(path, opts = {}) {
   const tok = await accessToken();
   if (!tok) { showLogin(); throw new Error('signed out'); }
-  const r = await fetch(path, { headers: { Authorization: 'Bearer ' + tok } });
+  const r = await fetch(path, { method: opts.method || 'GET', headers: { Authorization: 'Bearer ' + tok, ...(opts.body ? { 'Content-Type': 'application/json' } : {}) }, body: opts.body ? JSON.stringify(opts.body) : undefined });
   let body = null; try { body = await r.json(); } catch {}
   if (!r.ok) {
     const msg = (body && body.error && body.error.message) || r.statusText;
@@ -151,9 +151,9 @@ async function api(path) {
 // backend exists (no fake pages).
 const NAV = [
   { id: 'dashboard', label: 'Dashboards & Reports', ic: '\u25A6', page: pgDashboard, crumb: ['Dashboards & Reports', 'Command Center'] },
-  { id: 'incidents', label: 'Cases & Issues', ic: '\u2691', soon: true },
+  { id: 'incidents', label: 'Cases & Issues', ic: '\u2691', page: pgAlerts, crumb: ['Cases & Issues', 'Alerts'] },
   { id: 'search', label: 'Investigation & Response', ic: '\u25C9', page: pgSearch, crumb: ['Investigation & Response', 'Log search'] },
-  { id: 'threat', label: 'Threat Management', ic: '\u25CE', soon: true },
+  { id: 'threat', label: 'Threat Management', ic: '\u25CE', home: 'threat/correlations' },
   { id: 'posture', label: 'Posture Management', ic: '\u2630', soon: true },
   { id: 'inventory', label: 'Inventory', ic: '\u25A3', soon: true },
   { id: 'modules', label: 'Modules', ic: '\u2756', soon: true },
@@ -174,8 +174,22 @@ const SETTINGS = [
   { id: 'audit', label: 'Audit log', soon: true },
   { id: 'ai', label: 'AI providers', soon: true },
 ];
+// Threat Management has its own side menu (like Settings). Rules that run today are
+// threshold/correlation rules over events, so they live under Correlations.
+const THREAT = [
+  { group: 'Threat Intelligence' },
+  { id: 'library', label: 'Threat Intel Library', page: pgLibrary },
+  { id: 'indicators', label: 'Indicators', page: pgIndicators },
+  { id: 'tidash', label: 'Dashboard', soon: true },
+  { group: 'Detection Rules' },
+  { id: 'ioc', label: 'IOC', page: pgIoc },
+  { id: 'bioc', label: 'BIOC', soon: true },
+  { id: 'correlations', label: 'Correlations', page: pgRules },
+  { id: 'indicatorrules', label: 'Indicator Rules', soon: true },
+];
 const leaves = NAV.filter((n) => n.page).map((n) => ({ ...n, path: n.id }))
-  .concat(SETTINGS.filter((n) => n.page).map((n) => ({ ...n, path: 'settings/' + n.id, crumb: ['Settings', n.label] })));
+  .concat(SETTINGS.filter((n) => n.page).map((n) => ({ ...n, path: 'settings/' + n.id, crumb: ['Settings', n.label] })))
+  .concat(THREAT.filter((n) => n.page).map((n) => ({ ...n, path: 'threat/' + n.id, crumb: ['Threat Management', n.label] })));
 const theme = () => { try { return localStorage.getItem('asix-theme') || 'dark'; } catch { return 'dark'; } };
 function setTheme(t) { document.documentElement.dataset.theme = t; try { localStorage.setItem('asix-theme', t); } catch {} }
 
@@ -185,13 +199,16 @@ function navRow(n, active, path, onclick) {
   if (!n.soon) r.onclick = onclick;
   return r;
 }
-let tenantName = '', username = '';
+let tenantName = '', username = '', routeQuery = new URLSearchParams();
 function buildNav(active) {
   const nav = $('nav'); nav.replaceChildren();
-  if (active.startsWith('settings/')) {
+  if (active.startsWith('threat/')) {
+    nav.append(navRow({ label: 'Back to main', ic: '\u2190' }, active, '', () => { location.hash = '#/dashboard'; }), el('div', { className: 'grp', textContent: 'Threat Management' }));
+    THREAT.forEach((n) => nav.append(n.group ? el('div', { className: 'grp', textContent: n.group }) : navRow(n, active, 'threat/' + n.id, () => { location.hash = '#/threat/' + n.id; })));
+  } else if (active.startsWith('settings/')) {
     nav.append(navRow({ label: 'Back to portal', ic: '\u2190' }, active, '', () => { location.hash = '#/dashboard'; }), el('div', { className: 'grp', textContent: 'Settings' }));
     SETTINGS.forEach((n) => nav.append(n.group ? el('div', { className: 'grp', textContent: n.group }) : navRow(n, active, 'settings/' + n.id, () => { location.hash = '#/settings/' + n.id; })));
-  } else NAV.forEach((n) => nav.append(navRow(n, active, n.id, () => { location.hash = '#/' + n.id; })));
+  } else NAV.forEach((n) => nav.append(navRow(n, active, n.id, () => { location.hash = '#/' + (n.home || n.id); })));
   $('bottom').replaceChildren(
     navRow({ label: 'Settings', ic: '\u2699' }, active.startsWith('settings/') ? 'settings' : '', 'settings', () => { location.hash = '#/settings/status'; }),
     el('div', { className: 'userbox' }, el('div', { className: 'avatar', textContent: (username || '?').slice(0, 2).toUpperCase() }),
@@ -200,7 +217,9 @@ function buildNav(active) {
       el('button', { className: 'tg', title: 'Sign out', textContent: '\u23FB', onclick: logout })));
 }
 async function route() {
-  const path = (location.hash.replace(/^#\/?/, '') || 'dashboard');
+  const [rawPath, qs] = (location.hash.replace(/^#\/?/, '') || 'dashboard').split('?');
+  const path = rawPath === 'threat' ? 'threat/correlations' : rawPath;
+  routeQuery = new URLSearchParams(qs || '');
   const leaf = leaves.find((l) => l.path === path) || leaves[0];
   buildNav(leaf.path);
   const c = leaf.crumb || [leaf.label];
@@ -262,20 +281,129 @@ function spark(hourly) {
 }
 let viewBy = 'source';
 async function pgDashboard() {
-  const d = await api('/v1/dashboard/ingestion?by=' + viewBy), tt = d.totals, total = tt.events_24h;
+  const [d, sm] = await Promise.all([api('/v1/dashboard/ingestion?by=' + viewBy), api('/v1/alerts/summary').catch(() => null)]);
+  const tt = d.totals, total = tt.events_24h;
   const sel = el('select', { onchange: () => { viewBy = sel.value; route(); } }, el('option', { value: 'source', textContent: 'Source type' }), el('option', { value: 'collector', textContent: 'Collector' }));
   sel.value = viewBy;
   const kpi = (v, l, on) => el('div', { className: 'kpi' + (on ? ' sel' : '') }, el('div', { className: 'v', textContent: v }), el('div', { className: 'l', textContent: l }));
   const [mb, unit] = fmtBytes(tt.bytes_24h);
   const legend = el('div', { className: 'legend' }, d.groups.map((g, i) => el('span', {}, el('i', { style: 'background:' + PALETTE[i % PALETTE.length] }), g.key + ' - ' + g.events_24h.toLocaleString())));
-  return [el('h1', { textContent: 'Command Center' }), el('div', { className: 'mute', textContent: 'Live view of events ingested into this tenant over the last 24 hours.' }),
+  return [el('h1', { textContent: 'Command Center' }), el('div', { className: 'mute', textContent: 'Live view of events ingested into this tenant over the last 24 hours.' }), sevRow(sm),
     el('div', { className: 'cc' },
       el('div', {}, el('div', { className: 'viewby' }, 'View by', sel),
-        kpi(total.toLocaleString(), 'All events (24h)', true), kpi(tt.events_1h.toLocaleString(), 'Events in the last hour'),
+        kpi(total.toLocaleString(), 'All events (24h)', true), kpi(sm ? String(sm.active_total) : '-', 'Active alerts'), kpi(tt.events_1h.toLocaleString(), 'Events in the last hour'),
         kpi(String(tt.source_types), 'Source types reporting'), kpi(ago(tt.last_received), 'Since last event received'),
         el('div', { className: 'ing' }, el('div', { className: 'mute', textContent: 'Data ingestion' }), el('div', { className: 'v' }, mb, el('small', { textContent: unit + '/24H' }), ' ', spark(d.hourly)))),
       el('div', { className: 'radial' }, total ? radial(d, total) : el('div', { className: 'mute', textContent: 'No events in the last 24 hours. Point rsyslog at the collector (deploy/60-asix-forward.conf).' }),
         total ? legend : '', el('div', { className: 'mute', style: 'font-size:12px;margin-top:8px', textContent: 'Outer ring: events per hour (oldest to newest, clockwise from the top). Middle ring: share by ' + (d.by === 'collector_id' ? 'collector' : 'source type') + '.' })))];
+}
+// ---- alerts + detection rules ---------------------------------------------------------
+const SEV = ['critical', 'high', 'medium', 'low'];
+const SEVCOL = { critical: '#ff5a5f', high: '#ff9a4d', medium: '#f5b642', low: '#4da3ff' };
+const sevPill = (s, n) => el('span', { className: 'pill', style: 'background:' + SEVCOL[s] + '26;color:' + SEVCOL[s] + ';font-weight:600', textContent: s + (n !== undefined ? '  ' + n : '') });
+function sevRow(sm) {
+  if (!sm) return '';
+  return el('div', { style: 'display:flex;align-items:center;gap:10px;margin-top:14px' }, el('span', { className: 'mute', textContent: 'Active alerts by severity:' }),
+    ...SEV.map((s) => el('a', { href: '#/incidents?sev=' + s, style: 'text-decoration:none' }, sevPill(s, sm.active[s]))));
+}
+async function openAlert(id, holder) {
+  holder.replaceChildren(el('div', { className: 'mute', textContent: 'Loading alert...' }));
+  try {
+    const { alert: a, events } = await api('/v1/alerts/' + id);
+    const act = (st, label, pri) => el('button', { className: 'btn' + (pri ? ' pri' : ''), textContent: label, onclick: async () => { try { await api('/v1/alerts/' + id, { method: 'PATCH', body: { status: st } }); route(); } catch (e) { window.alert(e.message); } } });
+    const buttons = el('div', { style: 'display:flex;gap:8px;margin:12px 0' },
+      ...(a.status === 'open' ? [act('acknowledged', 'Acknowledge', true), act('closed', 'Close')] : a.status === 'acknowledged' ? [act('closed', 'Close', true), act('open', 'Reopen')] : [act('open', 'Reopen', true)]));
+    const d = a.details || {};
+    holder.replaceChildren(card(a.title,
+      kv({ rule: a.rule_name, severity: a.severity, status: a.status, group: a.group_key, matching_events: a.event_count, first_seen_utc: when(a.first_event_at), last_seen_utc: when(a.last_event_at), condition: (d.threshold || '?') + ' in ' + (d.window_minutes || '?') + ' min' }),
+      buttons, el('h3', { textContent: 'Latest matching events' }),
+      table([{ h: 'Time (UTC)', f: (e) => when(e.event_time || e.received_at) }, { h: 'Event', cls: 'msg', f: (e) => e.raw }], events, 'The sample events are no longer available.')));
+    holder.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } catch (e) { holder.replaceChildren(errBox(e)); }
+}
+async function pgAlerts() {
+  const status = routeQuery.get('status') || 'active', sev = routeQuery.get('sev') || '';
+  const go = () => { const n = new URLSearchParams(); if (stSel.value !== 'active') n.set('status', stSel.value); if (sevSel.value) n.set('sev', sevSel.value); location.hash = '#/incidents' + (n.toString() ? '?' + n : ''); };
+  const stSel = el('select', { onchange: go }, ...['active', 'open', 'acknowledged', 'closed', 'all'].map((v) => el('option', { value: v, textContent: v })));
+  const sevSel = el('select', { onchange: go }, el('option', { value: '', textContent: 'any severity' }), ...SEV.map((v) => el('option', { value: v, textContent: v })));
+  stSel.value = status; sevSel.value = sev;
+  const p = new URLSearchParams({ status, limit: 100 }); if (sev) p.set('severity', sev);
+  const r = await api('/v1/alerts?' + p);
+  const holder = el('div');
+  const list = table([{ h: 'Severity', f: (a) => sevPill(a.severity) }, { h: 'Alert', f: (a) => a.title }, { h: 'Events', f: (a) => a.event_count },
+    { h: 'Last seen (UTC)', f: (a) => when(a.last_event_at) }, { h: 'Status', f: (a) => pill(a.status, a.status === 'closed' ? 'off' : a.status === 'open' ? 'bad' : 'ok') }], r.alerts, 'No alerts match. Detection rules run every minute.');
+  if (list.querySelectorAll) list.querySelectorAll('tbody tr').forEach((tr, i) => { tr.className = 'row'; tr.onclick = () => openAlert(r.alerts[i].id, holder); });
+  return [...head('Alerts', 'Alerts raised by detection rules. Click an alert for its matching events and to change its status.'),
+    card('', el('div', { style: 'display:flex;gap:10px;align-items:center' }, el('span', { className: 'mute', textContent: 'Show' }), stSel, sevSel, el('span', { className: 'mute', style: 'margin-left:auto', textContent: r.count + ' shown' }))),
+    card('', list), holder];
+}
+// ---- Threat intelligence pages ---------------------------------------------------------
+const IND_TYPES = ['ip', 'domain', 'url', 'md5', 'sha1', 'sha256', 'email'];
+let indF = { type: '', q: '', offset: 0 }, indMsg = '';
+async function pgIndicators() {
+  const PAGE = 50, p = new URLSearchParams({ limit: PAGE, offset: indF.offset });
+  if (indF.type) p.set('type', indF.type); if (indF.q) p.set('q', indF.q);
+  const r = await api('/v1/threat-intel/indicators?' + p);
+  const act = async (fn) => { try { await fn(); route(); } catch (e) { alert(e.message); } };
+  const sev = el('select', {}, ['medium', 'high', 'critical', 'low'].map((s) => el('option', { value: s, textContent: s })));
+  const src = el('input', { value: 'manual', placeholder: 'source / feed name' }), desc = el('input', { placeholder: 'description (optional)' });
+  const exp = el('input', { type: 'number', min: '0', placeholder: 'expires in days (blank = never)', style: 'width:230px' });
+  const box = el('textarea', { rows: 6, placeholder: 'One indicator per line - IPv4, domain, URL, MD5/SHA1/SHA256, email.\nDefanged forms like hxxp://evil[.]com are accepted. Lines starting with # are ignored.', style: 'width:100%;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:8px;font:12px ui-monospace,Menlo,monospace' });
+  const imp = el('button', { className: 'btn pri', textContent: 'Import', onclick: () => act(async () => {
+    const x = await api('/v1/threat-intel/indicators', { method: 'POST', body: JSON.stringify({ indicators: box.value, source: src.value, severity: sev.value, description: desc.value || undefined, expires_in_days: exp.value ? Number(exp.value) : undefined }) });
+    indMsg = 'Imported: ' + x.added + ' new, ' + x.updated + ' updated' + (x.invalid_count ? ', ' + x.invalid_count + ' not recognised (' + x.invalid.join(', ') + ')' : '') + '.'; indF.offset = 0;
+  }) });
+  const typeSel = el('select', {}, el('option', { value: '', textContent: 'All types' }), IND_TYPES.map((t) => el('option', { value: t, textContent: t })));
+  typeSel.value = indF.type;
+  const q = el('input', { value: indF.q, placeholder: 'Search value', onkeydown: (e) => { if (e.key === 'Enter') go.click(); } });
+  const go = el('button', { className: 'btn', textContent: 'Search', onclick: () => { indF = { type: typeSel.value, q: q.value.trim(), offset: 0 }; route(); } });
+  const msg = indMsg; indMsg = '';
+  return [...head('Indicators', 'Known-bad IPs, domains, URLs, file hashes and email addresses. New events are matched against enabled indicators every minute; matches raise alerts under Cases & Issues.'),
+    msg ? card('', el('div', { className: 'ok pill', textContent: msg })) : '',
+    el('details', { className: 'card', open: r.total === 0 }, el('summary', { style: 'cursor:pointer', textContent: 'Add indicators' }),
+      el('div', { style: 'margin-top:12px;display:grid;gap:8px' }, box, el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, src, sev, desc, exp, imp))),
+    card('', el('div', { style: 'display:flex;gap:8px;margin-bottom:12px' }, typeSel, q, go, el('span', { className: 'mute', style: 'margin-left:auto;align-self:center', textContent: r.total.toLocaleString() + ' indicator' + (r.total === 1 ? '' : 's') })),
+      table([
+        { h: 'Indicator', cls: 'mono', f: (x) => x.value }, { h: 'Type', f: (x) => pill(x.type) }, { h: 'Severity', f: (x) => sevPill(x.severity) },
+        { h: 'Source', f: (x) => x.source }, { h: 'Added (UTC)', f: (x) => when(x.created_at) }, { h: 'Expires (UTC)', f: (x) => (x.expires_at ? when(x.expires_at) : 'never') },
+        { h: 'State', f: (x) => pill(x.enabled ? 'enabled' : 'disabled', x.enabled ? 'ok' : 'off') },
+        { h: '', f: (x) => el('span', { style: 'white-space:nowrap' },
+          el('button', { className: 'btn', textContent: x.enabled ? 'Disable' : 'Enable', onclick: () => act(() => api('/v1/threat-intel/indicators/' + x.id, { method: 'PATCH', body: JSON.stringify({ enabled: !x.enabled }) })) }), ' ',
+          el('button', { className: 'btn', textContent: 'Delete', onclick: () => { if (confirm('Delete indicator ' + x.value + '?')) act(() => api('/v1/threat-intel/indicators/' + x.id, { method: 'DELETE' })); } })) },
+      ], r.indicators, 'No indicators yet. Use "Add indicators" above.'),
+      el('div', { className: 'pager' },
+        el('button', { className: 'btn', textContent: 'Prev', disabled: indF.offset === 0, onclick: () => { indF.offset = Math.max(0, indF.offset - PAGE); route(); } }),
+        el('span', { className: 'mute', textContent: r.total ? (indF.offset + 1) + '-' + Math.min(indF.offset + PAGE, r.total) + ' of ' + r.total.toLocaleString() : '' }),
+        el('button', { className: 'btn', textContent: 'Next', disabled: indF.offset + PAGE >= r.total, onclick: () => { indF.offset += PAGE; route(); } })))];
+}
+async function pgLibrary() {
+  const r = await api('/v1/threat-intel/summary');
+  return [...head('Threat Intel Library', 'Where your indicators come from: one row per source/feed name used when importing.'),
+    el('div', { className: 'grid' }, r.types.length ? r.types.map((t) => card('', el('div', { className: 'stat' }, t.n.toLocaleString(), el('small', { textContent: t.type + ' indicators' })))) : card('', el('div', { className: 'mute', textContent: 'No indicators yet.' }))),
+    card('Sources', table([{ h: 'Source', f: (s) => s.source }, { h: 'Indicators', f: (s) => s.indicators.toLocaleString() }, { h: 'Enabled', f: (s) => s.enabled.toLocaleString() },
+      { h: 'Types', f: (s) => el('span', {}, (s.types || []).map((t) => pill(t))) }, { h: 'Last updated (UTC)', f: (s) => when(s.last_updated) }], r.sources, 'Nothing imported yet - add some under Threat Intelligence > Indicators.')),
+    el('button', { className: 'btn pri', textContent: 'Manage indicators', onclick: () => { location.hash = '#/threat/indicators'; } })];
+}
+async function pgIoc() {
+  const r = await api('/v1/threat-intel/summary'), m = r.matcher;
+  const state = !m ? pill('waiting for first run', 'off') : m.last_error ? pill('error', 'bad') : pill('running', 'ok');
+  return [...head('IOC matching', 'Every new event is checked against your enabled indicators (once per event). A match raises an alert; further matches on the same open alert add to its event count.'),
+    card('Matcher', kv({ state: state.textContent, 'last cycle (UTC)': m ? when(m.last_run_at) : '-', 'active indicators': r.active_indicators.toLocaleString(), 'events matched (total)': m ? Number(m.matched_total).toLocaleString() : 0, 'open IOC alerts': r.ioc_alerts.open + ' of ' + r.ioc_alerts.total }),
+      m && m.last_error ? el('div', { className: 'err', style: 'margin-top:8px', textContent: m.last_error }) : ''),
+    card('How matching works', el('div', { className: 'mute', textContent: 'IPs and hashes match exactly. A domain indicator also matches its subdomains (evil.com matches a.evil.com). A URL indicator matches that URL with or without a query string, and any path below it. Disabled and expired indicators are skipped.' })),
+    el('div', { style: 'display:flex;gap:8px' }, el('button', { className: 'btn pri', textContent: 'View alerts', onclick: () => { location.hash = '#/incidents'; } }), el('button', { className: 'btn', textContent: 'Manage indicators', onclick: () => { location.hash = '#/threat/indicators'; } }))];
+}
+
+async function pgRules() {
+  const r = await api('/v1/detections/rules');
+  const cond = (d) => '>= ' + d.threshold + ' match' + (d.threshold > 1 ? 'es' : '') + ' in ' + d.window_minutes + ' min' + (d.group_by && d.group_by !== 'none' ? ', per ' + d.group_by.replace('_', ' ') : '');
+  const toggle = (x) => el('button', { className: 'btn', textContent: x.enabled ? 'Disable' : 'Enable', onclick: async () => { try { await api('/v1/detections/rules/' + x.id, { method: 'PATCH', body: { enabled: !x.enabled } }); route(); } catch (e) { window.alert(e.message); } } });
+  return [...head('Detection rules', 'Rules are evaluated against stored events every minute. Matches raise alerts under Cases & Issues.'),
+    card('', table([
+      { h: 'Rule', f: (x) => el('div', {}, el('div', { textContent: x.name }), el('div', { className: 'mute', style: 'font-size:12px', textContent: x.description })) },
+      { h: 'Severity', f: (x) => sevPill(x.severity) }, { h: 'Condition', cls: 'mono', f: (x) => cond(x.definition) }, { h: 'MITRE', f: (x) => (x.mitre || []).join(', ') },
+      { h: 'Active alerts', f: (x) => x.open_alerts }, { h: 'Last run (UTC)', f: (x) => (x.last_error ? el('span', { className: 'err', textContent: 'error: ' + x.last_error }) : when(x.last_run_at)) },
+      { h: 'State', f: (x) => pill(x.enabled ? 'enabled' : 'disabled', x.enabled ? 'ok' : 'off') }, { h: '', f: toggle }], r.rules))];
 }
 async function pgStatus() {
   const h = await health();
