@@ -504,7 +504,8 @@ async function pgRuleList(kind) {
       { h: 'Active alerts', f: (x) => x.open_alerts }, { h: 'Last run (UTC)', f: (x) => (x.last_error ? el('span', { className: 'err', textContent: 'error: ' + x.last_error }) : when(x.last_run_at)) },
       { h: 'State', f: (x) => pill(x.enabled ? 'enabled' : 'disabled', x.enabled ? 'ok' : 'off') }, { h: '', f: acts }], r.rules, 'No rules yet. Use the button above to add one.'))];
 }
-const pgCorrelations = () => pgRuleList('correlation'), pgBioc = () => pgRuleList('bioc');
+function pgCorrelations() { return pgRuleList('correlation'); }
+function pgBioc() { return pgRuleList('bioc'); }
 async function pgStatus() {
   const h = await health();
   const deps = Object.entries(h.dependencies || {}).concat([['asix-api', h.status === 'ok' ? 'ok' : 'error']]);
