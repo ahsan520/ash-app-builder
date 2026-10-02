@@ -14,6 +14,8 @@
 // Fields visible to a rule: everything in the event's parsed object (host, app_name, message ...)
 // plus _raw (read-only), _time (assignable), source_type (read-only).
 
+const XDM = require('./xdm-schema');
+
 class RuleError extends Error { constructor(message, pos) { super(message); this.pos = pos == null ? 0 : pos; } }
 
 const SOURCE_RE = /^[A-Za-z0-9._-]{1,50}$/;
@@ -99,11 +101,11 @@ function parseTimestamp(fmt, input) {
 // ---- parser -------------------------------------------------------------------------------
 const FUNCS = {
   if: 3, to_string: 1, to_integer: 1, lowercase: 1, uppercase: 1, trim: 1, len: 1, regextract: 2, arrayindex: 2,
-  parse_timestamp: 2, replace: 3, concat: -1, coalesce: -1, array_length: 1,
+  parse_timestamp: 2, replace: 3, concat: -1, coalesce: -1, array_length: 1, arraycreate: -1, to_number: 1,
 };
 
 class Parser {
-  constructor(tokens) { this.t = tokens; this.i = 0; }
+  constructor(tokens, kind) { this.t = tokens; this.i = 0; this.kind = kind || 'ingest'; }
   get cur() { return this.t[this.i]; }
   done() { return this.i >= this.t.length; }
   op(v) { const c = this.cur; return c && c.t === 'op' && c.v === v; }
@@ -113,27 +115,33 @@ class Parser {
 
   // --- header + pipelines
   ruleset() {
+    const model = this.kind === 'model', word = model ? 'model' : 'ingest', keys = model ? ['dataset'] : HEADER_KEYS;
     const rules = [], seen = new Set();
     while (!this.done()) {
       const start = this.cur;
       this.eatOp('[');
-      if (!this.kw('ingest')) this.fail('Rule header must start with [INGEST:');
+      if (!this.kw(word)) this.fail(`Rule header must start with [${word.toUpperCase()}:`);
       this.i++; this.eatOp(':');
       const params = {};
       do {
-        const k = this.cur; if (!k || k.t !== 'id') this.fail('Expected a header option such as content_id="..."');
-        const key = k.l; if (!HEADER_KEYS.includes(key)) this.fail(`Unknown header option "${k.v}" (use ${HEADER_KEYS.join(', ')})`);
+        const k = this.cur; if (!k || k.t !== 'id') this.fail(model ? 'Expected dataset=...' : 'Expected a header option such as content_id="..."');
+        const key = k.l; if (!keys.includes(key)) this.fail(`Unknown header option "${k.v}" (use ${keys.join(', ')})`);
         this.i++; this.eatOp('=');
         const v = this.cur; if (!v || (v.t !== 'str' && v.t !== 'id' && v.t !== 'num')) this.fail('Expected a value');
-        this.i++; params[key] = v.t === 'id' ? v.l : String(v.v);
+        this.i++; params[key] = v.t === 'id' && key === 'no_hit' ? v.l : String(v.v);
       } while (this.op(',') && ++this.i);
       this.eatOp(']');
-      if (!params.content_id) this.fail('Header needs content_id="..." (a unique name for the rule)', start);
-      if (seen.has(params.content_id)) this.fail(`Duplicate content_id "${params.content_id}"`, start);
-      seen.add(params.content_id);
-      if (params.no_hit && !['keep', 'drop'].includes(params.no_hit)) this.fail('no_hit must be keep or drop', start);
-      if (params.target_dataset && !SOURCE_RE.test(params.target_dataset)) this.fail('target_dataset: 1-50 chars of letters, digits . _ -', start);
-      if (params.source_type && !SOURCE_RE.test(params.source_type)) this.fail('source_type: 1-50 chars of letters, digits . _ -', start);
+      if (model) {
+        if (!params.dataset) this.fail('Header needs dataset=... (the dataset these mappings apply to)', start);
+        if (!SOURCE_RE.test(params.dataset)) this.fail('dataset: 1-50 chars of letters, digits . _ -', start);
+      } else {
+        if (!params.content_id) this.fail('Header needs content_id="..." (a unique name for the rule)', start);
+        if (seen.has(params.content_id)) this.fail(`Duplicate content_id "${params.content_id}"`, start);
+        seen.add(params.content_id);
+        if (params.no_hit && !['keep', 'drop'].includes(params.no_hit)) this.fail('no_hit must be keep or drop', start);
+        if (params.target_dataset && !SOURCE_RE.test(params.target_dataset)) this.fail('target_dataset: 1-50 chars of letters, digits . _ -', start);
+        if (params.source_type && !SOURCE_RE.test(params.source_type)) this.fail('source_type: 1-50 chars of letters, digits . _ -', start);
+      }
       const pipelines = [];
       while (!this.done() && !this.op('[')) pipelines.push(this.pipeline());
       if (!pipelines.length) this.fail('Rule has no filter / alter stages', start);
@@ -157,11 +165,17 @@ class Parser {
       do {
         const n = this.cur; if (!n || n.t !== 'id' || KW.has(n.l)) this.fail('Expected a field name to assign');
         if (READONLY.has(n.v)) this.fail(`"${n.v}" is read-only`);
+        if (this.kind === 'model') {
+          if (n.v.startsWith('xdm.')) {
+            if (!XDM.FIELD_NAMES.has(n.v)) this.fail(`Unknown XDM field "${n.v}". See the XDM Schema tab for the available fields`, n);
+          } else if (!n.v.startsWith('_')) this.fail('Data model rules can only assign xdm.* fields (or temporary variables that start with _)', n);
+        }
         this.i++; this.eatOp('='); sets.push({ name: n.v, e: this.or() });
       } while (this.op(',') && ++this.i);
       return { k: 'alter', sets };
     }
     if (c.l === 'fields') {
+      if (this.kind === 'model') this.fail('"fields" is not used in data model rules', c);
       this.i++; const items = [];
       do {
         const neg = this.op('-') && ++this.i > 0;
@@ -207,6 +221,11 @@ class Parser {
       if (c.l === 'null') { this.i++; return { k: 'lit', v: null }; }
       if (c.l === 'true' || c.l === 'false') { this.i++; return { k: 'lit', v: c.l === 'true' }; }
       if (KW.has(c.l)) this.fail(`Unexpected "${c.v}"`);
+      if (c.v.startsWith('XDM_CONST.')) {
+        const val = XDM.CONSTANTS[c.v.slice(10)];
+        if (val === undefined) this.fail(`Unknown constant "${c.v}"`, c);
+        this.i++; return { k: 'lit', v: val };
+      }
       this.i++;
       if (this.op('(')) {
         const name = c.l; if (!(name in FUNCS)) this.fail(`Unknown function "${c.v}"`, c);
@@ -266,6 +285,8 @@ function callFn(n, rec) {
     case 'uppercase': return v[0] === null ? null : str(v[0]).toUpperCase();
     case 'trim': return v[0] === null ? null : str(v[0]).trim();
     case 'len': return v[0] === null ? null : (Array.isArray(v[0]) ? v[0].length : str(v[0]).length);
+    case 'arraycreate': return v.filter((x) => x !== null && x !== undefined);
+    case 'to_number': { if (v[0] === null) return null; const x = Number(v[0]); return Number.isFinite(x) ? x : null; }
     case 'array_length': return Array.isArray(v[0]) ? v[0].length : null;
     case 'concat': return v.some((x) => x === null) ? null : v.map(str).join('');
     case 'replace': return v[0] === null || v[1] === null ? null : str(v[0]).split(str(v[1])).join(str(v[2] ?? ''));
@@ -303,11 +324,12 @@ function runPipeline(stages, base) {
 
 // ---- public API ---------------------------------------------------------------------------
 // compile(src) -> { rules, info } or throws RuleError carrying line/column.
-function compile(src) {
+function compile(src, kind) {
   if (typeof src !== 'string') throw new RuleError('Rules must be text');
   if (src.length > MAX_SRC) throw new RuleError(`Rules are too long (max ${MAX_SRC} characters)`);
   try {
-    const rules = new Parser(tokenize(src)).ruleset();
+    const rules = new Parser(tokenize(src), kind).ruleset();
+    if (kind === 'model') return { rules, info: rules.map((r) => ({ dataset: r.params.dataset, pipelines: r.pipelines.length })) };
     return { rules, info: rules.map((r) => ({ content_id: r.params.content_id, vendor: r.params.vendor || null, product: r.params.product || null, target_dataset: r.params.target_dataset || null, source_type: r.params.source_type || null, no_hit: r.params.no_hit || 'keep', pipelines: r.pipelines.length })) };
   } catch (e) {
     if (!(e instanceof RuleError)) throw e;
@@ -348,4 +370,38 @@ function apply(sets, ev) {
   return out;
 }
 
-module.exports = { compile, apply, RuleError, parseTimestamp };
+// Data model pass. Unlike parsing rules this is additive: every rule for the event's dataset
+// runs, every pipeline whose filter passes is applied in order, and later assignments override
+// earlier ones. Pass sets as [defaults, user] so user-defined mappings win.
+function nest(flat) {
+  const out = {};
+  for (const [k, v] of Object.entries(flat)) {
+    const parts = k.split('.').slice(1); let o = out;   // drop the leading "xdm"
+    parts.forEach((p, i) => { if (i === parts.length - 1) o[p] = v; else o = (o[p] = o[p] && typeof o[p] === 'object' ? o[p] : {}); });
+  }
+  return out;
+}
+
+function applyModel(sets, ev) {
+  const base = { ...ev.parsed, _raw: ev.raw, _time: ev.time || null, source_type: ev.source_type };
+  const acc = {}, errors = []; let hits = 0;
+  for (const set of sets) {
+    for (const rule of set) {
+      if (String(rule.params.dataset).toLowerCase() !== String(ev.source_type).toLowerCase()) continue;
+      for (const stages of rule.pipelines) {
+        let rec;
+        try { rec = runPipeline(stages, { ...base, ...acc }); } catch (e) { errors.push(e.message); continue; }
+        if (!rec) continue;
+        hits++;
+        for (const [k, v] of Object.entries(rec)) {
+          if (!k.startsWith('xdm.')) continue;
+          if (v === null || v === undefined || v === '') delete acc[k];
+          else if (Object.keys(acc).length < MAX_KEYS) acc[k] = typeof v === 'string' ? v.slice(0, MAX_VAL) : v;
+        }
+      }
+    }
+  }
+  return { xdm: Object.keys(acc).length ? nest(acc) : null, flat: acc, pipelines_matched: hits, errors };
+}
+
+module.exports = { compile, apply, applyModel, RuleError, parseTimestamp };
