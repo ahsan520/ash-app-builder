@@ -1111,6 +1111,8 @@ app.delete('/v1/ingestion-keys/:id', ...guarded('collectors:write'), async (req,
 const parsingRules = require('../ingestion/parsing-rules');
 const rulesStore = require('../ingestion/rules-store');
 const { parseLine: parseIngestLine } = require('../ingest/http-ingest');
+// Lines pasted from the Windows forwarder ("[Security] Provider id=4625 ...") are simulated as the windows-event dataset.
+const WIN_LINE = /^\[(Security|System|Application)\] /;
 const ruleErr = (res, e) => apiError(res, 400, 'PARSE_RULES_INVALID', e.message + (e.line ? ` (line ${e.line}, column ${e.column})` : '')) || res;
 
 app.get('/v1/parsing-rules', ...guarded('parsing:rules:read'), async (req, res) => {
@@ -1169,7 +1171,7 @@ app.post('/v1/parsing-rules/simulate', ...guarded('parsing:rules:read'), async (
     const results = lines.map((line) => {
       const it = parseIngestLine(line, 'simulate');
       const before = { ...it.parsed };
-      const o = parsingRules.apply(sets, { source_type: sourceType, raw: it.raw, time: it.time, parsed: it.parsed });
+      const o = parsingRules.apply(sets, { source_type: WIN_LINE.test(line) ? 'windows-event' : sourceType, raw: it.raw, time: it.time, parsed: it.parsed });
       return { raw: it.raw, source_type: o.source_type, time: o.time, before, after: o.parsed, matched: o.matched, dropped: o.dropped, errors: o.errors };
     });
     res.status(200).json({ success: true, scope, results });
@@ -1235,7 +1237,7 @@ app.post('/v1/data-model-rules/simulate', ...guarded('datamodel:rules:read'), as
     const results = lines.map((line) => {
       const it = parseIngestLine(line, 'simulate');
       it.parsed.collector_id = 'simulate';
-      const o = parsingRules.apply(pSets, { source_type: sourceType, raw: it.raw, time: it.time, parsed: it.parsed });
+      const o = parsingRules.apply(pSets, { source_type: WIN_LINE.test(line) ? 'windows-event' : sourceType, raw: it.raw, time: it.time, parsed: it.parsed });
       const mo = parsingRules.applyModel(mSets, { source_type: o.source_type, raw: it.raw, time: o.time, parsed: o.parsed });
       return { raw: it.raw, dataset: o.source_type, parsing_rule: o.matched ? o.matched.content_id : null, dropped: o.dropped, xdm: mo.flat, pipelines_matched: mo.pipelines_matched, errors: o.errors.concat(mo.errors) };
     });
