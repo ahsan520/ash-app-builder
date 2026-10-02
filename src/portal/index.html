@@ -1019,7 +1019,9 @@ async function pgRuleList(kind) {
   const open = (x, editing) => (kind === 'bioc' && x.definition && x.definition.xql ? openBiocForm(x, editing, x.definition.event_type || 'xql') : openRuleForm(kind, x, editing));
   const acts = (x) => el('span', { style: 'white-space:nowrap' },
     btn(x.enabled ? 'Disable' : 'Enable', () => act(() => api('/v1/detections/rules/' + x.id, { method: 'PATCH', body: { enabled: !x.enabled } }))),
-    x.custom ? btn('Edit', () => open(x, true)) : btn('Clone', () => open({ ...x, name: x.name + ' (copy)', enabled: true }, false)),
+    btn('Edit', () => open(x, true)),
+    x.custom ? '' : btn('Clone', () => open({ ...x, name: x.name + ' (copy)', enabled: true }, false)),
+    x.custom ? '' : btn('Reset', () => { if (window.confirm('Reset \"' + x.name + '\" to the definition shipped with ASIX? Your changes to this rule will be lost.')) act(() => api('/v1/detections/rules/' + x.id + '/reset', { method: 'POST' })); }),
     x.custom ? btn('Delete', () => { if (window.confirm('Delete rule "' + x.name + '" and its alerts?')) act(() => api('/v1/detections/rules/' + x.id, { method: 'DELETE' })); }) : '');
   const T = kind === 'bioc'
     ? ['BIOC rules', 'Behavioral indicators of compromise: flag a suspicious action (a command, a tampering step) as soon as it appears in an event. Matches raise alerts under Cases & Issues.']
