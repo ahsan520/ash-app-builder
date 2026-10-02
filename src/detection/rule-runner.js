@@ -101,8 +101,8 @@ const BUILTIN_RULES = [
   // ---- XDM-based BIOC rules: written once against xdm.* fields from the data model ----
   // (XQL strings: a backslash inside quotes is written twice, so \\. means a literal dot.)
   {
-    key: 'bioc-xdm-ssh-fail-external', kind: 'bioc', category: 'Credential Access', name: 'SSH login failure from an external IP',
-    description: 'Failed authentication from a public source address.', severity: 'medium', mitre: ['T1110'],
+    key: 'bioc-xdm-ssh-fail-external', kind: 'bioc', category: 'Credential Access', name: 'Login failure from an external IP',
+    description: 'Failed login (SSH, Windows network or RDP logon) from a public source address.', severity: 'medium', mitre: ['T1110'],
     definition: {
       event_type: 'event_log', group_by: 'field:xdm.source.ipv4', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
       suppression: { enabled: true, minutes: 60 },
@@ -147,6 +147,89 @@ const BUILTIN_RULES = [
     definition: {
       event_type: 'process', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
       xql: String.raw`xdm.event.type = "scheduled_task" and xdm.target.process.command_line ~= "(/tmp/|/var/tmp/|/dev/shm/|/\\.[A-Za-z0-9])"`,
+    },
+  },
+  // ---- Windows (from Security / System event log via the Windows forwarder) ----
+  {
+    key: 'bioc-xdm-win-encoded-powershell', kind: 'bioc', category: 'Execution', name: 'PowerShell with an encoded command',
+    description: 'powershell started with -EncodedCommand / -enc and a long base64 payload. Needs process command-line auditing (event 4688).',
+    severity: 'high', mitre: ['T1059.001', 'T1027'],
+    definition: {
+      event_type: 'process', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "process" and xdm.target.process.command_line ~= "powershell(\\.exe)?.* -(e|ec|enc|encodedcommand) +[A-Za-z0-9+/=]{20,}"`,
+    },
+  },
+  {
+    key: 'bioc-xdm-win-lolbin-download', kind: 'bioc', category: 'Command and Control', name: 'Built-in tool used to download a file',
+    description: 'certutil, bitsadmin, mshta, regsvr32 or rundll32 fetching content from a URL.',
+    severity: 'high', mitre: ['T1105', 'T1218'],
+    definition: {
+      event_type: 'process', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "process" and xdm.target.process.command_line ~= "(certutil.* -urlcache|bitsadmin.* /transfer|mshta(\\.exe)? +https?://|regsvr32.* /i:https?://|rundll32.* javascript:)"`,
+    },
+  },
+  {
+    key: 'bioc-xdm-win-credential-dump', kind: 'bioc', category: 'Credential Access', name: 'Credential dumping tool or technique',
+    description: 'mimikatz, procdump against lsass, comsvcs MiniDump, or saving the SAM / SYSTEM hives.',
+    severity: 'critical', mitre: ['T1003'],
+    definition: {
+      event_type: 'process', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "process" and xdm.target.process.command_line ~= "(mimikatz|sekurlsa::|procdump.* lsass|comsvcs\\.dll.*minidump|reg(\\.exe)? +save +hklm\\\\(sam|system|security))"`,
+    },
+  },
+  {
+    key: 'bioc-xdm-win-service-suspicious', kind: 'bioc', category: 'Persistence', name: 'Service installed from a suspicious path',
+    description: 'A new Windows service whose executable is in Temp, AppData, ProgramData, Public, or runs cmd / PowerShell.',
+    severity: 'high', mitre: ['T1543.003'],
+    definition: {
+      event_type: 'event_log', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "service_install" and xdm.target.service.path ~= "(\\\\temp\\\\|\\\\appdata\\\\|\\\\programdata\\\\|\\\\users\\\\public\\\\|cmd(\\.exe)? +/c|powershell)"`,
+    },
+  },
+  {
+    key: 'bioc-xdm-win-task-suspicious', kind: 'bioc', category: 'Persistence', name: 'Scheduled task running a script or temp binary',
+    description: 'A scheduled task was created that runs powershell, cmd, wscript, mshta or something in a temporary location.',
+    severity: 'high', mitre: ['T1053.005'],
+    definition: {
+      event_type: 'event_log', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "scheduled_task" and xdm.event.operation = "task_created" and xdm.target.process.command_line ~= "(powershell|cmd(\\.exe)? +/c|wscript|cscript|mshta|\\\\temp\\\\|\\\\appdata\\\\|\\\\users\\\\public\\\\)"`,
+    },
+  },
+  {
+    key: 'bioc-xdm-win-log-cleared', kind: 'bioc', category: 'Defense Evasion', name: 'Windows event log cleared',
+    description: 'The Security log (1102) or another event log (104) was cleared.',
+    severity: 'high', mitre: ['T1070.001'],
+    definition: {
+      event_type: 'event_log', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "log_cleared"`,
+    },
+  },
+  {
+    key: 'bioc-xdm-win-admin-group-add', kind: 'bioc', category: 'Privilege Escalation', name: 'Member added to an administrator group',
+    description: 'An account was added to Administrators, Domain Admins or Enterprise Admins.',
+    severity: 'high', mitre: ['T1098'],
+    definition: {
+      event_type: 'event_log', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "group_membership" and xdm.event.operation = "member_added" and xdm.target.group.name in ("Administrators", "Domain Admins", "Enterprise Admins", "Schema Admins")`,
+    },
+  },
+  {
+    key: 'bioc-xdm-win-account-created', kind: 'bioc', category: 'Persistence', name: 'Windows user account created',
+    description: 'A local or domain user account was created.',
+    severity: 'medium', mitre: ['T1136.001'],
+    definition: {
+      event_type: 'event_log', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "account_management" and xdm.event.operation = "user_created"`,
+    },
+  },
+  {
+    key: 'bioc-xdm-win-rdp-external', kind: 'bioc', category: 'Initial Access', name: 'RDP logon from an external IP',
+    description: 'A successful remote interactive logon (type 10) from a public source address.',
+    severity: 'high', mitre: ['T1021.001', 'T1078'],
+    definition: {
+      event_type: 'network_connections', group_by: 'field:xdm.source.ipv4', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      suppression: { enabled: true, minutes: 60 },
+      xql: String.raw`xdm.event.type = "authentication" and xdm.event.outcome = XDM_CONST.OUTCOME_SUCCESS and xdm.auth.logon_type = 10 and xdm.source.ipv4 != null and not xdm.source.ipv4 ~= "^(10\\.|127\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.)"`,
     },
   },
 ];
