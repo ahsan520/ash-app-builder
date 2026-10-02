@@ -13,6 +13,9 @@ const GROUP_EXPR = {
 const COLUMN_FIELDS = new Set(['raw', 'source_type', 'collector_id']);
 const FIELD_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 const OPS = ['contains', 'equals', 'not_equals', 'regex'];
+const { compileCondition, XqlError } = require('../search/xql');
+const BUILDER_OPS = ['=', '!=', 'contains', 'not contains', '~=', 'in', 'not in', '>', '<', 'is set', 'is empty'];
+const EVENT_TYPES = ['process', 'file', 'network', 'image_load', 'registry', 'event_log', 'network_connections'];
 const RUN_EVERY = [1, 5, 15, 30, 60];
 
 const int = (v, d, lo, hi) => {
@@ -42,7 +45,18 @@ function normalizeDefinition(input) {
     out.filters.push({ field, op: f.op, value });
   }
   if (out.filters.length > 10) return { error: 'At most 10 filters' };
-  if (!out.regex && !out.source_type && !out.filters.length) return { error: 'Add match text, a source type or at least one filter' };
+  out.xql = typeof d.xql === 'string' ? d.xql.trim() : '';
+  if (out.xql) {
+    try { compileCondition(out.xql, [null]); } catch (e) { if (e instanceof XqlError) return { error: 'XQL condition: ' + e.message }; throw e; }
+  }
+  if (d.event_type && EVENT_TYPES.includes(d.event_type)) out.event_type = d.event_type;
+  // The portal's BIOC builder keeps its rows so a rule can be reopened in the builder.
+  if (d.builder && Array.isArray(d.builder.rows) && d.builder.rows.length <= 20) {
+    const rows = d.builder.rows.filter((r) => r && FIELD_RE.test(String(r.field || '')) && BUILDER_OPS.includes(r.op))
+      .map((r) => ({ field: String(r.field), op: r.op, value: String(r.value ?? '').slice(0, 500) }));
+    if (rows.length) out.builder = { match: d.builder.match === 'any' ? 'any' : 'all', rows };
+  }
+  if (!out.regex && !out.source_type && !out.filters.length && !out.xql) return { error: 'Add a condition, match text, a source type or at least one filter' };
 
   const gb = typeof d.group_by === 'string' ? d.group_by : 'none';
   if (GROUP_EXPR[gb] || (gb.startsWith('field:') && FIELD_RE.test(gb.slice(6)))) out.group_by = gb;
@@ -75,6 +89,7 @@ function buildMatch(tenantId, d, opts = {}) {
   const fieldExpr = (f) => (COLUMN_FIELDS.has(f) ? f : `(parsed #>> ${bind(f.split('.'))}::text[])`);
   if (d.regex) where.push(`raw ~* ${bind(d.regex)}`);
   if (d.source_type) where.push(`source_type = ${bind(d.source_type)}`);
+  if (d.xql) where.push(...compileCondition(d.xql, values));   // BIOC condition on parsed / xdm.* fields
   for (const f of d.filters || []) {
     const e = fieldExpr(f.field);
     if (f.op === 'equals') where.push(`${e} = ${bind(f.value)}`);

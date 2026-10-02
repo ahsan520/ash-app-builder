@@ -98,6 +98,57 @@ const BUILTIN_RULES = [
       group_by: 'host', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
     },
   },
+  // ---- XDM-based BIOC rules: written once against xdm.* fields from the data model ----
+  // (XQL strings: a backslash inside quotes is written twice, so \\. means a literal dot.)
+  {
+    key: 'bioc-xdm-ssh-fail-external', kind: 'bioc', category: 'Credential Access', name: 'SSH login failure from an external IP',
+    description: 'Failed authentication from a public source address.', severity: 'medium', mitre: ['T1110'],
+    definition: {
+      event_type: 'event_log', group_by: 'field:xdm.source.ipv4', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      suppression: { enabled: true, minutes: 60 },
+      xql: String.raw`xdm.event.type = "authentication" and xdm.event.outcome = XDM_CONST.OUTCOME_FAILED and xdm.source.ipv4 != null and not xdm.source.ipv4 ~= "^(10\\.|127\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.)"`,
+    },
+  },
+  {
+    key: 'bioc-xdm-root-login', kind: 'bioc', category: 'Initial Access', name: 'Direct root login',
+    description: 'Successful authentication as root, for example over SSH.', severity: 'high', mitre: ['T1078'],
+    definition: {
+      event_type: 'event_log', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "authentication" and xdm.event.outcome = XDM_CONST.OUTCOME_SUCCESS and xdm.target.user.username = "root"`,
+    },
+  },
+  {
+    key: 'bioc-xdm-sudo-shell', kind: 'bioc', category: 'Privilege Escalation', name: 'sudo used to open a shell',
+    description: 'sudo launching an interactive shell or su.', severity: 'medium', mitre: ['T1548.003'],
+    definition: {
+      event_type: 'process', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "privilege_use" and xdm.target.process.command_line ~= "^(/usr/bin/|/bin/)?((ba|z|da|k|c)?sh|su)( |$)"`,
+    },
+  },
+  {
+    key: 'bioc-xdm-sensitive-file-sudo', kind: 'bioc', category: 'Credential Access', name: 'Credential file accessed with sudo',
+    description: 'A sudo command that touches /etc/shadow, sudoers or SSH private keys.', severity: 'high', mitre: ['T1003.008'],
+    definition: {
+      event_type: 'process', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "privilege_use" and xdm.target.process.command_line ~= "/etc/(shadow|gshadow|sudoers)|\\.ssh/(id_[a-z0-9]+|authorized_keys)"`,
+    },
+  },
+  {
+    key: 'bioc-xdm-account-change', kind: 'bioc', category: 'Persistence', name: 'Local account created or modified',
+    description: 'useradd, usermod or passwd activity on a host.', severity: 'medium', mitre: ['T1136.001', 'T1098'],
+    definition: {
+      event_type: 'event_log', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "account_management" and xdm.event.operation in ("useradd", "usermod", "passwd", "groupadd")`,
+    },
+  },
+  {
+    key: 'bioc-xdm-cron-temp', kind: 'bioc', category: 'Persistence', name: 'Cron job running from a temporary or hidden path',
+    description: 'A scheduled task whose command lives in /tmp, /dev/shm or a hidden directory.', severity: 'high', mitre: ['T1053.003'],
+    definition: {
+      event_type: 'process', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "scheduled_task" and xdm.target.process.command_line ~= "(/tmp/|/var/tmp/|/dev/shm/|/\\.[A-Za-z0-9])"`,
+    },
+  },
 ];
 
 async function ensureBuiltinRules(client, tenantId) {
