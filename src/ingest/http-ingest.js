@@ -142,10 +142,14 @@ router.post(
     let kept = items, dropped = 0;
     try {
       const sets = await rulesStore.getActiveSets(key.tenant_id);
+      const modelSets = await rulesStore.getModelSets(key.tenant_id);
       kept = [];
       for (const it of items) {
         const o = parsingRules.apply(sets, { source_type: sourceType, raw: it.raw, time: it.time, parsed: it.parsed });
         if (o.dropped) { dropped++; continue; }
+        // Data model pass: maps the parsed fields onto XDM (parsed.xdm.*). It never throws.
+        const mo = parsingRules.applyModel(modelSets, { source_type: o.source_type, raw: it.raw, time: o.time, parsed: o.parsed });
+        if (mo.xdm) o.parsed.xdm = mo.xdm;
         kept.push({ raw: it.raw, time: o.time, parsed: o.parsed, source_type: o.source_type });
       }
     } catch (e) { console.error('Parsing rules failed, ingesting unparsed:', e.message); kept = items; dropped = 0; }
