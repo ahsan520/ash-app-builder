@@ -74,6 +74,7 @@
   .pc { color:var(--mute); font-style:italic; } .ph { color:#2fd4d4; font-weight:600; } .pf { color:var(--acc); font-style:italic; }
   .pr-head { display:flex; align-items:center; gap:12px; margin:10px 0 6px; } .pr-ed { height:58vh; min-height:320px; }
   .pr-sim { display:grid; grid-template-columns:minmax(260px,1fr) 2fr; gap:14px; align-items:start; }
+  .pxf { color:#2fd4d4; } .pxc { color:#ff7aa2; font-style:italic; } .pr-two { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
   .pr-chg { color:var(--ok); font-weight:600; } .pr-new { color:var(--acc); font-weight:600; }
   .xbar { display:flex; align-items:center; gap:14px; padding:12px 4px; } .xres { display:grid; grid-template-columns:230px 1fr; gap:14px; align-items:start; } .xtbl { overflow:auto; max-height:62vh; border:1px solid var(--line); border-radius:8px; }
   .xtbl th { position:sticky; top:0; background:var(--card); white-space:nowrap; } .xtbl td { max-width:420px; overflow:hidden; text-overflow:ellipsis; } .xtbl td.msg { white-space:nowrap; }
@@ -200,6 +201,7 @@ const SETTINGS = [
   { id: 'collectors', label: 'Collectors', page: pgCollectors },
   { id: 'installers', label: 'Installers', page: pgInstallers },
   { id: 'parsing', label: 'Parsing rules', page: pgParsing },
+  { id: 'datamodel', label: 'Data model rules', page: pgDataModel },
   { id: 'retention', label: 'Storage & retention', soon: true },
   { group: 'Access' },
   { id: 'access', label: 'Users & roles', page: pgAccess },
@@ -508,12 +510,12 @@ async function pgCollectors() {
       ], r.collectors, 'No collectors yet. Create an installer, run its script on a machine, and it will appear here within a minute.'))];
 }
 // ---- Parsing rules (XSIAM-style) -----------------------------------------------------------
-const PKW = /(\/\*[\s\S]*?\*\/|\/\/[^\n]*)|(\[INGEST:[^\]]*\])|("(?:\\.|[^"\\])*"?)|\b(filter|alter|fields)\b|\b(if|to_string|to_integer|lowercase|uppercase|trim|len|regextract|arrayindex|array_length|parse_timestamp|replace|concat|coalesce)(?=\s*\()|\b(and|or|not|contains|in|null|true|false)\b|(\b\d+(?:\.\d+)?\b)|(~=|!=|>=|<=|=|>|<|\||;)/g;
+const PKW = /(\/\*[\s\S]*?\*\/|\/\/[^\n]*)|(\[(?:INGEST|MODEL):[^\]]*\])|("(?:\\.|[^"\\])*"?)|\b(filter|alter|fields)\b|\b(if|to_number|arraycreate|multiply|add|subtract|divide|to_string|to_integer|lowercase|uppercase|trim|len|regextract|arrayindex|array_length|parse_timestamp|replace|concat|coalesce)(?=\s*\()|\b(and|or|not|contains|in|null|true|false)\b|(\b\d+(?:\.\d+)?\b)|(~=|!=|>=|<=|=|>|<|\||;)|(\bxdm\.[A-Za-z0-9_.]+)|(\bXDM_CONST\.[A-Z_]+)/g;
 function pHighlight(text) {
   const frag = document.createDocumentFragment(); let last = 0, m; PKW.lastIndex = 0;
   while ((m = PKW.exec(text))) {
     if (m.index > last) frag.append(text.slice(last, m.index));
-    frag.append(el('span', { className: m[1] ? 'pc' : m[2] ? 'ph' : m[3] ? 'xs' : m[4] ? 'xk' : m[5] ? 'pf' : m[6] ? 'xo' : m[7] ? 'xn' : 'xp', textContent: m[0] }));
+    frag.append(el('span', { className: m[1] ? 'pc' : m[2] ? 'ph' : m[3] ? 'xs' : m[4] ? 'xk' : m[5] ? 'pf' : m[6] ? 'xo' : m[7] ? 'xn' : m[8] ? 'xp' : m[9] ? 'pxf' : 'pxc', textContent: m[0] }));
     last = m.index + m[0].length;
   }
   frag.append(text.slice(last) + '\n');
@@ -622,6 +624,90 @@ async function pgParsing() {
   }
   draw();
   return [el('h2', { textContent: 'Parsing Rules' }), tabs, el('div', { style: 'margin-top:12px' }, body)];
+}
+
+const MODEL_SAMPLE = [
+  'Oct  1 10:00:01 web01 sshd[2201]: Failed password for invalid user admin from 203.0.113.9 port 51234 ssh2',
+  'Oct  1 10:00:09 web01 sshd[2203]: Accepted publickey for deploy from 2001:db8::5 port 40122 ssh2: RSA SHA256:abc',
+  'Oct  1 10:01:44 web01 sudo:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/bin/cat /etc/shadow',
+  'Oct  1 10:02:00 web01 CRON[3110]: (root) CMD (/usr/local/bin/backup.sh)',
+].join('\n');
+
+async function pgDataModel() {
+  const d = await api('/v1/data-model-rules');
+  let tab = (routeQuery && routeQuery.get('tab')) || 'user', dirty = false, saved = d.user_defined.content;
+  const status = el('span', { className: 'mute' }), errLine = el('div', { className: 'err', style: 'margin-top:8px;white-space:pre-wrap' });
+  const body = el('div'), tabs = el('div', { className: 'xtabs' });
+  const setStatus = () => { status.textContent = dirty ? 'Unsaved changes' : (d.user_defined.version ? 'Saved \u00B7 version ' + d.user_defined.version + (d.user_defined.updated_at ? ' \u00B7 ' + when(d.user_defined.updated_at) + ' UTC' : '') : 'No user-defined rules yet'); };
+  const userEd = codeEditor(saved, { onInput: (v) => { dirty = v !== saved; setStatus(); } });
+  setStatus();
+
+  const saveBtn = el('button', { className: 'btn pri', textContent: 'Save' });
+  saveBtn.onclick = async () => {
+    errLine.textContent = ''; saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
+    try {
+      const r = await api('/v1/data-model-rules', { method: 'PUT', body: { content: userEd.get() } });
+      saved = userEd.get(); dirty = false; d.user_defined.version = r.version; d.user_defined.updated_at = r.updated_at; d.user_defined.rules = r.rules; setStatus();
+    } catch (e) {
+      errLine.textContent = e.message.replace(/^\d+ /, '').replace(/ \(MODEL_RULES_INVALID\)$/, '');
+      const m = /line (\d+)/.exec(e.message); if (m) userEd.goto(Number(m[1]));
+    }
+    saveBtn.disabled = false; saveBtn.textContent = 'Save';
+  };
+  const saveRow = () => el('div', { className: 'pr-head' }, status, el('span', { style: 'margin-left:auto' }), saveBtn);
+  const ruleTable = (rules) => table([{ h: 'Dataset', f: (r) => r.dataset }, { h: 'Pipelines', f: (r) => r.pipelines }], rules, 'No rules.');
+  const schemaCard = () => card('XDM fields', el('div', { className: 'mute', style: 'margin-bottom:8px', textContent: 'Assign these in a rule (alter xdm.source.ipv4 = src_ip). Constants: ' + Object.keys(d.schema.constants).map((k) => 'XDM_CONST.' + k).join(', ') }),
+    table([{ h: 'Field', f: (f) => el('span', { className: 'pxf', textContent: f.name }) }, { h: 'Type', f: (f) => f.type }, { h: 'Meaning', f: (f) => f.description }], d.schema.fields));
+
+  function viewUser() {
+    return [el('p', { className: 'desc', textContent: 'Maps the fields your parsing rules produce onto the common XDM schema. Every matching rule runs and user-defined assignments override the defaults. Example: [MODEL: dataset=syslog] then filter _content_id = "linux_sshd" | alter xdm.target.user.username = user ;' }),
+      userEd.node, errLine, saveRow(), d.user_defined.rules.length ? card('Active user-defined rules', ruleTable(d.user_defined.rules)) : '', schemaCard()];
+  }
+  function viewDefault() {
+    const copy = el('button', { className: 'btn', textContent: 'Copy to User Defined', onclick: () => { userEd.set((userEd.get().trim() ? userEd.get().replace(/\s+$/, '') + '\n\n' : '') + d.default.content); dirty = userEd.get() !== saved; setStatus(); tab = 'user'; draw(); } });
+    return [el('div', { className: 'pr-head' }, el('span', { className: 'mute', textContent: 'Installed mappings shipped with ASIX (read-only).' }), el('span', { style: 'margin-left:auto' }), copy),
+      codeEditor(d.default.content, { readOnly: true }).node, card('Default rules', ruleTable(d.default.rules))];
+  }
+  function viewBoth() {
+    return [el('div', { className: 'pr-two' },
+      el('div', {}, el('div', { className: 'pr-head' }, el('span', { className: 'mute', textContent: 'Default rules' })), codeEditor(d.default.content, { readOnly: true }).node),
+      el('div', {}, el('div', { className: 'pr-head' }, el('span', { className: 'mute', textContent: 'User defined rules (applied after the defaults)' })), userEd.node)),
+      errLine, saveRow()];
+  }
+  function viewSimulate() {
+    const logs = el('textarea', { rows: 8, value: MODEL_SAMPLE, spellcheck: false, wrap: 'off', style: 'width:100%;font:12px ui-monospace,Menlo,monospace' });
+    const scope = el('select', {}, [['both', 'User defined + default'], ['user', 'User defined only'], ['default', 'Default only']].map(([v, t]) => el('option', { value: v, textContent: t })));
+    const src = el('input', { value: 'syslog', style: 'width:100%' }), out = el('div'), err = el('div', { className: 'err', style: 'margin-top:8px;white-space:pre-wrap' });
+    const run = el('button', { className: 'btn pri', textContent: 'Simulate' });
+    run.onclick = async () => {
+      err.textContent = ''; run.disabled = true; run.textContent = 'Running...';
+      try {
+        const r = await api('/v1/data-model-rules/simulate', { method: 'POST', body: { logs: logs.value, scope: scope.value, source_type: src.value.trim() || 'syslog', content: userEd.get() } });
+        out.replaceChildren(...r.results.map((x) => {
+          const rows = Object.keys(x.xdm).sort().map((k) => ({ k, v: typeof x.xdm[k] === 'object' ? JSON.stringify(x.xdm[k]) : String(x.xdm[k]) }));
+          return el('div', { className: 'card' },
+            el('div', { style: 'display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap' },
+              x.dropped ? pill('Dropped by parsing rules', 'bad') : pill(rows.length + ' XDM fields', rows.length ? 'ok' : 'off'),
+              el('span', { className: 'mute', textContent: 'parsing: ' + (x.parsing_rule || 'no rule') + ' \u00B7 model pipelines matched: ' + x.pipelines_matched + ' \u00B7 dataset: ' + x.dataset })),
+            el('pre', { style: 'white-space:pre-wrap;word-break:break-all;margin:0 0 8px;font:12px ui-monospace,Menlo,monospace;color:var(--mute)', textContent: x.raw }),
+            x.errors.length ? el('div', { className: 'err', textContent: x.errors.join('\n') }) : '',
+            table([{ h: 'XDM field', f: (r) => el('span', { className: 'pxf', textContent: r.k }) }, { h: 'Value', f: (r) => r.v }], rows, 'No XDM fields. Check the dataset name, and that a parsing rule sets _content_id for the filter.'));
+        }));
+      } catch (e) { err.textContent = e.message.replace(/^\d+ /, ''); out.replaceChildren(); }
+      run.disabled = false; run.textContent = 'Simulate';
+    };
+    return [el('p', { className: 'desc', textContent: 'Each line goes through your saved parsing rules and then these data model rules, so you can see the final xdm.* fields. Uses the unsaved text in the User Defined editor; nothing is stored.' }),
+      el('div', { className: 'pr-sim' },
+        el('div', {}, el('label', { className: 'fld' }, 'Sample logs (one per line, max 50)', logs), el('label', { className: 'fld' }, 'Rules to use', scope), el('label', { className: 'fld' }, 'Source type (dataset)', src), el('div', { className: 'xbtns' }, run), err), out)];
+  }
+
+  const TABS = [['user', 'User Defined', viewUser], ['default', 'Default Rules', viewDefault], ['both', 'Both', viewBoth], ['sim', 'Simulate', viewSimulate]];
+  function draw() {
+    tabs.replaceChildren(...TABS.map(([id, label]) => el('div', { className: 'xtab' + (tab === id ? ' on' : ''), textContent: label, onclick: () => { tab = id; draw(); } })));
+    body.replaceChildren(...(TABS.find((t) => t[0] === tab) || TABS[0])[2]());
+  }
+  draw();
+  return [el('h2', { textContent: 'Data Model Rules' }), tabs, el('div', { style: 'margin-top:12px' }, body)];
 }
 
 async function pgInstallers() {
