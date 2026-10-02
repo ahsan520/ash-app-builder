@@ -471,7 +471,7 @@ app.get(
 // ---------------------------------------------------------------------------
 // Detections and alerts
 // ---------------------------------------------------------------------------
-const { ensureBuiltinRules } = require('../detection/rule-runner');
+const { ensureBuiltinRules, BUILTIN_RULES } = require('../detection/rule-runner');
 const { normalizeDefinition, buildMatch } = require('../detection/rule-query');
 const xql = require('../search/xql');
 const guarded = (permission) => [
@@ -595,15 +595,40 @@ app.put('/v1/detections/rules/:id', ...guarded('detections:rules:write'), async 
         `UPDATE detection_rules
          SET name = $3, description = $4, severity = $5, enabled = $6, mitre = $7, definition = $8::jsonb,
              kind = $9, category = $10, last_error = NULL, updated_at = localtimestamp
-         WHERE id = $1 AND tenant_id = $2 AND builtin_key IS NULL RETURNING id`,
+         WHERE id = $1 AND tenant_id = $2 RETURNING id`,
         [id, req.tenant_id, r.name, r.description, r.severity, r.enabled, r.mitre, JSON.stringify(r.definition), r.kind, r.category]
       )
     );
-    if (!u.rows.length) return apiError(res, 404, 'NOT_FOUND', 'Custom rule not found (built-in rules can only be enabled or disabled)');
+    if (!u.rows.length) return apiError(res, 404, 'NOT_FOUND', 'Rule not found');
     res.status(200).json({ success: true, id });
   } catch (error) {
     console.error('Rule update failed:', error.message);
     apiError(res, 500, 'RULE_UPDATE_ERROR', 'Failed to update rule');
+  }
+});
+
+// Put a built-in rule back to the definition shipped with the platform (keeps its enabled state).
+app.post('/v1/detections/rules/:id/reset', ...guarded('detections:rules:write'), async (req, res) => {
+  const { id } = req.params;
+  if (!UUID_RE.test(id)) return apiError(res, 400, 'INVALID_ID', 'Invalid rule id');
+  try {
+    const out = await db.withTenant(req.tenant_id, async (client) => {
+      const cur = await client.query('SELECT builtin_key FROM detection_rules WHERE id = $1 AND tenant_id = $2', [id, req.tenant_id]);
+      if (!cur.rows.length) return { status: 404, code: 'NOT_FOUND', msg: 'Rule not found' };
+      const def = BUILTIN_RULES.find((b) => b.key === cur.rows[0].builtin_key);
+      if (!def) return { status: 400, code: 'NOT_BUILTIN', msg: 'Only built-in rules can be reset' };
+      await client.query(
+        `UPDATE detection_rules SET name = $3, description = $4, severity = $5, mitre = $6, definition = $7::jsonb,
+                kind = $8, category = $9, last_error = NULL, updated_at = localtimestamp
+         WHERE id = $1 AND tenant_id = $2`,
+        [id, req.tenant_id, def.name, def.description, def.severity, def.mitre, JSON.stringify(def.definition), def.kind, def.category]);
+      return { ok: true };
+    });
+    if (!out.ok) return apiError(res, out.status, out.code, out.msg);
+    res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('Rule reset failed:', error.message);
+    apiError(res, 500, 'RULE_RESET_ERROR', 'Failed to reset rule');
   }
 });
 
