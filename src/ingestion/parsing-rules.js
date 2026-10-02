@@ -100,7 +100,7 @@ function parseTimestamp(fmt, input) {
 
 // ---- parser -------------------------------------------------------------------------------
 const FUNCS = {
-  if: 3, to_string: 1, to_integer: 1, lowercase: 1, uppercase: 1, trim: 1, len: 1, regextract: 2, arrayindex: 2,
+  if: -1, to_string: 1, to_integer: 1, lowercase: 1, uppercase: 1, trim: 1, len: 1, regextract: 2, arrayindex: 2,
   parse_timestamp: 2, replace: 3, concat: -1, coalesce: -1, array_length: 1, arraycreate: -1, to_number: 1,
 };
 
@@ -129,6 +129,8 @@ class Parser {
         this.i++; this.eatOp('=');
         const v = this.cur; if (!v || (v.t !== 'str' && v.t !== 'id' && v.t !== 'num')) this.fail('Expected a value');
         this.i++; params[key] = v.t === 'id' && key === 'no_hit' ? v.l : String(v.v);
+        // Unquoted names may contain hyphens: [MODEL: dataset=windows-event]
+        if (v.t === 'id' && key !== 'no_hit') while (this.op('-') && this.t[this.i + 1] && this.t[this.i + 1].t === 'id') { params[key] += '-' + this.t[this.i + 1].v; this.i += 2; }
       } while (this.op(',') && ++this.i);
       this.eatOp(']');
       if (model) {
@@ -232,6 +234,7 @@ class Parser {
         this.i++; const args = [];
         if (!this.op(')')) { do { args.push(this.or()); } while (this.op(',') && ++this.i); }
         this.eatOp(')');
+        if (name === 'if' && (args.length < 3 || args.length % 2 === 0)) this.fail('if() takes condition, value [, condition, value ...], else-value', c);
         const want = FUNCS[name];
         if (want >= 0 && args.length !== want) this.fail(`${c.v}() takes ${want} argument${want === 1 ? '' : 's'}`, c);
         if (want < 0 && !args.length) this.fail(`${c.v}() needs at least one argument`, c);
@@ -275,7 +278,10 @@ function evaluate(n, rec) {
 
 function callFn(n, rec) {
   const a = n.a;
-  if (n.n === 'if') return truthy(evaluate(a[0], rec)) ? evaluate(a[1], rec) : evaluate(a[2], rec);
+  if (n.n === 'if') {   // chained: if(c1, v1, c2, v2, ..., else)
+    for (let i = 0; i + 1 < a.length; i += 2) if (truthy(evaluate(a[i], rec))) return evaluate(a[i + 1], rec);
+    return evaluate(a[a.length - 1], rec);
+  }
   if (n.n === 'coalesce') { for (const x of a) { const v = evaluate(x, rec); if (v !== null && v !== undefined && v !== '') return v; } return null; }
   const v = a.map((x) => evaluate(x, rec));
   switch (n.n) {
