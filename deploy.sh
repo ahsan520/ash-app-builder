@@ -219,7 +219,13 @@ $K kubectl -n "$NAMESPACE" rollout status deployment/keycloak --timeout=180s
 echo "== 8b/9: Seeding default tenant + asix-api service identity =="
 $K kubectl -n "$NAMESPACE" delete job/asix-seed-identity --ignore-not-found
 $K kubectl apply -f "$K8S_DIR/25-seed-identity.yaml"
-$K kubectl -n "$NAMESPACE" wait --for=condition=complete job/asix-seed-identity --timeout=120s
+if ! $K kubectl -n "$NAMESPACE" wait --for=condition=complete job/asix-seed-identity --timeout=300s; then
+  echo "!! asix-seed-identity did not complete. Container logs (current + previous attempt):" >&2
+  $K kubectl -n "$NAMESPACE" logs job/asix-seed-identity --tail=60 >&2 || true
+  $K kubectl -n "$NAMESPACE" logs job/asix-seed-identity --previous --tail=60 >&2 2>/dev/null || true
+  $K kubectl -n "$NAMESPACE" describe job/asix-seed-identity | tail -25 >&2 || true
+  exit 1
+fi
 
 $K kubectl -n "$NAMESPACE" rollout status deployment/asix-api --timeout=120s
 
