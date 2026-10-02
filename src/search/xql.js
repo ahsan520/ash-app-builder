@@ -13,6 +13,8 @@
 // Stages: dataset, filter, fields, sort, limit, comp. Everything user-typed is bound as a SQL
 // parameter or checked against a strict identifier pattern - nothing is concatenated into SQL.
 
+const XDM_CONSTANTS = require('../ingestion/xdm-schema').CONSTANTS;
+
 class XqlError extends Error {}
 
 const KEYWORDS = new Set(['and', 'or', 'not', 'contains', 'in', 'by', 'as', 'asc', 'desc', 'null']);
@@ -77,8 +79,10 @@ const TS = 'COALESCE(event_time, received_at)';
 const COLUMNS = { _raw: 'raw', raw: 'raw', source_type: 'source_type', dataset: 'source_type', collector_id: 'collector_id', _id: 'id::text', _insert_time: 'received_at', _time: TS };
 
 class Compiler {
-  constructor(tenantId, from, to) {
-    this.values = [tenantId]; this.where = ['tenant_id = $1'];
+  // With `shared` (an existing parameter array) the compiler only produces conditions and binds into
+  // that array; the caller owns tenant / time filtering. Used by BIOC rules.
+  constructor(tenantId, from, to, shared) {
+    this.values = shared || [tenantId]; this.where = shared ? [] : ['tenant_id = $1'];
     if (from) this.where.push(`${TS} >= ${this.bind(from)}`);
     if (to) this.where.push(`${TS} <= ${this.bind(to)}`);
     this.aliases = new Map();   // output alias -> sql expression (fields / comp)
@@ -91,7 +95,12 @@ class Compiler {
   textField(name) { const e = this.field(name); return name === '_time' || name === '_insert_time' ? `(${e})::text` : e; }
   num(name) { const e = this.field(name); return `(CASE WHEN (${e})::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (${e})::text::numeric END)`; }
   value(c) {
-    const v = c.cur;
+    let v = c.cur;
+    if (v && v.t === 'id' && v.v.startsWith('XDM_CONST.')) {   // XDM_CONST.OUTCOME_FAILED -> "FAILED"
+      const k = v.v.slice(10);
+      if (!(k in XDM_CONSTANTS)) c.fail('unknown constant ' + v.v);
+      v = { t: 'str', v: XDM_CONSTANTS[k], pos: v.pos };
+    }
     if (!v || (v.t !== 'str' && v.t !== 'num' && !(v.t === 'id' && v.l === 'null'))) c.fail('expected a quoted "text" or a number');
     c.next(); return v;
   }
@@ -220,4 +229,26 @@ function compile(query, { tenantId, from, to, limit }) {
   return { sql, values: C.values, mode, columns, limit: lim };
 }
 
-module.exports = { compile, XqlError, MAX_LIMIT };
+// Turns "dataset = x | filter <condition>" (or a bare condition) into WHERE fragments that bind into
+// `values`. Only dataset and filter stages are allowed; used for BIOC rule conditions.
+function compileCondition(query, values) {
+  if (typeof query !== 'string' || !query.trim()) throw new XqlError('Enter a condition, for example: xdm.event.outcome = XDM_CONST.OUTCOME_FAILED');
+  if (query.length > 4000) throw new XqlError('Condition is too long (max 4000 characters)');
+  let q = query.trim();
+  if (!/^(dataset|filter)\b/i.test(q)) q = 'filter ' + q;
+  const C = new Compiler(null, null, null, values), out = [];
+  for (const toks of splitStages(tokenize(q))) {
+    const kw = toks[0].t === 'id' ? toks[0].l : '', c = new Cursor(toks, kw || 'query');
+    if (kw === 'dataset') {
+      c.next();
+      if (!c.isOp('=')) c.fail('expected =');
+      c.next(); const n = c.cur; if (!n || (n.t !== 'id' && n.t !== 'str')) c.fail('expected a dataset name');
+      c.next(); out.push(`source_type = ${C.bind(String(n.v))}`);
+    } else if (kw === 'filter') { c.next(); out.push(`(${C.or(c)})`); }
+    else c.fail('a BIOC condition can only use dataset and filter');
+    if (!c.done()) c.fail('unexpected "' + c.cur.v + '"');
+  }
+  return out;
+}
+
+module.exports = { compile, compileCondition, XqlError, MAX_LIMIT };
