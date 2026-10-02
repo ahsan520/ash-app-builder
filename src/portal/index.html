@@ -551,6 +551,7 @@ const SIM_SAMPLE = [
   'Oct  1 10:01:44 web01 sudo:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/bin/cat /etc/shadow',
   'Oct  1 10:02:00 web01 CRON[3110]: (root) CMD (/usr/local/bin/backup.sh)',
   'Oct  1 10:02:05 web01 kernel: eth0: link up',
+  '[Security] Microsoft-Windows-Security-Auditing id=4625 An account failed to log on. Subject: Security ID: S-1-0-0 Account Name: - Account Domain: - Logon ID: 0x0 Logon Type: 3 Account For Which Logon Failed: Security ID: S-1-0-0 Account Name: administrator Account Domain: Failure Information: Failure Reason: Unknown user name or bad password. Status: 0xC000006D Sub Status: 0xC000006A Process Information: Caller Process ID: 0x0 Caller Process Name: - Network Information: Workstation Name: KALI Source Network Address: 203.0.113.9 Source Port: 51234 Detailed Authentication Information: Logon Process: NtLmSsp Authentication Package: NTLM',
 ].join('\n');
 
 async function pgParsing() {
@@ -640,6 +641,7 @@ const MODEL_SAMPLE = [
   'Oct  1 10:00:09 web01 sshd[2203]: Accepted publickey for deploy from 2001:db8::5 port 40122 ssh2: RSA SHA256:abc',
   'Oct  1 10:01:44 web01 sudo:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/bin/cat /etc/shadow',
   'Oct  1 10:02:00 web01 CRON[3110]: (root) CMD (/usr/local/bin/backup.sh)',
+  '[Security] Microsoft-Windows-Security-Auditing id=4688 A new process has been created. Creator Subject: Security ID: S-1-5-21-111-222-333-1001 Account Name: alice Account Domain: WIN01 Logon ID: 0x1A2B3C Process Information: New Process ID: 0x1a4 New Process Name: C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe Token Elevation Type: %%1938 Creator Process ID: 0x2b8 Creator Process Name: C:\\Windows\\explorer.exe Process Command Line: powershell.exe -nop -w hidden -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkA',
 ].join('\n');
 
 async function pgDataModel() {
@@ -883,15 +885,15 @@ const BIOC_ICONS = {
   event_log: '<circle cx="32" cy="32" r="20"/><circle cx="32" cy="32" r="10"/><circle cx="32" cy="32" r="3"/><path d="M14 20l-4-3M50 44l4 3M44 14l3-4M20 50l-3 4"/>',
   network_connections: '<circle cx="32" cy="32" r="11"/><circle cx="32" cy="32" r="5"/><path d="M32 4v10M32 50v10M4 32h10M50 32h10M12 12l7 7M45 45l7 7M52 12l-7 7M19 45l-7 7"/>',
 };
-const OUTCOMES = ['SUCCESS', 'FAILED', 'PARTIAL', 'UNKNOWN'], EVENT_TYPES_ = ['authentication', 'privilege_use', 'account_management', 'scheduled_task'];
+const OUTCOMES = ['SUCCESS', 'FAILED', 'PARTIAL', 'UNKNOWN'], EVENT_TYPES_ = ['authentication', 'privilege_use', 'process', 'account_management', 'group_membership', 'scheduled_task', 'service_install', 'log_cleared'];
 const COMMON = [['xdm.target.host.hostname', 'Host'], ['xdm.source.user.username', 'Source user'], ['xdm.target.user.username', 'Target user']];
 const BIOC_TYPES = [
-  { id: 'process', title: 'Process', desc: 'Search on process execution and injection by name, hash and more', fields: [['xdm.target.process.command_line', 'Command line'], ['xdm.target.process.name', 'Process name'], ['xdm.source.process.name', 'Parent / source process'], ['xdm.source.process.pid', 'Process id'], ...COMMON] },
+  { id: 'process', title: 'Process', desc: 'Search on process execution and injection by name, hash and more', fields: [['xdm.target.process.command_line', 'Command line'], ['xdm.target.process.name', 'Process name'], ['xdm.target.process.executable.path', 'Process path'], ['xdm.source.process.name', 'Parent / source process'], ['xdm.source.process.pid', 'Process id'], ...COMMON] },
   { id: 'file', title: 'File', desc: 'Search on file create, write, read, delete and rename by file name and path', fields: [['xdm.target.file.path', 'File path'], ['xdm.target.file.filename', 'File name'], ['xdm.target.file.sha256', 'File SHA-256'], ['xdm.event.operation', 'Operation'], ...COMMON] },
   { id: 'network', title: 'Network', desc: 'Search on network outgoing, incoming by IP address, port and more', fields: [['xdm.source.ipv4', 'Source IPv4'], ['xdm.source.ipv6', 'Source IPv6'], ['xdm.source.port', 'Source port'], ['xdm.target.ipv4', 'Destination IPv4'], ['xdm.target.port', 'Destination port'], ['xdm.target.host.hostname', 'Host']] },
   { id: 'image_load', title: 'Image Load', desc: 'Search on module load into process events by module ids and more', fields: [['xdm.target.module.path', 'Module path'], ['xdm.target.module.sha256', 'Module SHA-256'], ['xdm.source.process.name', 'Loading process'], ['xdm.target.host.hostname', 'Host']] },
   { id: 'registry', title: 'Registry', desc: 'Search on registry write, rename and delete by value path and data', fields: [['xdm.target.registry.key', 'Registry key'], ['xdm.target.registry.value', 'Value name'], ['xdm.target.registry.data', 'Value data'], ['xdm.event.operation', 'Operation'], ['xdm.target.host.hostname', 'Host']] },
-  { id: 'event_log', title: 'Event Log', desc: 'Search on event log data, including Windows and Linux event logs, by description, event ID and more', fields: [['xdm.event.type', 'Event type'], ['xdm.event.outcome', 'Outcome'], ['xdm.event.operation', 'Operation'], ['xdm.event.description', 'Description'], ['xdm.event.original_event_type', 'Original event type'], ['xdm.auth.auth_method', 'Auth method'], ['xdm.source.ipv4', 'Source IPv4'], ...COMMON] },
+  { id: 'event_log', title: 'Event Log', desc: 'Search on event log data, including Windows and Linux event logs, by description, event ID and more', fields: [['xdm.event.type', 'Event type'], ['xdm.event.outcome', 'Outcome'], ['xdm.event.operation', 'Operation'], ['xdm.event.description', 'Description'], ['xdm.event.original_event_type', 'Original event type'], ['xdm.event.id', 'Event ID'], ['xdm.auth.auth_method', 'Auth method'], ['xdm.auth.logon_type', 'Logon type'], ['xdm.target.group.name', 'Group name'], ['xdm.target.service.name', 'Service name'], ['xdm.target.service.path', 'Service path'], ['xdm.target.task.name', 'Task name'], ['xdm.source.ipv4', 'Source IPv4'], ...COMMON] },
   { id: 'network_connections', title: 'Network Connections', desc: 'Search on network connections by session attributes or participants attributes', fields: [['xdm.source.ipv4', 'Source IPv4'], ['xdm.source.port', 'Source port'], ['xdm.target.ipv4', 'Destination IPv4'], ['xdm.target.port', 'Destination port'], ['xdm.auth.auth_method', 'Auth method'], ['xdm.source.user.username', 'User'], ['xdm.target.host.hostname', 'Host']] },
 ];
 const VALUE_OPTIONS = { 'xdm.event.outcome': OUTCOMES, 'xdm.event.type': EVENT_TYPES_ };
