@@ -72,11 +72,11 @@ filter app_name ~= "^(CRON|cron|crond)$" and message contains "CMD"
 /* ------------ windows_logon --------- */
 [INGEST:vendor="microsoft", product="windows", source_type="windows-event", no_hit=keep, content_id="windows_logon"]
 // 4625: failed logon
-filter message ~= "^\[\w+\] .+? id=4625 "
+filter message ~= "^\[[^\]]+\] .+? id=4625 "
 | alter
     event_id = 4625,
-    channel = arrayindex(regextract(message, "^\[(\w+)\]"), 0),
-    provider = arrayindex(regextract(message, "^\[\w+\] (.+?) id="), 0),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
     event_category = "authentication",
     event_outcome = "failure",
     tmp_user = arrayindex(regextract(message, "Account For Which Logon Failed: Security ID: \S+ Account Name: (.+?) Account Domain:"), 0),
@@ -92,11 +92,11 @@ filter message ~= "^\[\w+\] .+? id=4625 "
 | fields -tmp_*;
 
 // 4624: successful logon
-filter message ~= "^\[\w+\] .+? id=4624 "
+filter message ~= "^\[[^\]]+\] .+? id=4624 "
 | alter
     event_id = 4624,
-    channel = arrayindex(regextract(message, "^\[(\w+)\]"), 0),
-    provider = arrayindex(regextract(message, "^\[\w+\] (.+?) id="), 0),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
     event_category = "authentication",
     event_outcome = "success",
     tmp_user = arrayindex(regextract(message, "New Logon: Security ID: \S+ Account Name: (.+?) Account Domain:"), 0),
@@ -117,11 +117,11 @@ filter message ~= "^\[\w+\] .+? id=4624 "
 [INGEST:vendor="microsoft", product="windows", source_type="windows-event", no_hit=keep, content_id="windows_process"]
 // 4688: process creation. The command line is only present when the audit policy
 // "Include command line in process creation events" is enabled.
-filter message ~= "^\[\w+\] .+? id=4688 "
+filter message ~= "^\[[^\]]+\] .+? id=4688 "
 | alter
     event_id = 4688,
-    channel = arrayindex(regextract(message, "^\[(\w+)\]"), 0),
-    provider = arrayindex(regextract(message, "^\[\w+\] (.+?) id="), 0),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
     event_category = "process",
     event_action = "process_created",
     event_outcome = "success",
@@ -139,11 +139,11 @@ filter message ~= "^\[\w+\] .+? id=4688 "
 /* ------------ windows_scheduled_task --------- */
 [INGEST:vendor="microsoft", product="windows", source_type="windows-event", no_hit=keep, content_id="windows_scheduled_task"]
 // 4698 created, 4699 deleted, 4700 enabled, 4701 disabled, 4702 updated
-filter message ~= "^\[\w+\] .+? id=(?:4698|4699|4700|4701|4702) "
+filter message ~= "^\[[^\]]+\] .+? id=(?:4698|4699|4700|4701|4702) "
 | alter
     event_id = to_integer(arrayindex(regextract(message, " id=(\d+) "), 0)),
-    channel = arrayindex(regextract(message, "^\[(\w+)\]"), 0),
-    provider = arrayindex(regextract(message, "^\[\w+\] (.+?) id="), 0),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
     event_category = "scheduled_task",
     event_action = if(event_id = 4698, "task_created", event_id = 4699, "task_deleted", event_id = 4700, "task_enabled", event_id = 4701, "task_disabled", "task_updated"),
     event_outcome = "success",
@@ -160,11 +160,11 @@ filter message ~= "^\[\w+\] .+? id=(?:4698|4699|4700|4701|4702) "
 [INGEST:vendor="microsoft", product="windows", source_type="windows-event", no_hit=keep, content_id="windows_account"]
 // 4720 created, 4722 enabled, 4723 password change, 4724 password reset, 4725 disabled, 4726 deleted,
 // 4738 changed, 4740 locked out
-filter message ~= "^\[\w+\] .+? id=(?:4720|4722|4723|4724|4725|4726|4738|4740) "
+filter message ~= "^\[[^\]]+\] .+? id=(?:4720|4722|4723|4724|4725|4726|4738|4740) "
 | alter
     event_id = to_integer(arrayindex(regextract(message, " id=(\d+) "), 0)),
-    channel = arrayindex(regextract(message, "^\[(\w+)\]"), 0),
-    provider = arrayindex(regextract(message, "^\[\w+\] (.+?) id="), 0),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
     event_category = "account_management",
     event_action = if(event_id = 4720, "user_created", event_id = 4722, "user_enabled", event_id = 4723, "password_change", event_id = 4724, "password_reset", event_id = 4725, "user_disabled", event_id = 4726, "user_deleted", event_id = 4740, "user_locked_out", "user_changed"),
     event_outcome = "success",
@@ -178,11 +178,11 @@ filter message ~= "^\[\w+\] .+? id=(?:4720|4722|4723|4724|4725|4726|4738|4740) "
 /* ------------ windows_group --------- */
 [INGEST:vendor="microsoft", product="windows", source_type="windows-event", no_hit=keep, content_id="windows_group"]
 // 4728/4732/4756 member added (global/local/universal group), 4729/4733/4757 member removed
-filter message ~= "^\[\w+\] .+? id=(?:4728|4729|4732|4733|4756|4757) "
+filter message ~= "^\[[^\]]+\] .+? id=(?:4728|4729|4732|4733|4756|4757) "
 | alter
     event_id = to_integer(arrayindex(regextract(message, " id=(\d+) "), 0)),
-    channel = arrayindex(regextract(message, "^\[(\w+)\]"), 0),
-    provider = arrayindex(regextract(message, "^\[\w+\] (.+?) id="), 0),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
     event_category = "group_membership",
     event_action = if(event_id in (4728, 4732, 4756), "member_added", "member_removed"),
     event_outcome = "success",
@@ -197,11 +197,11 @@ filter message ~= "^\[\w+\] .+? id=(?:4728|4729|4732|4733|4756|4757) "
 /* ------------ windows_log_cleared --------- */
 [INGEST:vendor="microsoft", product="windows", source_type="windows-event", no_hit=keep, content_id="windows_log_cleared"]
 // 1102: Security log cleared, 104: another event log cleared
-filter message ~= "^\[\w+\] .+? id=(?:1102|104) "
+filter message ~= "^\[[^\]]+\] .+? id=(?:1102|104) "
 | alter
     event_id = to_integer(arrayindex(regextract(message, " id=(\d+) "), 0)),
-    channel = arrayindex(regextract(message, "^\[(\w+)\]"), 0),
-    provider = arrayindex(regextract(message, "^\[\w+\] (.+?) id="), 0),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
     event_category = "log_cleared",
     event_action = if(event_id = 1102, "security_log_cleared", "event_log_cleared"),
     event_outcome = "success",
@@ -212,11 +212,11 @@ filter message ~= "^\[\w+\] .+? id=(?:1102|104) "
 /* ------------ windows_service --------- */
 [INGEST:vendor="microsoft", product="windows", source_type="windows-event", no_hit=keep, content_id="windows_service"]
 // 7045 (System log) and 4697 (Security log): a service was installed
-filter message ~= "^\[\w+\] .+? id=(?:7045|4697) "
+filter message ~= "^\[[^\]]+\] .+? id=(?:7045|4697) "
 | alter
     event_id = to_integer(arrayindex(regextract(message, " id=(\d+) "), 0)),
-    channel = arrayindex(regextract(message, "^\[(\w+)\]"), 0),
-    provider = arrayindex(regextract(message, "^\[\w+\] (.+?) id="), 0),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
     event_category = "service_install",
     event_action = "service_installed",
     event_outcome = "success",
@@ -226,14 +226,174 @@ filter message ~= "^\[\w+\] .+? id=(?:7045|4697) "
     service_account = arrayindex(regextract(message, "Service Account: (.+?)$"), 0);
 /* ------------ windows_service --------- */
 
+/* -------------------------------------
+   ---------- Sysmon (optional) --------
+   The forwarder sends the event's named fields (Image, CommandLine ...)
+   alongside the text when the Sysmon log exists on the host.
+   ------------------------------------- */
+
+/* ------------ sysmon_process --------- */
+[INGEST:vendor="microsoft", product="sysmon", source_type="windows-event", no_hit=keep, content_id="sysmon_process"]
+// Event 1: process creation (always includes the command line)
+filter message ~= "^\[Microsoft-Windows-Sysmon/Operational\] .+? id=1 "
+| alter
+    event_id = to_integer(arrayindex(regextract(message, " id=(\d+) "), 0)),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
+    event_category = "process",
+    event_action = "process_created",
+    event_outcome = "success",
+    user = arrayindex(regextract(User, "([^\\]+)$"), 0),
+    user_domain = arrayindex(regextract(User, "^(.+)\\[^\\]+$"), 0),
+    process_path = Image,
+    process_name = arrayindex(regextract(Image, "([^\\]+)$"), 0),
+    process_id = ProcessId,
+    command_line = CommandLine,
+    process_sha256 = arrayindex(regextract(Hashes, "SHA256=([0-9A-Fa-f]{64})"), 0),
+    parent_path = ParentImage,
+    parent_name = arrayindex(regextract(ParentImage, "([^\\]+)$"), 0),
+    parent_pid = ParentProcessId,
+    parent_command_line = ParentCommandLine,
+    integrity_level = IntegrityLevel;
+/* ------------ sysmon_process --------- */
+
+/* ------------ sysmon_network --------- */
+[INGEST:vendor="microsoft", product="sysmon", source_type="windows-event", no_hit=keep, content_id="sysmon_network"]
+// Event 3: network connection
+filter message ~= "^\[Microsoft-Windows-Sysmon/Operational\] .+? id=3 "
+| alter
+    event_id = to_integer(arrayindex(regextract(message, " id=(\d+) "), 0)),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
+    event_category = "network_connection",
+    event_action = if(Initiated = "true", "connection_initiated", "connection_accepted"),
+    event_outcome = "success",
+    user = arrayindex(regextract(User, "([^\\]+)$"), 0),
+    user_domain = arrayindex(regextract(User, "^(.+)\\[^\\]+$"), 0),
+    process_path = Image,
+    process_name = arrayindex(regextract(Image, "([^\\]+)$"), 0),
+    process_id = ProcessId,
+    protocol = lowercase(Protocol),
+    direction = if(Initiated = "true", "OUTBOUND", "INBOUND"),
+    src_ip = SourceIp,
+    src_port = to_integer(SourcePort),
+    dst_ip = DestinationIp,
+    dst_port = to_integer(DestinationPort),
+    dst_host = DestinationHostname;
+/* ------------ sysmon_network --------- */
+
+/* ------------ sysmon_dns --------- */
+[INGEST:vendor="microsoft", product="sysmon", source_type="windows-event", no_hit=keep, content_id="sysmon_dns"]
+// Event 22: DNS query
+filter message ~= "^\[Microsoft-Windows-Sysmon/Operational\] .+? id=22 "
+| alter
+    event_id = to_integer(arrayindex(regextract(message, " id=(\d+) "), 0)),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
+    event_category = "dns_query",
+    event_action = "dns_query",
+    event_outcome = "success",
+    user = arrayindex(regextract(User, "([^\\]+)$"), 0),
+    user_domain = arrayindex(regextract(User, "^(.+)\\[^\\]+$"), 0),
+    process_path = Image,
+    process_name = arrayindex(regextract(Image, "([^\\]+)$"), 0),
+    process_id = ProcessId,
+    query_name = QueryName,
+    query_status = QueryStatus,
+    query_results = QueryResults;
+/* ------------ sysmon_dns --------- */
+
+/* ------------ sysmon_image_load --------- */
+[INGEST:vendor="microsoft", product="sysmon", source_type="windows-event", no_hit=keep, content_id="sysmon_image_load"]
+// Event 7: a module (DLL) was loaded into a process
+filter message ~= "^\[Microsoft-Windows-Sysmon/Operational\] .+? id=7 "
+| alter
+    event_id = to_integer(arrayindex(regextract(message, " id=(\d+) "), 0)),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
+    event_category = "image_load",
+    event_action = "image_loaded",
+    event_outcome = "success",
+    user = arrayindex(regextract(User, "([^\\]+)$"), 0),
+    user_domain = arrayindex(regextract(User, "^(.+)\\[^\\]+$"), 0),
+    process_path = Image,
+    process_name = arrayindex(regextract(Image, "([^\\]+)$"), 0),
+    process_id = ProcessId,
+    module_path = ImageLoaded,
+    module_sha256 = arrayindex(regextract(Hashes, "SHA256=([0-9A-Fa-f]{64})"), 0),
+    signature_status = SignatureStatus;
+/* ------------ sysmon_image_load --------- */
+
+/* ------------ sysmon_file --------- */
+[INGEST:vendor="microsoft", product="sysmon", source_type="windows-event", no_hit=keep, content_id="sysmon_file"]
+// Event 11: file created, 23 / 26: file deleted
+filter message ~= "^\[Microsoft-Windows-Sysmon/Operational\] .+? id=(?:11|23|26) "
+| alter
+    event_id = to_integer(arrayindex(regextract(message, " id=(\d+) "), 0)),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
+    event_category = "file",
+    event_action = if(event_id = 11, "file_created", "file_deleted"),
+    event_outcome = "success",
+    user = arrayindex(regextract(User, "([^\\]+)$"), 0),
+    user_domain = arrayindex(regextract(User, "^(.+)\\[^\\]+$"), 0),
+    process_path = Image,
+    process_name = arrayindex(regextract(Image, "([^\\]+)$"), 0),
+    process_id = ProcessId,
+    file_path = TargetFilename,
+    file_name = arrayindex(regextract(TargetFilename, "([^\\]+)$"), 0);
+/* ------------ sysmon_file --------- */
+
+/* ------------ sysmon_registry --------- */
+[INGEST:vendor="microsoft", product="sysmon", source_type="windows-event", no_hit=keep, content_id="sysmon_registry"]
+// Events 12 / 13 / 14: registry key or value created, set, deleted, renamed
+filter message ~= "^\[Microsoft-Windows-Sysmon/Operational\] .+? id=(?:12|13|14) "
+| alter
+    event_id = to_integer(arrayindex(regextract(message, " id=(\d+) "), 0)),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
+    event_category = "registry",
+    event_action = if(EventType = "CreateKey", "registry_key_created", EventType = "DeleteKey", "registry_key_deleted", EventType = "SetValue", "registry_value_set", EventType = "DeleteValue", "registry_value_deleted", EventType = "RenameKey", "registry_key_renamed", "registry_change"),
+    event_outcome = "success",
+    user = arrayindex(regextract(User, "([^\\]+)$"), 0),
+    user_domain = arrayindex(regextract(User, "^(.+)\\[^\\]+$"), 0),
+    process_path = Image,
+    process_name = arrayindex(regextract(Image, "([^\\]+)$"), 0),
+    process_id = ProcessId,
+    registry_key = if(EventType in ("SetValue", "DeleteValue"), arrayindex(regextract(TargetObject, "^(.+)\\[^\\]+$"), 0), TargetObject),
+    registry_value = if(EventType in ("SetValue", "DeleteValue"), arrayindex(regextract(TargetObject, "([^\\]+)$"), 0), null),
+    registry_data = Details;
+/* ------------ sysmon_registry --------- */
+
+/* ------------ sysmon_access --------- */
+[INGEST:vendor="microsoft", product="sysmon", source_type="windows-event", no_hit=keep, content_id="sysmon_access"]
+// Event 8: remote thread created in another process, event 10: a process opened another process
+filter message ~= "^\[Microsoft-Windows-Sysmon/Operational\] .+? id=(?:8|10) "
+| alter
+    event_id = to_integer(arrayindex(regextract(message, " id=(\d+) "), 0)),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
+    event_category = if(event_id = 8, "process_injection", "process_access"),
+    event_action = if(event_id = 8, "remote_thread_created", "process_accessed"),
+    event_outcome = "success",
+    user = arrayindex(regextract(SourceUser, "([^\\]+)$"), 0),
+    user_domain = arrayindex(regextract(SourceUser, "^(.+)\\[^\\]+$"), 0),
+    source_path = SourceImage,
+    source_name = arrayindex(regextract(SourceImage, "([^\\]+)$"), 0),
+    source_pid = SourceProcessId,
+    target_path = TargetImage,
+    target_pid = TargetProcessId,
+    granted_access = GrantedAccess;
+/* ------------ sysmon_access --------- */
+
 /* ------------ windows_generic --------- */
 [INGEST:vendor="microsoft", product="windows", source_type="windows-event", no_hit=keep, content_id="windows_generic"]
 // Any other Windows event: at least extract the channel, provider and event id.
-filter message ~= "^\[\w+\] .+? id=\d+ "
+filter message ~= "^\[[^\]]+\] .+? id=\d+ "
 | alter
     event_id = to_integer(arrayindex(regextract(message, " id=(\d+) "), 0)),
-    channel = arrayindex(regextract(message, "^\[(\w+)\]"), 0),
-    provider = arrayindex(regextract(message, "^\[\w+\] (.+?) id="), 0),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
     event_category = "windows_event";
 /* ------------ windows_generic --------- */
 `;

@@ -6,7 +6,7 @@
 const F = (name, type, description) => ({ name, type, description });
 
 const FIELDS = [
-  F('xdm.event.type', 'string', 'Kind of activity: authentication, privilege_use, process, account_management, group_membership, scheduled_task, service_install, log_cleared'),
+  F('xdm.event.type', 'string', 'Kind of activity: authentication, privilege_use, process, network_connection, dns_query, file, registry, image_load, process_injection, process_access, account_management, group_membership, scheduled_task, service_install, log_cleared'),
   F('xdm.event.operation', 'string', 'The specific action, e.g. the command that changed an account (useradd)'),
   F('xdm.event.outcome', 'enum', 'XDM_CONST.OUTCOME_SUCCESS / OUTCOME_FAILED / OUTCOME_PARTIAL / OUTCOME_UNKNOWN'),
   F('xdm.event.outcome_reason', 'string', 'Why the outcome happened, when the log says'),
@@ -50,6 +50,15 @@ const FIELDS = [
   F('xdm.target.registry.data', 'string', 'Registry value data'),
   F('xdm.target.module.path', 'string', 'Path of the loaded module / library'),
   F('xdm.target.module.sha256', 'string', 'SHA-256 of the loaded module'),
+  F('xdm.source.process.command_line', 'string', 'Command line of the parent / creating process'),
+  F('xdm.target.process.executable.sha256', 'string', 'SHA-256 of the executable that was started'),
+  F('xdm.target.process.granted_access', 'string', 'Access mask requested on the target process (Sysmon event 10)'),
+  F('xdm.target.module.signature_status', 'string', 'Valid, Unavailable, Expired ... for a loaded module'),
+  F('xdm.target.ipv6', 'string', 'Destination IPv6'),
+  F('xdm.target.fqdn', 'string', 'Destination host name or DNS name that was queried'),
+  F('xdm.network.direction', 'string', 'OUTBOUND or INBOUND'),
+  F('xdm.network.ip_protocol', 'string', 'tcp, udp, ...'),
+  F('xdm.network.dns.answer', 'string', 'DNS answer(s) returned for the query'),
   F('xdm.observer.name', 'string', 'Collector / sensor that reported the event'),
   F('xdm.observer.type', 'string', 'Kind of sensor'),
 ];
