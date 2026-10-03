@@ -232,6 +232,79 @@ const BUILTIN_RULES = [
       xql: String.raw`xdm.event.type = "authentication" and xdm.event.outcome = XDM_CONST.OUTCOME_SUCCESS and xdm.auth.logon_type = 10 and xdm.source.ipv4 != null and not xdm.source.ipv4 ~= "^(10\\.|127\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.)"`,
     },
   },
+  // ---- Sysmon (needs Sysmon on the host; the forwarder picks its log up automatically) ----
+  {
+    key: 'bioc-xdm-sysmon-run-key', kind: 'bioc', category: 'Persistence', name: 'Registry Run key set',
+    description: 'A value was written to a CurrentVersion\\Run or RunOnce key, a common autostart persistence location.',
+    severity: 'high', mitre: ['T1547.001'],
+    definition: {
+      event_type: 'registry', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "registry" and xdm.event.operation = "registry_value_set" and xdm.target.registry.key ~= "\\\\CurrentVersion\\\\Run(Once|Services|ServicesOnce)?$"`,
+    },
+  },
+  {
+    key: 'bioc-xdm-sysmon-defender-off', kind: 'bioc', category: 'Defense Evasion', name: 'Windows Defender disabled in the registry',
+    description: 'DisableAntiSpyware, DisableRealtimeMonitoring or a similar Defender setting was set to 1.',
+    severity: 'high', mitre: ['T1562.001'],
+    definition: {
+      event_type: 'registry', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "registry" and xdm.event.operation = "registry_value_set" and xdm.target.registry.key ~= "Windows Defender" and xdm.target.registry.value ~= "^Disable(AntiSpyware|AntiVirus|RealtimeMonitoring|BehaviorMonitoring|IOAVProtection|OnAccessProtection)$" and xdm.target.registry.data ~= "0x00000001"`,
+    },
+  },
+  {
+    key: 'bioc-xdm-sysmon-office-drop', kind: 'bioc', category: 'Execution', name: 'Office or script host dropped an executable',
+    description: 'Word, Excel, PowerPoint, Outlook, wscript, cscript or mshta created an exe, dll, script or shortcut file.',
+    severity: 'high', mitre: ['T1204.002'],
+    definition: {
+      event_type: 'file', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "file" and xdm.event.operation = "file_created" and xdm.source.process.name in ("winword.exe", "excel.exe", "powerpnt.exe", "outlook.exe", "wscript.exe", "cscript.exe", "mshta.exe") and xdm.target.file.filename ~= "\\.(exe|dll|scr|ps1|vbs|js|hta|bat|cmd|lnk)$"`,
+    },
+  },
+  {
+    key: 'bioc-xdm-sysmon-startup-folder', kind: 'bioc', category: 'Persistence', name: 'File written to a Startup folder',
+    description: 'A file was created in a user or all-users Start Menu Startup folder.',
+    severity: 'medium', mitre: ['T1547.001'],
+    definition: {
+      event_type: 'file', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "file" and xdm.event.operation = "file_created" and xdm.target.file.path ~= "\\\\Start Menu\\\\Programs\\\\Startup\\\\"`,
+    },
+  },
+  {
+    key: 'bioc-xdm-sysmon-unsigned-dll', kind: 'bioc', category: 'Defense Evasion', name: 'Unsigned DLL loaded from a user-writable path',
+    description: 'A module from Temp, AppData, ProgramData or Public without a valid signature was loaded into a process.',
+    severity: 'medium', mitre: ['T1574.002'],
+    definition: {
+      event_type: 'image_load', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "image_load" and xdm.target.module.path ~= "\\\\(temp|appdata|programdata|users\\\\public)\\\\" and xdm.target.module.signature_status != "Valid"`,
+    },
+  },
+  {
+    key: 'bioc-xdm-sysmon-script-outbound', kind: 'bioc', category: 'Command and Control', name: 'Script host or Office app connecting to an external IP',
+    description: 'wscript, cscript, mshta, regsvr32, winword or excel opened an outbound connection to a public address.',
+    severity: 'high', mitre: ['T1071', 'T1218'],
+    definition: {
+      event_type: 'network', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "network_connection" and xdm.network.direction = "OUTBOUND" and xdm.source.process.name in ("wscript.exe", "cscript.exe", "mshta.exe", "regsvr32.exe", "winword.exe", "excel.exe") and xdm.target.ipv4 != null and not xdm.target.ipv4 ~= "^(10\\.|127\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|169\\.254\\.)"`,
+    },
+  },
+  {
+    key: 'bioc-xdm-sysmon-lsass-access', kind: 'bioc', category: 'Credential Access', name: 'LSASS memory opened with read access',
+    description: 'A process opened lsass.exe with an access mask used for credential dumping. Trusted system processes are excluded.',
+    severity: 'critical', mitre: ['T1003.001'],
+    definition: {
+      event_type: 'process', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "process_access" and xdm.target.process.executable.path ~= "\\\\lsass\\.exe$" and xdm.target.process.granted_access ~= "^0x(1010|1410|1438|143a|1fffff|1f3fff)$" and not xdm.source.process.executable.path ~= "\\\\(MsMpEng|csrss|wininit|services|svchost|wmiprvse|lsm|taskmgr|vmtoolsd)\\.exe$"`,
+    },
+  },
+  {
+    key: 'bioc-xdm-sysmon-remote-thread', kind: 'bioc', category: 'Defense Evasion', name: 'Remote thread created in another process',
+    description: 'A process created a thread inside a different process, a common injection technique. Expect some noise from security tools.',
+    severity: 'medium', mitre: ['T1055'],
+    definition: {
+      event_type: 'process', group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      xql: String.raw`xdm.event.type = "process_injection" and not xdm.source.process.executable.path ~= "\\\\(MsMpEng|csrss|wininit|services|svchost|vmtoolsd|CompatTelRunner)\\.exe$"`,
+    },
+  },
 ];
 
 async function ensureBuiltinRules(client, tenantId) {
