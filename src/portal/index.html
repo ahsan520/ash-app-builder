@@ -83,6 +83,24 @@
   .bc-tile b { display:block; font-size:16px; font-style:italic; margin-bottom:6px; } .bc-tile span { display:block; font-size:13px; font-style:italic; color:var(--mute); line-height:1.45; }
   .bc-tile i { display:inline-block; margin-top:8px; font-size:11px; font-style:normal; padding:2px 8px; border-radius:10px; border:1px solid var(--line,#2a3446); color:var(--mute); } .bc-tile i.live { color:var(--ok); border-color:var(--ok); }
   .bc-pre { font:12px ui-monospace,Menlo,monospace; background:rgba(0,0,0,.25); border:1px solid var(--line,#2a3446); border-radius:8px; padding:10px 12px; white-space:pre-wrap; word-break:break-word; margin:8px 0; }
+  .bb { border-left:2px solid var(--acc); margin:8px 0 0 78px; position:relative; min-height:56vh; padding-bottom:28px; }
+  .bb-id { position:relative; margin-top:-2px; padding-left:44px; height:22px; font-style:italic; } .bb-id::before { content:''; position:absolute; left:0; top:11px; width:38px; border-top:2px solid var(--acc); }
+  .bb-ent { margin-top:26px; } .bb-eh { display:flex; align-items:center; gap:10px; margin-left:-39px; }
+  .bb-ico { width:76px; height:76px; flex:none; background:var(--bg0); display:flex; align-items:center; justify-content:center; color:var(--acc); }
+  .bb-ico svg { width:58px; height:58px; stroke:currentColor; fill:none; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
+  .bb-et { color:var(--acc); font-weight:700; font-size:21px; letter-spacing:.3px; }
+  .bb-body { margin-left:38px; } .bb-subs { display:flex; gap:26px; flex-wrap:wrap; margin:4px 0 22px; }
+  .bb-subs label { display:flex; flex-direction:row; align-items:center; gap:8px; font-size:17px; cursor:pointer; }
+  .bb-grid { display:grid; grid-template-columns:1fr 1fr; gap:24px 30px; max-width:1060px; } @media (max-width:900px) { .bb-grid { grid-template-columns:1fr; } }
+  .bb-f > b { display:block; font-weight:500; font-size:16px; letter-spacing:.2px; margin-bottom:2px; }
+  .bb-in { display:flex; align-items:center; border-bottom:1px solid var(--line); } .bb-in:focus-within { border-bottom-color:var(--acc); }
+  .bb-in select, .bb-in input { background:transparent !important; border:0 !important; border-radius:0; color:var(--text); font:inherit; padding:7px 4px; outline:none; box-shadow:none; }
+  .bb-in > select { width:auto; min-width:58px; color:var(--mute); } .bb-in .bb-v { flex:1; min-width:0; } .bb-in .bb-v input, .bb-in .bb-v select { width:100%; }
+  .bb-add { display:flex; gap:34px; flex-wrap:wrap; margin:46px 0 0 38px; }
+  .bb-card { position:relative; text-align:left; padding:12px 18px 12px 38px; min-width:260px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:inherit; cursor:pointer; font:inherit; }
+  .bb-card:hover { border-color:var(--acc); } .bb-card b { display:block; color:var(--acc); font-size:16px; margin-bottom:2px; } .bb-card i { font-size:14px; color:var(--mute); }
+  .bb-plus { position:absolute; left:-13px; top:50%; transform:translateY(-50%); width:26px; height:26px; border-radius:50%; background:var(--bg0); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:22px; }
+  .bb-q { margin:26px 0 0 38px; max-width:1060px; } .bb-bar { position:sticky; bottom:0; display:flex; gap:12px; justify-content:flex-end; align-items:center; padding:14px 6px; background:var(--bg0); border-top:1px solid var(--line); margin-top:18px; }
   .pxf { color:#2fd4d4; } .pxc { color:#ff7aa2; font-style:italic; } .pr-two { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
   .pr-chg { color:var(--ok); font-weight:600; } .pr-new { color:var(--acc); font-weight:600; }
   .xbar { display:flex; align-items:center; gap:14px; padding:12px 4px; } .xres { display:grid; grid-template-columns:230px 1fr; gap:14px; align-items:start; } .xtbl { overflow:auto; max-height:62vh; border:1px solid var(--line); border-radius:8px; }
@@ -824,6 +842,7 @@ function openRuleForm(kind, rule, editing) {
   const desc = el('textarea', { rows: 2, value: rule ? rule.description || '' : '', style: 'width:100%' });
   const regex = el('textarea', { rows: 3, value: d.regex || '', placeholder: 'Regular expression matched (case-insensitive) against the raw event, e.g. Failed password|Invalid user', style: 'width:100%;font-family:ui-monospace,Menlo,monospace' });
   const stype = el('input', { value: d.source_type || '', placeholder: 'e.g. syslog (optional)' });
+  const xqlIn = el('textarea', { rows: 3, value: d.xql || '', spellcheck: false, placeholder: 'xdm.event.type = "authentication" and xdm.event.outcome = XDM_CONST.OUTCOME_FAILED', style: 'width:100%;font-family:ui-monospace,Menlo,monospace' });
   const fbox = el('div');
   const drawFilters = () => fbox.replaceChildren(...filters.map((f, i) => el('div', { className: 'row2', style: 'margin-bottom:8px' },
     el('input', { value: f.field, placeholder: 'field, e.g. host or user.name', style: 'width:220px', oninput: (e) => { f.field = e.target.value; } }),
@@ -847,7 +866,7 @@ function openRuleForm(kind, rule, editing) {
   const mitre = el('input', { value: ((rule && rule.mitre) || []).join(', '), placeholder: 'e.g. T1110, T1059.004', style: 'width:320px' });
   const off = el('input', { type: 'checkbox', checked: rule ? !rule.enabled : false });
   const out = el('div', { className: 'mute', style: 'margin-top:10px' }), errLine = el('div', { className: 'err', style: 'margin-right:auto' });
-  const defn = () => ({ regex: regex.value, source_type: stype.value, filters: filters.filter((f) => f.field && f.field.trim()),
+  const defn = () => ({ regex: regex.value, xql: xqlIn.value.trim(), source_type: stype.value, filters: filters.filter((f) => f.field && f.field.trim()),
     group_by: gbSel.value === 'field' ? 'field:' + gbField.value.trim() : gbSel.value, threshold: Number(thr.value), window_minutes: fromUnit(tfN.value, tfU.value),
     mode, run_every_minutes: mode === 'scheduled' ? Number(runEvery.value) : 1, suppression: { enabled: supOn.checked, minutes: fromUnit(supN.value, supU.value) } });
   const body = () => ({ name: name.value, description: desc.value, kind, severity: sev.value, category: cat.value, enabled: !off.checked,
@@ -869,6 +888,7 @@ function openRuleForm(kind, rule, editing) {
   const secs = [
     sec('General', '', fld('Rule name *', name), fld('Rule description', desc)),
     sec('Query', 'Define the ' + KIND_LABEL[kind] + ' rule', el('div', { className: 'seg', style: 'float:right' }, segRT, segSC),
+      fld('XQL condition', xqlIn, 'On xdm.* fields from your data model, e.g. xdm.event.outcome = XDM_CONST.OUTCOME_FAILED. Optional; combined with the match text and filters below (all must match).'),
       fld('Match text (regex)', regex), el('div', { className: 'row2' }, fld('Source type', stype)),
       el('div', { className: 'fld' }, el('span', { className: 'mute', style: 'font-size:12px', textContent: 'Field filters (all must match). Fields: raw, source_type, collector_id, or any parsed field such as host.' }), fbox,
         el('button', { className: 'btn', type: 'button', textContent: '+ Add filter', onclick: () => { filters.push({ field: '', op: 'contains', value: '' }); drawFilters(); } })),
@@ -898,6 +918,8 @@ const BIOC_ICONS = {
   event_log: '<circle cx="32" cy="32" r="20"/><circle cx="32" cy="32" r="10"/><circle cx="32" cy="32" r="3"/><path d="M14 20l-4-3M50 44l4 3M44 14l3-4M20 50l-3 4"/>',
   network_connections: '<circle cx="32" cy="32" r="11"/><circle cx="32" cy="32" r="5"/><path d="M32 4v10M32 50v10M4 32h10M50 32h10M12 12l7 7M45 45l7 7M52 12l-7 7M19 45l-7 7"/>',
 };
+BIOC_ICONS.user = '<circle cx="32" cy="22" r="9"/><path d="M12 54c0-11 9-19 20-19s20 8 20 19"/>';
+BIOC_ICONS.host = '<rect x="10" y="14" width="44" height="30" rx="3"/><path d="M24 54h16M32 44v10"/>';
 const OUTCOMES = ['SUCCESS', 'FAILED', 'PARTIAL', 'UNKNOWN'], EVENT_TYPES_ = ['authentication', 'privilege_use', 'process', 'network_connection', 'dns_query', 'file', 'registry', 'image_load', 'process_injection', 'process_access', 'account_management', 'group_membership', 'scheduled_task', 'service_install', 'log_cleared'];
 const COMMON = [['xdm.target.host.hostname', 'Host'], ['xdm.source.user.username', 'Source user'], ['xdm.target.user.username', 'Target user']];
 const BIOC_TYPES = [
@@ -923,12 +945,158 @@ function genXql(rows, match) {
   return parts.join(match === 'any' ? ' or ' : ' and ');
 }
 
+// ---- BIOC page builder (XSIAM-style): entity blocks with a field grid, add Host / Process blocks ----
+const BB_OPS = [['=', '='], ['!=', '\u2260'], ['contains', 'contains'], ['not contains', 'not contains'], ['~=', 'regex'], ['in', 'in (a, b)'], ['not in', 'not in (a, b)'], ['>', '>'], ['<', '<'], ['is set', 'is set'], ['is empty', 'is empty']];
+const OS_ENUM = ['WINDOWS', 'LINUX', 'MACOS'], DIR_ENUM = ['OUTBOUND', 'INBOUND'];
+const NET_FIELDS = [['SRC_IP', 'xdm.source.ipv4'], ['SRC_PORT', 'xdm.source.port'], ['DST_IP', 'xdm.target.ipv4'], ['DST_PORT', 'xdm.target.port'], ['DST_NAME', 'xdm.target.fqdn'], ['PROTOCOL', 'xdm.network.ip_protocol']];
+// field grids per entity: [LABEL, xdm field, optional list of allowed values]
+const BB_ENT = {
+  process: { icon: 'process', fields: [['NAME', 'xdm.target.process.name'], ['PATH', 'xdm.target.process.executable.path'], ['CMD', 'xdm.target.process.command_line'], ['SHA256', 'xdm.target.process.executable.sha256'], ['USER_NAME', 'xdm.source.user.username'], ['PID', 'xdm.target.process.pid']] },
+  src_process: { icon: 'process', fields: [['NAME', 'xdm.source.process.name'], ['PATH', 'xdm.source.process.executable.path'], ['CMD', 'xdm.source.process.command_line'], ['PID', 'xdm.source.process.pid']] },
+  file: { icon: 'file', fields: [['PATH', 'xdm.target.file.path'], ['NAME', 'xdm.target.file.filename'], ['SHA256', 'xdm.target.file.sha256']] },
+  network: { icon: 'network', fields: NET_FIELDS },
+  connection: { icon: 'network_connections', fields: [...NET_FIELDS, ['DIRECTION', 'xdm.network.direction', DIR_ENUM], ['OUTCOME', 'xdm.event.outcome', OUTCOMES], ['AUTH_METHOD', 'xdm.auth.auth_method'], ['LOGON_TYPE', 'xdm.auth.logon_type']] },
+  registry: { icon: 'registry', fields: [['KEY', 'xdm.target.registry.key'], ['VALUE_NAME', 'xdm.target.registry.value'], ['VALUE_DATA', 'xdm.target.registry.data']] },
+  image_load: { icon: 'image_load', fields: [['MODULE_PATH', 'xdm.target.module.path'], ['MODULE_SHA256', 'xdm.target.module.sha256'], ['SIGNATURE_STATUS', 'xdm.target.module.signature_status']] },
+  event: { icon: 'event_log', fields: [['EVENT_TYPE', 'xdm.event.type', EVENT_TYPES_], ['OUTCOME', 'xdm.event.outcome', OUTCOMES], ['OPERATION', 'xdm.event.operation'], ['DESCRIPTION', 'xdm.event.description'], ['ORIGINAL_EVENT_TYPE', 'xdm.event.original_event_type'], ['EVENT_ID', 'xdm.event.id'], ['AUTH_METHOD', 'xdm.auth.auth_method'], ['LOGON_TYPE', 'xdm.auth.logon_type'], ['SOURCE_IP', 'xdm.source.ipv4'], ['GROUP_NAME', 'xdm.target.group.name'], ['SERVICE_NAME', 'xdm.target.service.name'], ['TASK_NAME', 'xdm.target.task.name']] },
+  user: { icon: 'user', fields: [['USER_NAME', 'xdm.source.user.username'], ['USER_DOMAIN', 'xdm.source.user.domain']] },
+  target_user: { icon: 'user', fields: [['USER_NAME', 'xdm.target.user.username'], ['USER_DOMAIN', 'xdm.target.user.domain']] },
+  host: { icon: 'host', fields: [['HOSTNAME', 'xdm.target.host.hostname'], ['OS_FAMILY', 'xdm.target.host.os_family', OS_ENUM], ['COLLECTOR', 'xdm.observer.name']] },
+};
+const ADD_HOST = ['host', 'HOST', 'Host'], ADD_USER = ['user', 'USER', 'User'], ADD_PROC = ['src_process', 'PROCESS', 'Process'];
+// A tile = what the rule watches. `subs` are the checkboxes (none ticked = all); `x` is the XQL each one stands for.
+const BB_TILES = {
+  process: { title: 'PROCESS', main: 'process', defaults: ['execution'], adds: [['src_process', 'PARENT PROCESS', 'Parent Process'], ADD_USER, ADD_HOST],
+    subs: [{ id: 'execution', label: 'Execution', x: 'xdm.event.type in ("process", "privilege_use", "scheduled_task")' }, { id: 'injection', label: 'Injection', x: 'xdm.event.type in ("process_injection", "process_access")' }] },
+  file: { title: 'FILE', main: 'file', defaults: ['create', 'delete'], adds: [ADD_PROC, ADD_USER, ADD_HOST],
+    subs: [{ id: 'create', label: 'Create', x: 'xdm.event.type = "file" and xdm.event.operation = "file_created"' }, { id: 'delete', label: 'Delete', x: 'xdm.event.type = "file" and xdm.event.operation = "file_deleted"' }] },
+  network: { title: 'NETWORK', main: 'network', defaults: ['outgoing', 'incoming'], adds: [ADD_PROC, ADD_HOST],
+    subs: [{ id: 'outgoing', label: 'Outgoing', x: 'xdm.event.type = "network_connection" and xdm.network.direction = "OUTBOUND"' }, { id: 'incoming', label: 'Incoming', x: 'xdm.event.type = "network_connection" and xdm.network.direction = "INBOUND"' }] },
+  image_load: { title: 'IMAGE LOAD', main: 'image_load', defaults: [], adds: [ADD_PROC, ADD_USER, ADD_HOST], base: 'xdm.event.type = "image_load"' },
+  registry: { title: 'REGISTRY', main: 'registry', defaults: ['write', 'create', 'delete', 'rename'], adds: [ADD_PROC, ADD_USER, ADD_HOST],
+    subs: [{ id: 'write', label: 'Write', x: 'xdm.event.type = "registry" and xdm.event.operation = "registry_value_set"' }, { id: 'create', label: 'Create key', x: 'xdm.event.type = "registry" and xdm.event.operation = "registry_key_created"' },
+      { id: 'delete', label: 'Delete', x: 'xdm.event.type = "registry" and xdm.event.operation in ("registry_value_deleted", "registry_key_deleted")' }, { id: 'rename', label: 'Rename', x: 'xdm.event.type = "registry" and xdm.event.operation = "registry_key_renamed"' }] },
+  event_log: { title: 'EVENT LOG', main: 'event', defaults: [], adds: [['user', 'SOURCE USER', 'Source User'], ['target_user', 'TARGET USER', 'Target User'], ADD_HOST] },
+  network_connections: { title: 'NETWORK CONNECTIONS', main: 'connection', defaults: ['connections', 'logons'], adds: [ADD_PROC, ADD_USER, ADD_HOST],
+    subs: [{ id: 'connections', label: 'Connections', x: 'xdm.event.type = "network_connection"' }, { id: 'logons', label: 'Logons', x: 'xdm.event.type = "authentication"' }] },
+};
+const bbGo = (h) => { if (location.hash === h) route(); else location.hash = h; };
+
+// Pure helpers (also exercised by tests/bioc-builder.test.js)
+const bbFilled = (r) => ['is set', 'is empty'].includes(r.op) || String(r.value ?? '').trim() !== '';
+const bbCount = (st) => st.ents.reduce((n, e) => n + e.rows.filter(bbFilled).length, 0);
+function bbXql(T, st) {
+  const parts = [], subs = T.subs ? (st.subs.length ? T.subs.filter((x) => st.subs.includes(x.id)) : T.subs) : [];
+  if (subs.length === 1) parts.push(subs[0].x); else if (subs.length) parts.push('(' + subs.map((x) => '(' + x.x + ')').join(' or ') + ')'); else if (T.base) parts.push(T.base);
+  st.ents.forEach((e) => { const x = genXql(e.rows, 'all'); if (x) parts.push(x); });
+  return parts.join(' and ');
+}
+
+async function pgBiocBuilder(tid, eid) {
+  const list = await api('/v1/detections/rules?kind=bioc');
+  const clone = !!routeQuery.get('clone');
+  let rule = null;
+  if (eid) { rule = list.rules.find((r) => r.id === eid); if (!rule) throw new Error('Rule not found'); tid = (rule.definition || {}).event_type; }
+  const T = BB_TILES[tid]; if (!T) throw new Error('Unknown BIOC type');
+  const sv = rule && rule.definition && rule.definition.builder && rule.definition.builder.entities ? rule.definition.builder : null;
+  const mkRows = (id, saved) => BB_ENT[id].fields.map(([, field]) => { const x = (saved || []).find((r) => r.field === field); return { field, op: x ? x.op : '=', value: x ? x.value : '' }; });
+  const st = { subs: sv ? (sv.subs || []) : T.defaults.slice(), ents: [] };
+  const savedOf = (id) => { const e = sv && sv.entities.find((x) => x.id === id); return e ? e.rows : null; };
+  st.ents.push({ id: T.main, title: T.title, rows: mkRows(T.main, savedOf(T.main)) });
+  if (sv) sv.entities.filter((e) => e.id !== T.main && BB_ENT[e.id]).forEach((e) => st.ents.push({ id: e.id, title: e.label || e.id.toUpperCase(), rows: mkRows(e.id, e.rows) }));
+
+  const filled = bbFilled;
+  const condCount = () => bbCount(st);
+  const xql = () => bbXql(T, st);
+  const baseDef = () => ({ xql: xql(), event_type: tid, builder: { main: T.main, subs: st.subs, entities: st.ents.map((e) => ({ id: e.id, label: e.title, rows: e.rows.filter(filled).map((r) => ({ field: r.field, op: r.op, value: String(r.value ?? '') })) })) } });
+
+  const preview = el('div', { className: 'bc-pre' }), out = el('div', { className: 'bb-q' }), body = el('div');
+  const upd = () => { preview.textContent = xql() + (condCount() ? '' : '\n(fill in at least one field below to narrow the rule)'); };
+  const number = rule && !clone ? rule.name : 'BIOC-' + (list.rules.length + 1);
+
+  const cell = (e, i) => {
+    const r = e.rows[i], cfg = BB_ENT[e.id].fields[i];
+    const op = selOf(BB_OPS, r.op), v = el('span', { className: 'bb-v' });
+    const drawV = () => {
+      if (['is set', 'is empty'].includes(r.op)) { v.replaceChildren(); return; }
+      if (cfg[2] && ['=', '!='].includes(r.op)) { const s = selOf([['', '']].concat(cfg[2].map((o) => [o, o])), cfg[2].includes(r.value) ? r.value : ''); s.onchange = () => { r.value = s.value; upd(); }; v.replaceChildren(s); }
+      else v.replaceChildren(el('input', { value: r.value || '', spellcheck: false, oninput: (ev) => { r.value = ev.target.value; upd(); } }));
+    };
+    op.onchange = () => { r.op = op.value; drawV(); upd(); }; drawV();
+    return el('div', { className: 'bb-f' }, el('b', { textContent: cfg[0] }), el('div', { className: 'bb-in' }, op, v));
+  };
+  const block = (e, idx) => el('div', { className: 'bb-ent' },
+    el('div', { className: 'bb-eh' }, el('div', { className: 'bb-ico', innerHTML: '<svg viewBox="0 0 64 64">' + BIOC_ICONS[BB_ENT[e.id].icon] + '</svg>' }), el('span', { className: 'bb-et', textContent: e.title }),
+      idx ? el('button', { className: 'btn', style: 'margin-left:14px', type: 'button', textContent: '\u2715', title: 'Remove from the search', onclick: () => { st.ents.splice(idx, 1); draw(); } }) : ''),
+    el('div', { className: 'bb-body' },
+      !idx && T.subs ? el('div', { className: 'bb-subs' }, T.subs.map((sb) => { const c = el('input', { type: 'checkbox', checked: st.subs.includes(sb.id) }); c.onchange = () => { st.subs = c.checked ? st.subs.concat(sb.id) : st.subs.filter((x) => x !== sb.id); upd(); }; return el('label', {}, c, sb.label); })) : el('div', { style: 'height:12px' }),
+      el('div', { className: 'bb-grid' }, e.rows.map((_, i) => cell(e, i)))));
+  const draw = () => {
+    const used = new Set(st.ents.map((e) => e.id));
+    body.replaceChildren(el('div', { className: 'bb' }, el('div', { className: 'bb-id', textContent: number }), st.ents.map(block),
+      el('div', { className: 'bb-add' }, T.adds.filter((a) => !used.has(a[0])).map((a) => el('button', { className: 'bb-card', type: 'button', onclick: () => { st.ents.push({ id: a[0], title: a[1], rows: mkRows(a[0], null) }); draw(); } },
+        el('span', { className: 'bb-plus', textContent: '+' }), el('b', { textContent: a[1] }), el('i', { textContent: 'Add ' + a[2] + ' to your search' })))),
+      el('div', { className: 'bb-q' }, el('div', { className: 'mute', style: 'font-size:12px', textContent: 'Resulting XQL condition' }), preview)));
+    upd();
+  };
+  draw();
+
+  const test = async () => {
+    if (!condCount()) { out.className = 'bb-q err'; out.textContent = 'Fill in at least one field first.'; return; }
+    out.className = 'bb-q mute'; out.textContent = 'Running against the last 24 hours of events...';
+    try {
+      const r = await api('/v1/detections/rules/test', { method: 'POST', body: { definition: { xql: xql(), group_by: 'field:xdm.target.host.hostname', threshold: 1, window_minutes: 1440 } } });
+      out.replaceChildren(el('div', { className: r.alerts_would_raise ? 'ok pill' : 'pill off', textContent: r.alerts_would_raise + ' alert' + (r.alerts_would_raise === 1 ? '' : 's') + ' would be raised in the last 24 hours' }),
+        ...r.groups.slice(0, 5).map((g) => el('div', { className: 'mono', style: 'margin-top:6px', textContent: (g.group === 'all' ? '' : g.group + ' - ') + g.events + ' events' + (g.sample ? ' | ' + g.sample : '') })));
+    } catch (e) { out.className = 'bb-q err'; out.textContent = e.message; }
+  };
+  const save = () => {
+    if (!condCount()) { out.className = 'bb-q err'; out.textContent = 'Fill in at least one field before saving.'; return; }
+    openBiocDetails(rule, !!rule && !clone, baseDef(), clone);
+  };
+  return [body, out, el('div', { className: 'bb-bar' }, el('button', { className: 'btn', textContent: 'Cancel', onclick: () => bbGo('#/threat/bioc') }), el('button', { className: 'btn', textContent: 'Test', onclick: test }), el('button', { className: 'btn pri', textContent: 'Save', onclick: save }))];
+}
+
+// Save dialog for page-built rules: name, severity, MITRE, grouping and suppression.
+function openBiocDetails(rule, editing, baseDef, clone) {
+  const d = (rule && rule.definition) || {}, sup = d.suppression || {}, sd = toUnit(sup.minutes || 60);
+  const name = el('input', { value: rule ? rule.name + (clone ? ' (copy)' : '') : '', placeholder: 'e.g. Encoded PowerShell started by Office' });
+  const desc = el('textarea', { rows: 3, value: rule ? rule.description || '' : '', style: 'width:100%' });
+  const gbOpts = [['none', 'Nothing (one alert for the rule)'], ['field:xdm.target.host.hostname', 'Host'], ['field:xdm.source.ipv4', 'Source IP address'], ['field:xdm.target.user.username', 'Target user'], ['field:xdm.source.user.username', 'Source user']];
+  if (d.group_by && !gbOpts.some((o) => o[0] === d.group_by)) gbOpts.push([d.group_by, d.group_by.replace('field:', '')]);
+  const gb = selOf(gbOpts, d.group_by || 'field:xdm.target.host.hostname');
+  const sev = selOf([['critical', 'Critical'], ['high', 'High'], ['medium', 'Medium'], ['low', 'Low']], rule ? rule.severity : 'medium');
+  const cat = selOf(CATS.map((c) => [c, c]), rule && rule.category ? rule.category : 'Execution');
+  const mitre = el('input', { value: ((rule && rule.mitre) || []).join(', '), placeholder: 'e.g. T1059.001, T1027', style: 'width:320px' });
+  const supOn = el('input', { type: 'checkbox', checked: !!sup.enabled }), supN = el('input', { type: 'number', min: '1', value: sd[0], style: 'width:90px' }), supU = selOf(UNITS, sd[1]);
+  const off = el('input', { type: 'checkbox', checked: rule && !clone ? !rule.enabled : false }), errLine = el('div', { className: 'err', style: 'margin-right:auto' });
+  const sec = (t, sub, ...kids) => el('fieldset', { className: 'fs' }, el('legend', { textContent: t }), sub ? el('div', { className: 'mute', style: 'font-style:italic', textContent: sub }) : '', ...kids);
+  const save = async () => {
+    errLine.textContent = '';
+    const body = { name: name.value, description: desc.value, kind: 'bioc', severity: sev.value, category: cat.value, enabled: !off.checked, mitre: mitre.value.split(',').map((x) => x.trim()).filter(Boolean),
+      definition: { ...baseDef, group_by: gb.value, threshold: 1, window_minutes: 5, mode: 'realtime', run_every_minutes: 1, suppression: { enabled: supOn.checked, minutes: fromUnit(supN.value, supU.value) } } };
+    try { await api('/v1/detections/rules' + (editing ? '/' + rule.id : ''), { method: editing ? 'PUT' : 'POST', body }); ovl.remove(); bbGo('#/threat/bioc'); }
+    catch (e) { errLine.textContent = e.message; }
+  };
+  const ovl = el('div', { className: 'ovl' }, el('div', { className: 'modal', style: 'width:min(760px,94vw);height:auto;max-height:90vh' },
+    el('div', { className: 'mh' }, el('span', { textContent: editing ? 'Edit BIOC' : 'Save BIOC' }), el('button', { className: 'tg', textContent: '\u2715', onclick: () => ovl.remove() })),
+    el('div', { className: 'mbody' }, sec('General', '', fld('BIOC name *', name), fld('Description', desc)),
+      sec('Alert', 'Generate an alert (shown under Cases & Issues). Matching events are checked within a minute; repeats merge into the open alert.',
+        el('div', { className: 'row2' }, fld('Severity *', sev), fld('MITRE tactic *', cat), fld('MITRE techniques', mitre)), el('div', { className: 'row2' }, fld('Group alerts by', gb))),
+      sec('Issue Suppression', 'Do not raise another alert for the same rule and group within a time after the last one',
+        el('label', { style: 'flex-direction:row;align-items:center;gap:8px;margin:12px 0' }, supOn, 'Enable issue suppression'), el('div', { className: 'row2' }, fld('Duration time', el('span', { className: 'row2' }, supN, supU))))),
+    el('div', { className: 'mf' }, errLine, el('label', { style: 'flex-direction:row;align-items:center;gap:6px' }, off, 'Disable'),
+      el('button', { className: 'btn', textContent: 'Cancel', onclick: () => ovl.remove() }), el('button', { className: 'btn pri', textContent: editing ? 'Save' : 'Create', onclick: save }))));
+  document.body.append(ovl);
+}
+
 async function pgBiocNew() {
+  if (routeQuery.get('type') || routeQuery.get('edit')) return pgBiocBuilder(routeQuery.get('type'), routeQuery.get('edit'));
   const f = await api('/v1/search/fields').catch(() => ({ fields: [] }));
   const seen = new Set((f.fields || []).map((x) => x.name));
   const mk = (t) => {
     const live = t.fields.some(([n]) => seen.has(n));
-    return el('button', { className: 'bc-tile', onclick: () => openBiocForm(null, false, t.id) },
+    return el('button', { className: 'bc-tile', onclick: () => { location.hash = '#/threat/bioc?new=1&type=' + t.id; } },
       el('div', { innerHTML: '<svg viewBox="0 0 64 64">' + BIOC_ICONS[t.id] + '</svg>' }), el('b', { textContent: t.title }), el('span', { textContent: t.desc }),
       el('i', { className: live ? 'live' : '', textContent: live ? 'data available' : 'no data mapped yet' }));
   };
@@ -941,9 +1109,10 @@ function openBiocForm(rule, editing, typeId) {
   const d = (rule && rule.definition) || {}, sup = d.suppression || {}, sd = toUnit(sup.minutes || 60);
   const T = BIOC_TYPES.find((t) => t.id === typeId) || null;
   const fields = T ? T.fields : BIOC_TYPES.flatMap((t) => t.fields).filter((x, i, a) => a.findIndex((y) => y[0] === x[0]) === i);
-  let mode = d.builder && T ? 'builder' : (T && !rule ? 'builder' : 'xql');
-  let match = d.builder ? d.builder.match : 'all';
-  let rows = d.builder ? d.builder.rows.map((r) => ({ ...r })) : [{ field: fields[0][0], op: '=', value: '' }];
+  const hasRows = !!(d.builder && d.builder.rows);
+  let mode = hasRows && T ? 'builder' : (T && !rule ? 'builder' : 'xql');
+  let match = hasRows ? d.builder.match : 'all';
+  let rows = hasRows ? d.builder.rows.map((r) => ({ ...r })) : [{ field: fields[0][0], op: '=', value: '' }];
   const name = el('input', { value: rule ? rule.name : '', placeholder: 'e.g. Root login from a new source' });
   const desc = el('textarea', { rows: 2, value: rule ? rule.description || '' : '', style: 'width:100%' });
   const xql = el('textarea', { rows: 5, value: d.xql || '', spellcheck: false, style: 'width:100%;font-family:ui-monospace,Menlo,monospace', placeholder: 'xdm.event.type = "authentication" and xdm.event.outcome = XDM_CONST.OUTCOME_FAILED' });
@@ -1031,7 +1200,10 @@ async function pgRuleList(kind) {
     + '>= ' + d.threshold + ' in ' + d.window_minutes + ' min' + (d.group_by && d.group_by !== 'none' ? ', per ' + d.group_by.replace('field:', '').replace('_', ' ') : '');
   const btn = (t, f) => el('button', { className: 'btn', style: 'margin-right:4px', textContent: t, onclick: f });
   // New-style BIOC rules (XQL condition on xdm.* fields) use the BIOC builder; older regex rules keep the classic form.
-  const open = (x, editing) => (kind === 'bioc' && x.definition && x.definition.xql ? openBiocForm(x, editing, x.definition.event_type || 'xql') : openRuleForm(kind, x, editing));
+  const open = (x, editing) => {
+    if (kind === 'bioc' && x.definition && x.definition.builder && x.definition.builder.entities) { location.hash = '#/threat/bioc?edit=' + x.id + (editing ? '' : '&clone=1'); return; }
+    return kind === 'bioc' && x.definition && x.definition.xql ? openBiocForm(x, editing, x.definition.event_type || 'xql') : openRuleForm(kind, x, editing);
+  };
   const acts = (x) => el('span', { style: 'white-space:nowrap' },
     btn(x.enabled ? 'Disable' : 'Enable', () => act(() => api('/v1/detections/rules/' + x.id, { method: 'PATCH', body: { enabled: !x.enabled } }))),
     btn('Edit', () => open(x, true)),
@@ -1050,7 +1222,7 @@ async function pgRuleList(kind) {
       { h: 'State', f: (x) => pill(x.enabled ? 'enabled' : 'disabled', x.enabled ? 'ok' : 'off') }, { h: '', f: acts }], r.rules, 'No rules yet. Use the button above to add one.'))];
 }
 function pgCorrelations() { return pgRuleList('correlation'); }
-async function pgBioc() { return routeQuery.get('new') ? pgBiocNew() : pgRuleList('bioc'); }
+async function pgBioc() { return routeQuery.get('new') || routeQuery.get('edit') ? pgBiocNew() : pgRuleList('bioc'); }
 async function pgStatus() {
   const h = await health();
   const deps = Object.entries(h.dependencies || {}).concat([['asix-api', h.status === 'ok' ? 'ok' : 'error']]);
