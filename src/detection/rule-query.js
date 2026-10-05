@@ -14,6 +14,7 @@ const COLUMN_FIELDS = new Set(['raw', 'source_type', 'collector_id']);
 const FIELD_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 const OPS = ['contains', 'equals', 'not_equals', 'regex'];
 const { compileCondition, XqlError } = require('../search/xql');
+const ID_RE = /^[a-z_]{1,30}$/;
 const BUILDER_OPS = ['=', '!=', 'contains', 'not contains', '~=', 'in', 'not in', '>', '<', 'is set', 'is empty'];
 const EVENT_TYPES = ['process', 'file', 'network', 'image_load', 'registry', 'event_log', 'network_connections'];
 const RUN_EVERY = [1, 5, 15, 30, 60];
@@ -50,11 +51,25 @@ function normalizeDefinition(input) {
     try { compileCondition(out.xql, [null]); } catch (e) { if (e instanceof XqlError) return { error: 'XQL condition: ' + e.message }; throw e; }
   }
   if (d.event_type && EVENT_TYPES.includes(d.event_type)) out.event_type = d.event_type;
-  // The portal's BIOC builder keeps its rows so a rule can be reopened in the builder.
-  if (d.builder && Array.isArray(d.builder.rows) && d.builder.rows.length <= 20) {
-    const rows = d.builder.rows.filter((r) => r && FIELD_RE.test(String(r.field || '')) && BUILDER_OPS.includes(r.op))
+  // The portal's BIOC builders keep their inputs so a rule can be reopened in the same builder:
+  //   builder.rows      - the condition-list builder (match any/all)
+  //   builder.entities  - the page builder (Process / File / ... blocks with a field grid)
+  if (d.builder && typeof d.builder === 'object') {
+    const cleanRows = (rows) => (Array.isArray(rows) ? rows : []).slice(0, 30)
+      .filter((r) => r && FIELD_RE.test(String(r.field || '')) && BUILDER_OPS.includes(r.op))
       .map((r) => ({ field: String(r.field), op: r.op, value: String(r.value ?? '').slice(0, 500) }));
-    if (rows.length) out.builder = { match: d.builder.match === 'any' ? 'any' : 'all', rows };
+    const b = {};
+    const rows = Array.isArray(d.builder.rows) && d.builder.rows.length <= 20 ? cleanRows(d.builder.rows) : [];
+    if (rows.length) { b.match = d.builder.match === 'any' ? 'any' : 'all'; b.rows = rows; }
+    if (Array.isArray(d.builder.entities) && d.builder.entities.length && d.builder.entities.length <= 8) {
+      const ents = d.builder.entities.filter((e) => e && ID_RE.test(String(e.id || ''))).map((e) => ({ id: String(e.id), label: String(e.label || '').slice(0, 40), rows: cleanRows(e.rows) }));
+      if (ents.length) {
+        b.entities = ents;
+        b.main = ID_RE.test(String(d.builder.main || '')) ? String(d.builder.main) : ents[0].id;
+        b.subs = (Array.isArray(d.builder.subs) ? d.builder.subs : []).filter((x) => ID_RE.test(String(x))).slice(0, 12).map(String);
+      }
+    }
+    if (b.rows || b.entities) out.builder = b;
   }
   if (!out.regex && !out.source_type && !out.filters.length && !out.xql) return { error: 'Add a condition, match text, a source type or at least one filter' };
 
