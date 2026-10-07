@@ -152,6 +152,16 @@ if ! $K kubectl -n "$NAMESPACE" get secret broker-ingest-secret &>/dev/null; the
   echo "   as INGEST_API_TOKEN; treat it like the HEC token it's modeled on)"
 fi
 
+# Encryption key for notification-channel secrets (SMTP password, webhook URLs/tokens).
+# Created once and never rotated automatically: losing it makes saved channels undecryptable.
+if ! $K kubectl -n "$NAMESPACE" get secret asix-notify-secret &>/dev/null; then
+  NOTIFY_KEY="$(openssl rand -base64 32)"
+  $K kubectl -n "$NAMESPACE" create secret generic asix-notify-secret --from-literal=NOTIFY_ENCRYPTION_KEY="$NOTIFY_KEY"
+  echo "$NOTIFY_KEY" > /root/asix-notify-key.txt
+  chmod 600 /root/asix-notify-key.txt
+  echo "Generated notification encryption key -> k8s secret 'asix-notify-secret' (copy kept in /root/asix-notify-key.txt - back it up)"
+fi
+
 echo "== 6/9: Deploying PostgreSQL =="
 $K kubectl apply -f "$K8S_DIR/10-postgresql.yaml"
 $K kubectl -n "$NAMESPACE" rollout status statefulset/postgresql --timeout=180s
@@ -211,7 +221,8 @@ else
 fi
 
 echo "== 8/9: Deploying Keycloak and asix-api =="
-sed "s|asix-api:local|${IMAGE_TAG}|g" "$K8S_DIR/30-asix-api.yaml" | $K kubectl apply -f -
+PUBLIC_URL="${ASIX_PUBLIC_URL:-https://$(hostname -I | awk '{print $1}'):30443}"
+sed -e "s|asix-api:local|${IMAGE_TAG}|g" -e "s|__ASIX_PUBLIC_URL__|${PUBLIC_URL}|g" "$K8S_DIR/30-asix-api.yaml" | $K kubectl apply -f -
 
 echo "== Waiting for rollout =="
 $K kubectl -n "$NAMESPACE" rollout status deployment/keycloak --timeout=180s

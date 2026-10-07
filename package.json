@@ -6,6 +6,7 @@
   "dependencies": {
     "express": "^5.2.1",
     "jose": "^6.2.12",
+    "nodemailer": "^10.0.14",
     "pg": "^8.23.0"
   },
   "scripts": {
