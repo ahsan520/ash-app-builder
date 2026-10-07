@@ -234,6 +234,9 @@ const SETTINGS = [
   { id: 'access', label: 'Users & roles', page: pgAccess },
   { id: 'tenants', label: 'Tenants', soon: true },
   { id: 'apikeys', label: 'API keys & service accounts', soon: true },
+  { group: 'Notifications' },
+  { id: 'notify', label: 'Notification channels', page: pgNotify },
+  { id: 'deliveries', label: 'Delivery log', page: pgDeliveries },
   { group: 'Compliance' },
   { id: 'audit', label: 'Audit log', soon: true },
   { id: 'ai', label: 'AI providers', soon: true },
@@ -766,6 +769,107 @@ async function pgInstallers() {
         k.status === 'active' ? el('button', { className: 'btn', textContent: 'Revoke', onclick: () => { if (confirm('Revoke "' + k.name + '"? Senders using this key will be rejected immediately.')) act(() => api('/v1/ingestion-keys/' + k.id + '/revoke', { method: 'POST' })); } }) : '', ' ',
         el('button', { className: 'btn', textContent: 'Delete', onclick: () => { if (confirm('Delete installer "' + k.name + '"?')) act(() => api('/v1/ingestion-keys/' + k.id, { method: 'DELETE' })); } })) },
     ], r.keys, 'No installers yet. Click Create to add your first.'))];
+}
+
+// ---- Notifications: channels + delivery log ---------------------------------------------
+const NOTIFY_LABEL = { email: 'Email (SMTP)', slack: 'Slack', webhook: 'Webhook' };
+const delivPill = (s) => pill(s, { sent: 'ok', failed: 'bad', pending: 'off', skipped: 'off' }[s] || 'off');
+
+function openChannelDialog(c) {
+  const isNew = !c, cfg = (c && c.config) || {}, set = (c && c.secrets_set) || [];
+  const inp = (props) => el('input', props || {});
+  const fld = (label, node, hint) => el('label', { className: 'fld' }, label, node, hint ? el('span', { className: 'mute', textContent: hint }) : '');
+  const keep = (name) => (set.includes(name) ? '(unchanged - leave blank to keep)' : '');
+  const name = inp({ value: c ? c.name : '', placeholder: 'e.g. soc-slack' });
+  const type = el('select', { disabled: !isNew }, Object.entries(NOTIFY_LABEL).map(([k, v]) => el('option', { value: k, textContent: v })));
+  type.value = c ? c.type : 'slack';
+  const sev = el('select', {}, ['critical', 'high', 'medium', 'low'].map((s) => el('option', { value: s, textContent: s + ' and above' }))); sev.value = c ? c.min_severity : 'high';
+  const rf = inp({ value: (c && c.rule_filter) || '', placeholder: 'optional, e.g. IOC' });
+  const en = el('input', { type: 'checkbox', checked: c ? c.enabled : true });
+  const f = {};   // per-type inputs
+  f.host = inp({ value: cfg.host || '', placeholder: 'smtp.example.com' }); f.port = inp({ type: 'number', value: cfg.port || 587 });
+  f.security = el('select', {}, [['starttls', 'STARTTLS (587)'], ['tls', 'TLS (465)'], ['none', 'None (not recommended)']].map(([v, t]) => el('option', { value: v, textContent: t }))); f.security.value = cfg.security || 'starttls';
+  f.username = inp({ value: cfg.username || '' }); f.password = inp({ type: 'password', placeholder: keep('password'), autocomplete: 'new-password' });
+  f.from = inp({ value: cfg.from || '', placeholder: 'asix@example.com' }); f.to = inp({ value: (cfg.to || []).join(', '), placeholder: 'soc@example.com, oncall@example.com' });
+  f.self = el('input', { type: 'checkbox', checked: !!cfg.allow_self_signed });
+  f.webhook_url = inp({ type: 'password', placeholder: keep('webhook_url') || 'https://hooks.slack.com/services/...', autocomplete: 'off' });
+  f.format = el('select', {}, [['json', 'Generic JSON'], ['teams', 'Microsoft Teams (Workflows)'], ['pagerduty', 'PagerDuty Events v2']].map(([v, t]) => el('option', { value: v, textContent: t }))); f.format.value = cfg.format || 'json';
+  f.url = inp({ type: 'password', placeholder: keep('url') || 'https://...', autocomplete: 'off' });
+  f.headers = el('textarea', { rows: 3, placeholder: 'Authorization: Bearer ...\nX-Source: asix', value: Object.keys(cfg.headers || {}).map((k) => k + ': ').join('\n'), style: 'background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:8px;font:12px ui-monospace,Menlo,monospace' });
+  f.signing = inp({ type: 'password', placeholder: keep('signing_secret') || 'optional', autocomplete: 'off' }); f.routing = inp({ type: 'password', placeholder: keep('routing_key'), autocomplete: 'off' });
+  const typed = el('div'), err = el('div', { className: 'err' });
+  const render = () => {
+    const t = type.value;
+    typed.replaceChildren(...(t === 'email' ? [
+      el('div', { className: 'row2' }, el('div', {}, fld('SMTP host *', f.host), fld('Security', f.security), fld('Username', f.username), fld('From *', f.from)), el('div', {}, fld('Port *', f.port), fld('Password', f.password), fld('To * (comma separated)', f.to), el('label', { className: 'fld' }, 'Allow self-signed certificate', f.self)))]
+      : t === 'slack' ? [fld('Slack incoming-webhook URL *', f.webhook_url, 'Stored encrypted; never shown again.')]
+      : [fld('Format', f.format), fld('Webhook URL *', f.url, 'Stored encrypted; never shown again.'), fld('Extra headers (one per line, Name: value)', f.headers, c ? 'Leave a value blank to keep the stored one.' : ''),
+        fld('Signing secret (optional)', f.signing, 'Adds X-ASIX-Signature = HMAC-SHA256(timestamp.body).'), ...(f.format.value === 'pagerduty' ? [fld('PagerDuty routing key *', f.routing)] : [])]));
+  };
+  type.onchange = render; f.format.onchange = render; render();
+  const config = () => {
+    const t = type.value, o = {}, put = (k, v) => { if (v !== '' && v != null) o[k] = v; };
+    if (t === 'email') { put('host', f.host.value.trim()); o.port = Number(f.port.value); o.security = f.security.value; put('username', f.username.value.trim()); put('password', f.password.value); put('from', f.from.value.trim()); o.to = f.to.value.split(/[,;\s]+/).filter(Boolean); o.allow_self_signed = f.self.checked; }
+    if (t === 'slack') put('webhook_url', f.webhook_url.value.trim());
+    if (t === 'webhook') { o.format = f.format.value; put('url', f.url.value.trim()); put('signing_secret', f.signing.value); put('routing_key', f.routing.value);
+      o.headers = Object.fromEntries(f.headers.value.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const i = l.indexOf(':'); return i < 0 ? [l, ''] : [l.slice(0, i).trim(), l.slice(i + 1).trim()]; })); }
+    return o;
+  };
+  const m = openModal(el('h2', { textContent: isNew ? 'Add notification channel' : 'Edit channel: ' + c.name }),
+    el('div', { className: 'row2' }, el('div', {}, fld('Name *', name), fld('Channel type', type)), el('div', {}, fld('Notify when severity is', sev), fld('Only rules whose name contains', rf))),
+    typed, el('label', { className: 'fld', style: 'flex-direction:row;align-items:center;gap:8px' }, en, 'Enabled'), err);
+  const save = el('button', { className: 'btn pri', textContent: 'Save', onclick: async () => {
+    err.textContent = ''; save.disabled = true;
+    const body = { name: name.value.trim(), min_severity: sev.value, rule_filter: rf.value.trim() || null, enabled: en.checked, config: config() };
+    try {
+      if (isNew) await api('/v1/notifications/channels', { method: 'POST', body: { ...body, type: type.value } });
+      else await api('/v1/notifications/channels/' + c.id, { method: 'PATCH', body });
+      m.close(); route();
+    } catch (e) { err.textContent = e.message; save.disabled = false; }
+  } });
+  m.box.append(el('div', { className: 'actions' }, el('button', { className: 'btn', textContent: 'Cancel', onclick: m.close }), save));
+  name.focus();
+}
+
+async function pgNotify() {
+  const r = await api('/v1/notifications/channels');
+  const act = async (fn) => { try { await fn(); route(); } catch (e) { alert(e.message); } };
+  const test = async (c, b) => { b.disabled = true; b.textContent = 'Sending...'; try { await api('/v1/notifications/channels/' + c.id + '/test', { method: 'POST' }); alert('Test notification sent to "' + c.name + '".'); } catch (e) { alert('Test failed: ' + e.message); } b.disabled = false; b.textContent = 'Test'; };
+  return [el('div', { style: 'display:flex;align-items:baseline;gap:12px' }, el('h2', { textContent: 'Notification channels' }), el('span', { className: 'mute', textContent: 'Found ' + r.channels.length + ' results' }),
+      el('button', { className: 'btn pri', style: 'margin-left:auto', textContent: 'Add channel', onclick: () => openChannelDialog(null) })),
+    el('p', { className: 'desc', textContent: 'Get new alerts in email, Slack or any webhook (Teams, PagerDuty, your own). Only alerts raised after a channel is created are sent. Failed deliveries are retried after 1 min, 5 min, 15 min and 1 hour, then shown in the Delivery log.' }),
+    r.encryption_configured ? '' : card('', el('div', { className: 'err', textContent: 'The server has no notification encryption key, so channels cannot be saved or delivered. Run the deploy again (it creates the key), then reload.' })),
+    card('', table([
+      { h: 'Name', f: (c) => c.name }, { h: 'Type', f: (c) => pill(NOTIFY_LABEL[c.type] || c.type) }, { h: 'State', f: (c) => pill(c.enabled ? 'Enabled' : 'Disabled', c.enabled ? 'ok' : 'off') },
+      { h: 'Notify when', f: (c) => el('span', {}, sevPill(c.min_severity), ' and above', c.rule_filter ? el('span', { className: 'mute', textContent: '  |  rule contains "' + c.rule_filter + '"' }) : '') },
+      { h: 'Target', cls: 'mono', f: (c) => c.target }, { h: 'Last delivery', f: (c) => (c.last_delivery_status ? el('span', {}, delivPill(c.last_delivery_status), ' ', el('span', { className: 'mute', textContent: when(c.last_delivery_at) })) : 'none yet') },
+      { h: '', f: (c) => el('span', { style: 'white-space:nowrap' },
+        el('button', { className: 'btn', textContent: 'Test', onclick: (e) => test(c, e.target) }), ' ', el('button', { className: 'btn', textContent: 'Edit', onclick: () => openChannelDialog(c) }), ' ',
+        el('button', { className: 'btn', textContent: c.enabled ? 'Disable' : 'Enable', onclick: () => act(() => api('/v1/notifications/channels/' + c.id, { method: 'PATCH', body: { enabled: !c.enabled } })) }), ' ',
+        el('button', { className: 'btn', textContent: 'Delete', onclick: () => { if (confirm('Delete channel "' + c.name + '" and its delivery history?')) act(() => api('/v1/notifications/channels/' + c.id, { method: 'DELETE' })); } })) },
+    ], r.channels, 'No channels yet. Click "Add channel" to send alerts to email, Slack or a webhook.'))];
+}
+
+let delF = { status: '', offset: 0 };
+async function pgDeliveries() {
+  const PAGE = 50, p = new URLSearchParams({ limit: PAGE, offset: delF.offset }); if (delF.status) p.set('status', delF.status);
+  const r = await api('/v1/notifications/deliveries?' + p);
+  const act = async (fn) => { try { await fn(); route(); } catch (e) { alert(e.message); } };
+  const st = el('select', { onchange: () => { delF = { status: st.value, offset: 0 }; route(); } }, [['', 'Status: all'], ['sent', 'Sent'], ['pending', 'Pending'], ['failed', 'Failed'], ['skipped', 'Skipped']].map(([v, t]) => el('option', { value: v, textContent: t })));
+  st.value = delF.status;
+  return [el('div', { style: 'display:flex;align-items:baseline;gap:12px' }, el('h2', { textContent: 'Delivery log' }), el('span', { className: 'mute', textContent: r.total.toLocaleString() + ' deliveries' })),
+    el('p', { className: 'desc', textContent: 'Every attempt to send an alert to a channel. Failed deliveries can be retried by hand.' }),
+    card('', el('div', { style: 'display:flex;gap:8px;margin-bottom:12px' }, st, el('button', { className: 'btn', textContent: 'Refresh', onclick: () => route() })),
+      table([
+        { h: 'Queued (UTC)', f: (d) => when(d.created_at) }, { h: 'Channel', f: (d) => d.channel_name + ' (' + (NOTIFY_LABEL[d.channel_type] || d.channel_type) + ')' },
+        { h: 'Alert', f: (d) => el('span', {}, sevPill(d.severity), ' ', d.title) }, { h: 'Status', f: (d) => delivPill(d.status) }, { h: 'Attempts', f: (d) => d.attempts },
+        { h: 'Sent / next try (UTC)', f: (d) => (d.status === 'sent' ? when(d.sent_at) : d.status === 'pending' ? when(d.next_attempt_at) : '-') }, { h: 'Error', cls: 'mono', f: (d) => d.last_error || '' },
+        { h: '', f: (d) => (d.status === 'failed' || d.status === 'skipped' ? el('button', { className: 'btn', textContent: 'Retry', onclick: () => act(() => api('/v1/notifications/deliveries/' + d.id + '/retry', { method: 'POST' })) }) : '') },
+      ], r.deliveries, 'No deliveries yet. They appear when an alert matches an enabled channel.'),
+      el('div', { className: 'pager' },
+        el('button', { className: 'btn', textContent: 'Prev', disabled: delF.offset === 0, onclick: () => { delF.offset = Math.max(0, delF.offset - PAGE); route(); } }),
+        el('span', { className: 'mute', textContent: r.total ? (delF.offset + 1) + '-' + Math.min(delF.offset + PAGE, r.total) + ' of ' + r.total : '' }),
+        el('button', { className: 'btn', textContent: 'Next', disabled: delF.offset + PAGE >= r.total, onclick: () => { delF.offset += PAGE; route(); } })))];
 }
 
 // ---- Threat intelligence pages ---------------------------------------------------------
