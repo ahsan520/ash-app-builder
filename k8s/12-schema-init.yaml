@@ -453,6 +453,58 @@ data:
     GRANT SELECT, INSERT, UPDATE, DELETE ON ingestion_keys TO asix_admin;
     GRANT SELECT, INSERT, UPDATE, DELETE ON collectors TO asix_admin;
 
+    -- ============================================================
+    -- Alert notifications: channels (email / Slack / webhook) and the delivery outbox
+    -- ============================================================
+
+    CREATE TABLE IF NOT EXISTS notification_channels (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) NOT NULL,
+        name VARCHAR(100) NOT NULL,
+        type VARCHAR(20) NOT NULL,
+        enabled BOOLEAN NOT NULL DEFAULT true,
+        min_severity VARCHAR(20) NOT NULL DEFAULT 'high',
+        rule_filter VARCHAR(100),
+        config_enc TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (tenant_id, name)
+    );
+
+    CREATE TABLE IF NOT EXISTS notification_deliveries (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) NOT NULL,
+        channel_id UUID REFERENCES notification_channels(id) ON DELETE CASCADE NOT NULL,
+        alert_id UUID REFERENCES alerts(id) ON DELETE CASCADE NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TIMESTAMP NOT NULL DEFAULT localtimestamp,
+        last_error TEXT,
+        sent_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (channel_id, alert_id)
+    );
+
+    ALTER TABLE notification_channels ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS notification_channels_tenant_isolation ON notification_channels;
+    CREATE POLICY notification_channels_tenant_isolation ON notification_channels
+        FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    ALTER TABLE notification_deliveries ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS notification_deliveries_tenant_isolation ON notification_deliveries;
+    CREATE POLICY notification_deliveries_tenant_isolation ON notification_deliveries
+        FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    CREATE INDEX IF NOT EXISTS idx_notif_deliveries_due ON notification_deliveries(tenant_id, status, next_attempt_at);
+    CREATE INDEX IF NOT EXISTS idx_notif_deliveries_channel ON notification_deliveries(channel_id, created_at);
+
+    GRANT SELECT, INSERT, UPDATE, DELETE ON notification_channels TO asix_admin;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON notification_deliveries TO asix_admin;
+
     -- Parsing rules: one user-defined ruleset per tenant (XQL-style text, validated on save).
     CREATE TABLE IF NOT EXISTS parsing_rules (
         tenant_id UUID PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,

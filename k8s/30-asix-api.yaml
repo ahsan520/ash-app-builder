@@ -41,6 +41,20 @@ spec:
                 secretKeyRef:
                   name: broker-ingest-secret
                   key: BROKER_INGEST_TOKEN
+            # Notification channels: AES key for stored secrets (created by deploy.sh)
+            - name: NOTIFY_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: asix-notify-secret
+                  key: NOTIFY_ENCRYPTION_KEY
+                  optional: true
+            # "true" lets webhooks / SMTP target private networks (RFC1918). Loopback, link-local
+            # and cloud-metadata addresses stay blocked either way.
+            - name: NOTIFY_ALLOW_PRIVATE_TARGETS
+              value: "false"
+            # Base URL used for "Open in ASIX" links in notifications (filled in by deploy.sh)
+            - name: ASIX_PUBLIC_URL
+              value: "__ASIX_PUBLIC_URL__"
           resources:
             requests:
               cpu: "250m"
