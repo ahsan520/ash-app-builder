@@ -505,6 +505,146 @@ data:
     GRANT SELECT, INSERT, UPDATE, DELETE ON notification_channels TO asix_admin;
     GRANT SELECT, INSERT, UPDATE, DELETE ON notification_deliveries TO asix_admin;
 
+    -- ============================================================
+    -- Storage & retention
+    --   * events becomes a table partitioned by DAY (received_at). Old data is removed by
+    --     dropping whole partitions (instant, frees disk at once) or, for shorter per-source
+    --     rules, by batched deletes. New partitions are created ahead of time by the API.
+    --   * retention settings/policies per tenant, and a log of purge runs.
+    -- ============================================================
+
+    CREATE TABLE IF NOT EXISTS retention_settings (
+        tenant_id UUID PRIMARY KEY REFERENCES tenants(id),
+        auto_purge BOOLEAN NOT NULL DEFAULT false,
+        default_days INTEGER NOT NULL DEFAULT 90 CHECK (default_days BETWEEN 1 AND 3650),
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_by TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS retention_policies (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) NOT NULL,
+        source_type VARCHAR(100) NOT NULL,
+        retention_days INTEGER CHECK (retention_days IS NULL OR retention_days BETWEEN 1 AND 3650),
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (tenant_id, source_type)
+    );
+
+    CREATE TABLE IF NOT EXISTS retention_runs (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id),
+        trigger VARCHAR(20) NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'running',
+        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        finished_at TIMESTAMP,
+        partitions_dropped INTEGER NOT NULL DEFAULT 0,
+        rows_deleted BIGINT NOT NULL DEFAULT 0,
+        detail JSONB,
+        error TEXT
+    );
+
+    ALTER TABLE retention_settings ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS retention_settings_tenant_isolation ON retention_settings;
+    CREATE POLICY retention_settings_tenant_isolation ON retention_settings FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+    ALTER TABLE retention_policies ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS retention_policies_tenant_isolation ON retention_policies;
+    CREATE POLICY retention_policies_tenant_isolation ON retention_policies FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+    ALTER TABLE retention_runs ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS retention_runs_tenant_isolation ON retention_runs;
+    CREATE POLICY retention_runs_tenant_isolation ON retention_runs FOR ALL TO PUBLIC
+        USING (tenant_id IS NULL OR tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id IS NULL OR tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    CREATE INDEX IF NOT EXISTS idx_retention_runs_started ON retention_runs(started_at DESC);
+    GRANT SELECT, INSERT, UPDATE, DELETE ON retention_settings TO asix_admin;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON retention_policies TO asix_admin;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON retention_runs TO asix_admin;
+
+    -- One-time, atomic conversion of events to a daily-partitioned table. The block either
+    -- completes (row counts verified, old table dropped) or rolls back and fails the deploy,
+    -- leaving the original table untouched. deploy.sh takes a pg_dump just before this runs.
+    -- Skipped (with a NOTICE) when the table is very large: raise the limit or force it with
+    --   PGOPTIONS='-c asix.force_partition_migration=on'
+    DO $mig$
+    DECLARE
+        kind "char";
+        n BIGINT;
+        mn DATE;
+        mx DATE;
+        d DATE;
+        idx RECORD;
+        max_rows BIGINT := COALESCE(NULLIF(current_setting('asix.partition_migration_max_rows', true), '')::bigint, 2000000);
+        forced BOOLEAN := COALESCE(current_setting('asix.force_partition_migration', true), '') = 'on';
+    BEGIN
+        SELECT c.relkind INTO kind FROM pg_class c WHERE c.oid = 'public.events'::regclass;
+        IF kind = 'p' THEN
+            RETURN;
+        END IF;
+        SELECT count(*), min(received_at)::date, max(received_at)::date INTO n, mn, mx FROM events;
+        IF NOT forced AND n > max_rows THEN
+            RAISE NOTICE 'events has % rows (> %): automatic partition migration skipped. Retention still works (row deletes only).', n, max_rows;
+            RETURN;
+        END IF;
+        IF NOT forced AND mn IS NOT NULL AND (mx - mn) > 400 THEN
+            RAISE NOTICE 'events spans % days (> 400): automatic partition migration skipped.', (mx - mn);
+            RETURN;
+        END IF;
+
+        ALTER TABLE events RENAME TO events_unpartitioned;
+        FOR idx IN SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'events_unpartitioned' LOOP
+            EXECUTE format('ALTER INDEX %I RENAME TO %I', idx.indexname, 'old_' || idx.indexname);
+        END LOOP;
+
+        CREATE TABLE events (
+            id UUID NOT NULL DEFAULT uuid_generate_v4(),
+            tenant_id UUID REFERENCES tenants(id) NOT NULL,
+            source_type VARCHAR(100) NOT NULL,
+            collector_id VARCHAR(255),
+            received_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            event_time TIMESTAMP,
+            raw TEXT NOT NULL,
+            parsed JSONB DEFAULT '{}'::jsonb,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id, received_at)
+        ) PARTITION BY RANGE (received_at);
+
+        CREATE TABLE events_default PARTITION OF events DEFAULT;
+
+        FOR d IN SELECT (generate_series(LEAST(COALESCE(mn, CURRENT_DATE), CURRENT_DATE - 1), GREATEST(COALESCE(mx, CURRENT_DATE), CURRENT_DATE) + 7, interval '1 day'))::date LOOP
+            EXECUTE format('CREATE TABLE %I PARTITION OF events FOR VALUES FROM (%L) TO (%L)',
+                           'events_p' || to_char(d, 'YYYYMMDD'), d, d + 1);
+        END LOOP;
+
+        INSERT INTO events (id, tenant_id, source_type, collector_id, received_at, event_time, raw, parsed, created_at)
+            SELECT id, tenant_id, source_type, collector_id, COALESCE(received_at, created_at, localtimestamp), event_time, raw, parsed, created_at
+            FROM events_unpartitioned;
+
+        IF (SELECT count(*) FROM events) <> n THEN
+            RAISE EXCEPTION 'events partition migration: row count mismatch (expected %)', n;
+        END IF;
+        DROP TABLE events_unpartitioned;
+        RAISE NOTICE 'events converted to a daily-partitioned table (% rows moved)', n;
+    END
+    $mig$;
+
+    -- (Re)create everything that hangs off events; all of this is idempotent.
+    ALTER TABLE events ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS events_tenant_isolation ON events;
+    CREATE POLICY events_tenant_isolation ON events
+        FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+    CREATE INDEX IF NOT EXISTS idx_events_tenant_id ON events(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_events_event_time ON events(event_time);
+    CREATE INDEX IF NOT EXISTS idx_events_source_type ON events(source_type);
+    CREATE INDEX IF NOT EXISTS idx_events_parsed_gin ON events USING GIN (parsed);
+    CREATE INDEX IF NOT EXISTS idx_events_tenant_received ON events(tenant_id, received_at, id);
+    GRANT SELECT, INSERT, UPDATE, DELETE ON events TO asix_admin;
+
     -- Parsing rules: one user-defined ruleset per tenant (XQL-style text, validated on save).
     CREATE TABLE IF NOT EXISTS parsing_rules (
         tenant_id UUID PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
