@@ -229,7 +229,7 @@ const SETTINGS = [
   { id: 'installers', label: 'Installers', page: pgInstallers },
   { id: 'parsing', label: 'Parsing rules', page: pgParsing },
   { id: 'datamodel', label: 'Data model rules', page: pgDataModel },
-  { id: 'retention', label: 'Storage & retention', soon: true },
+  { id: 'retention', label: 'Storage & retention', page: pgStorage },
   { group: 'Access' },
   { id: 'access', label: 'Users & roles', page: pgAccess },
   { id: 'tenants', label: 'Tenants', soon: true },
@@ -870,6 +870,84 @@ async function pgDeliveries() {
         el('button', { className: 'btn', textContent: 'Prev', disabled: delF.offset === 0, onclick: () => { delF.offset = Math.max(0, delF.offset - PAGE); route(); } }),
         el('span', { className: 'mute', textContent: r.total ? (delF.offset + 1) + '-' + Math.min(delF.offset + PAGE, r.total) + ' of ' + r.total : '' }),
         el('button', { className: 'btn', textContent: 'Next', disabled: delF.offset + PAGE >= r.total, onclick: () => { delF.offset += PAGE; route(); } })))];
+}
+
+// ---- Storage & retention ----------------------------------------------------------------------
+const fmtSize = (n) => { n = Number(n) || 0; const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0; while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; } return (i === 0 ? n : n.toFixed(n >= 100 ? 0 : 1)) + ' ' + u[i]; };
+let storagePreview = null, storageMsg = '';
+
+function dailyBars(daily) {
+  const W = 560, H = 90, max = Math.max(1, ...daily.map((d) => d.n)), bw = W / daily.length;
+  const root = svg('svg', { viewBox: `0 0 ${W} ${H + 18}`, style: 'width:100%;max-width:640px;height:auto' });
+  daily.forEach((d, i) => {
+    const bh = Math.max(d.n ? 2 : 0, (H - 4) * d.n / max);
+    root.append(svg('rect', { x: i * bw + 3, y: H - bh, width: bw - 6, height: bh, rx: 2, fill: 'var(--acc)', opacity: i === daily.length - 1 ? 0.55 : 0.9 }, svg('title', {}, document.createTextNode(d.day + ': ' + d.n.toLocaleString() + ' events'))));
+  });
+  [[0, 'start'], [daily.length - 1, 'end']].forEach(([i, a]) => { const t = svg('text', { x: a === 'start' ? 0 : W, y: H + 14, 'text-anchor': a, 'font-size': 11, fill: 'var(--mute)' }); t.textContent = daily[i].day.slice(5); root.append(t); });
+  return root;
+}
+
+async function pgStorage() {
+  const [sum, ret] = await Promise.all([api('/v1/storage/summary'), api('/v1/storage/retention')]);
+  const pol = ret.policy, act = async (fn) => { try { await fn(); } catch (e) { alert(e.message); } route(); };
+  const msg = storageMsg; storageMsg = '';
+
+  // --- retention form
+  const days = el('input', { type: 'number', min: 1, max: 3650, value: pol.default_days, style: 'width:90px' });
+  const rows = pol.overrides.map((o) => ({ source_type: o.source_type, days: o.retention_days }));
+  const ovBox = el('div');
+  const drawOv = () => {
+    ovBox.replaceChildren(rows.length ? table([
+      { h: 'Source type', f: (r) => r.source_type },
+      { h: 'Keep for (days)', f: (r) => { const i = el('input', { type: 'number', min: 1, max: 3650, value: r.days ?? '', disabled: r.days === null, style: 'width:90px', oninput: () => { r.days = i.value === '' ? 1 : Number(i.value); } }); return i; } },
+      { h: 'Keep forever', f: (r) => el('input', { type: 'checkbox', checked: r.days === null, onchange: (e) => { r.days = e.target.checked ? null : pol.default_days; drawOv(); } }) },
+      { h: '', f: (r) => el('button', { className: 'btn', textContent: 'Remove', onclick: () => { rows.splice(rows.indexOf(r), 1); drawOv(); } }) },
+    ], rows) : el('div', { className: 'mute', textContent: 'No per-source rules: every source type follows the default.' }));
+  };
+  drawOv();
+  const known = ret.known_sources.filter((s) => !rows.some((r) => r.source_type === s));
+  const pick = el('input', { placeholder: 'source type, e.g. syslog', style: 'width:200px' }); pick.setAttribute('list', 'srclist');   // input.list is read-only: must be an attribute
+  const dl = el('datalist', { id: 'srclist' }, known.map((s) => el('option', { value: s })));
+  const addOv = el('button', { className: 'btn', textContent: 'Add rule', onclick: () => { const v = pick.value.trim(); if (!/^[A-Za-z0-9._-]{1,100}$/.test(v)) return alert('Enter a valid source type.'); if (rows.some((r) => r.source_type === v)) return alert('That source already has a rule.'); rows.push({ source_type: v, days: pol.default_days }); pick.value = ''; drawOv(); } });
+  const save = el('button', { className: 'btn pri', textContent: 'Save retention rules', onclick: () => act(async () => { await api('/v1/storage/retention', { method: 'PUT', body: { default_days: Number(days.value), overrides: rows.map((r) => ({ source_type: r.source_type, retention_days: r.days })) } }); storageMsg = 'Retention rules saved.'; storagePreview = null; }) });
+  const toggle = el('button', { className: 'btn' + (pol.auto_purge ? '' : ' pri'), textContent: pol.auto_purge ? 'Switch off' : 'Switch on automatic purge', onclick: () => {
+    if (!pol.auto_purge && !confirm('Automatic purge permanently deletes events older than your retention rules, checked every hour. Deleted data cannot be recovered (only from database backups).\n\nSwitch it on?')) return;
+    act(async () => { await api('/v1/storage/retention', { method: 'PUT', body: { auto_purge: !pol.auto_purge } }); storageMsg = 'Automatic purge is now ' + (pol.auto_purge ? 'OFF.' : 'ON.'); }); } });
+
+  // --- preview / purge
+  const pv = storagePreview;
+  const previewBtn = el('button', { className: 'btn', textContent: 'Check what would be deleted', onclick: () => act(async () => { storagePreview = await api('/v1/storage/retention/run', { method: 'POST', body: { dry_run: true } }); }) });
+  const purgeBtn = el('button', { className: 'btn', textContent: 'Purge now', disabled: !pv || !pv.total, onclick: () => {
+    if (!confirm('Permanently delete ' + pv.total.toLocaleString() + ' events that are past retention?\n\nThis cannot be undone.')) return;
+    act(async () => { const r = await api('/v1/storage/retention/run', { method: 'POST', body: { dry_run: false, confirm: true } }); storageMsg = 'Purge finished: ' + r.rows_deleted.toLocaleString() + ' events deleted' + (r.truncated ? ' (time limit reached - run again to continue).' : '.'); storagePreview = null; }); } });
+
+  const today = new Date(Date.now() - pol.default_days * 86400000).toISOString().slice(0, 10);
+  const stat = (v, l) => card('', el('div', { className: 'stat' }, v, el('small', { textContent: l })));
+  return [...head('Storage & retention', 'Where your event data lives, how fast it grows, and how long it is kept. Events are stored in PostgreSQL, one partition per day.'),
+    msg ? card('', el('span', { className: 'pill ok', textContent: msg })) : '',
+    sum.partitioned ? '' : card('', el('div', { className: 'warn', textContent: 'The events table is not partitioned (it was too large or spanned too many days for the automatic migration). Retention still works by deleting rows, but disk space is only reclaimed after the database vacuums. See the schema notes to force the migration.' })),
+    sum.default_partition_rows ? card('', el('div', { className: 'warn', textContent: sum.default_partition_rows.toLocaleString() + ' events sit in the catch-all partition (their dates fall outside the normal range). The next hourly maintenance moves them out.' })) : '',
+    el('div', { className: 'grid' }, stat(fmtSize(sum.database_bytes), 'whole database'), stat(sum.events_rows.toLocaleString(), 'events stored'), stat(fmtSize(sum.events_bytes), 'events table + indexes'),
+      stat(sum.oldest ? when(sum.oldest).slice(0, 10) : '-', 'oldest event'), stat(sum.partitioned ? String(sum.partitions.length) : '-', 'daily partitions')),
+    card('Events received per day (last 14 days)', dailyBars(sum.daily)),
+    card('Retention rules',
+      el('div', { style: 'display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap' }, el('span', { textContent: 'Automatic purge' }), pill(pol.auto_purge ? 'ON' : 'OFF', pol.auto_purge ? 'ok' : 'off'), toggle,
+        el('span', { className: 'mute', textContent: pol.auto_purge ? 'Checked every hour.' : 'Nothing is deleted automatically until you switch this on.' })),
+      el('div', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:12px' }, 'Keep events for', days, 'days by default', pol.configured ? '' : el('span', { className: 'mute', textContent: '(not saved yet; system default is ' + ret.system_default_days + ')' })),
+      el('div', { className: 'mute', style: 'margin:6px 0' }, 'Per-source rules override the default (for example keep authentication logs longer, or noisy logs shorter):'), ovBox,
+      el('div', { style: 'display:flex;gap:8px;margin:10px 0;align-items:center' }, pick, dl, addOv), save),
+    card('Preview and purge', el('div', { style: 'display:flex;gap:8px;margin-bottom:12px' }, previewBtn, purgeBtn),
+      pv ? (pv.total ? el('div', {}, el('div', { className: 'mute', style: 'margin-bottom:8px', textContent: pv.total.toLocaleString() + ' events are past retention right now:' }),
+        table([{ h: 'Source type', f: (r) => r.source_type }, { h: 'Events to delete', f: (r) => r.events.toLocaleString() }, { h: 'Oldest (UTC)', f: (r) => when(r.oldest) }], pv.by_source))
+        : el('div', { className: 'ok pill', textContent: 'Nothing is past retention.' })) : el('div', { className: 'mute', textContent: 'Run the check to see what a purge would remove. It deletes nothing.' })),
+    sum.partitioned ? card('Daily partitions (newest first)', table([
+      { h: 'Day', f: (p) => p.from }, { h: 'Events', f: (p) => p.rows.toLocaleString() }, { h: 'Size', f: (p) => fmtSize(p.bytes) },
+      { h: 'Status', f: (p) => (p.to <= today ? pill('past default retention', 'off') : pill('live', 'ok')) }], sum.partitions.slice(0, 60)),
+      sum.partitions.length > 60 ? el('div', { className: 'mute', style: 'margin-top:8px', textContent: 'Showing the newest 60 of ' + sum.partitions.length + ' partitions.' }) : '') : '',
+    card('Largest tables', table([{ h: 'Table', f: (t) => t.name }, { h: 'Size', f: (t) => fmtSize(t.bytes) }], sum.tables)),
+    card('Purge history', table([
+      { h: 'Started (UTC)', f: (r) => when(r.started_at) }, { h: 'Trigger', f: (r) => r.trigger }, { h: 'Status', f: (r) => pill(r.status, r.status === 'completed' ? 'ok' : r.status === 'failed' ? 'bad' : 'off') },
+      { h: 'Partitions dropped', f: (r) => r.partitions_dropped }, { h: 'Events deleted', f: (r) => r.rows_deleted.toLocaleString() }, { h: 'Error', cls: 'mono', f: (r) => r.error || '' }], ret.runs, 'No purges yet.'))];
 }
 
 // ---- Threat intelligence pages ---------------------------------------------------------
