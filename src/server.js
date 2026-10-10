@@ -6,6 +6,7 @@ const server = app.listen(port, '0.0.0.0', () => {
   require('./detection/ioc-matcher').start();
   require('./notifications/dispatcher').start();
   require('./storage/retention').start();
+  require('./capacity/capacity').start();
 });
 async function shutdown(signal) {
   console.log(signal + ' received, shutting down');
