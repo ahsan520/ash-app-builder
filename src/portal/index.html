@@ -222,6 +222,7 @@ const NAV = [
 const SETTINGS = [
   { group: 'General' },
   { id: 'status', label: 'Platform status', page: pgStatus },
+  { id: 'capacity', label: 'Capacity & scaling', page: pgCapacity },
   { id: 'account', label: 'My account', page: pgAccount },
   { group: 'Data collection' },
   { id: 'sources', label: 'Data sources', page: pgSources },
@@ -948,6 +949,73 @@ async function pgStorage() {
     card('Purge history', table([
       { h: 'Started (UTC)', f: (r) => when(r.started_at) }, { h: 'Trigger', f: (r) => r.trigger }, { h: 'Status', f: (r) => pill(r.status, r.status === 'completed' ? 'ok' : r.status === 'failed' ? 'bad' : 'off') },
       { h: 'Partitions dropped', f: (r) => r.partitions_dropped }, { h: 'Events deleted', f: (r) => r.rows_deleted.toLocaleString() }, { h: 'Error', cls: 'mono', f: (r) => r.error || '' }], ret.runs, 'No purges yet.'))];
+}
+
+// ---- Capacity & scaling ----------------------------------------------------------------------
+let capHours = 24;
+const SEV_PILL = { critical: 'bad', warning: 'off', info: 'off' };
+const VERDICT = { healthy: ['Healthy', 'ok'], plan: ['Plan capacity soon', 'off'], act: ['Action needed now', 'bad'] };
+
+function usageBar(pctv, warn, crit) {
+  const c = pctv >= crit ? 'var(--bad)' : pctv >= warn ? 'var(--warn)' : 'var(--ok)';
+  return el('div', { style: 'height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin:6px 0' }, el('div', { style: `height:100%;width:${Math.min(100, Math.max(0, pctv))}%;background:${c}` }));
+}
+function trendChart(points, { color = 'var(--acc)', max = 100, label }) {
+  const W = 300, H = 60, vals = points.filter((v) => v != null);
+  const root = svg('svg', { viewBox: `0 0 ${W} ${H + 16}`, style: 'width:100%;height:auto' });
+  const t = svg('text', { x: 0, y: H + 13, 'font-size': 11, fill: 'var(--mute)' }); t.textContent = label; root.append(t);
+  if (vals.length < 2) { const n = svg('text', { x: W / 2, y: H / 2, 'text-anchor': 'middle', 'font-size': 12, fill: 'var(--mute)' }); n.textContent = 'collecting samples...'; root.append(n); return root; }
+  const top = max || Math.max(1, ...vals), step = W / (points.length - 1);
+  const pts = points.map((v, i) => (v == null ? null : [i * step, H - 2 - (H - 6) * Math.min(v, top) / top])).filter(Boolean);
+  root.append(svg('polyline', { points: pts.map((q) => q.map((n) => n.toFixed(1)).join(',')).join(' '), fill: 'none', stroke: color, 'stroke-width': 1.6 }));
+  const last = svg('text', { x: W, y: H + 13, 'text-anchor': 'end', 'font-size': 11, fill: 'var(--text)' }); last.textContent = 'now ' + (Math.round(vals.at(-1) * 10) / 10); root.append(last);
+  return root;
+}
+
+async function pgCapacity() {
+  const r = await api('/v1/capacity?hours=' + capHours);
+  const hostx = r.host, fc = r.forecast, [vLabel, vCls] = VERDICT[r.verdict] || ['Unknown', 'off'], s = r.history.series;
+  const hrs = el('select', { onchange: () => { capHours = Number(hrs.value); route(); } }, [[24, 'Last 24 hours'], [72, 'Last 3 days'], [168, 'Last 7 days']].map(([v, t]) => el('option', { value: v, textContent: t }))); hrs.value = capHours;
+  const gauge = (title, v, sub, warn, crit) => card(title, el('div', { className: 'stat' }, Math.round(v) + '%', el('small', { textContent: sub })), usageBar(v, warn, crit));
+  const answer = (title, a) => card(title, el('div', {}, pill(a.needed ? 'Yes - see below' : 'Not needed', a.needed ? 'bad' : 'ok')), el('div', { className: 'mute', style: 'margin-top:8px;font-size:13px', textContent: a.needed ? a.reasons.join('; ') : a.note }));
+  const finding = (f) => card('', el('div', { style: 'display:flex;gap:10px;align-items:center;flex-wrap:wrap' }, pill(f.severity, SEV_PILL[f.severity]), el('b', { textContent: f.title }), el('span', { className: 'mute', textContent: f.area })),
+    el('div', { style: 'margin:8px 0', textContent: f.detail }), f.action ? el('div', { className: 'ok pill', style: 'white-space:normal', textContent: 'Recommended: ' + f.action.text }) : '',
+    f.evidence ? el('div', { className: 'mono mute', style: 'margin-top:8px', textContent: 'Measured: ' + f.evidence }) : '',
+    f.action && f.action.steps && f.action.steps.length ? el('details', { style: 'margin-top:8px' }, el('summary', { style: 'cursor:pointer', textContent: 'How to do it' }), el('ol', {}, f.action.steps.map((x) => el('li', { textContent: x })))) : '',
+    f.action && f.action.alt ? el('div', { className: 'mute', style: 'margin-top:6px;font-size:12px', textContent: 'Alternative: ' + ({ add_node: 'add a second VM as a k3s node', dedicated_db: 'move PostgreSQL to its own VM', retention: 'shorten retention', raise_pod_limit: 'raise the pod limit' }[f.action.alt] || f.action.alt) }) : '');
+  const pct = (used, lim) => (lim ? Math.round(100 * used / lim) + '%' : '-');
+  const cores = (n) => (n == null ? '-' : (Math.round(n * 100) / 100).toString());
+  const k = r.k8s;
+  return [el('div', { style: 'display:flex;align-items:baseline;gap:12px;flex-wrap:wrap' }, el('h2', { textContent: 'Capacity & scaling' }), el('span', { className: 'mute', textContent: 'updated ' + when(r.generated_at) + ' UTC' }),
+      el('span', { style: 'margin-left:auto;display:flex;gap:8px' }, hrs, el('button', { className: 'btn', textContent: 'Refresh', onclick: () => route() }))),
+    el('p', { className: 'desc', textContent: 'Is this platform getting full, and what should you add? These are recommendations only: ASIX never changes your VMs or cluster.' }),
+    card('', el('div', { style: 'display:flex;gap:12px;align-items:center;flex-wrap:wrap' }, pill(vLabel, vCls), el('b', { textContent: r.summary }), r.headline ? el('span', { className: 'mute', textContent: 'Most important: ' + r.headline }) : '')),
+    el('h3', { textContent: 'Do we need to...' }),
+    el('div', { className: 'grid' }, answer('Resize this VM (CPU, RAM or disk)?', r.answers.resize_vm), answer('Add API pods?', r.answers.add_api_pods), answer('Add a second VM (node)?', r.answers.add_node), answer('Move PostgreSQL to its own VM?', r.answers.dedicated_db)),
+    el('h3', { style: 'margin-top:18px', textContent: 'Right now' }),
+    el('div', { className: 'grid' }, gauge('CPU', hostx.cpu_pct, hostx.cpu_count + ' vCPU, load ' + hostx.load1.toFixed(2), 70, 85), gauge('Memory', hostx.mem.used_pct, fmtSize(hostx.mem.total - hostx.mem.available) + ' of ' + fmtSize(hostx.mem.total), 85, 92),
+      gauge('Disk', 100 - hostx.disk.free_pct, fmtSize(hostx.disk.free) + ' free of ' + fmtSize(hostx.disk.total), 80, 90),
+      card('Ingest and database', kv({ 'events per minute': r.events.ingest_per_min, 'database size': fmtSize(r.db.bytes), 'events table': fmtSize(r.events.bytes), 'connections': r.db.connections + ' / ' + r.db.max_connections, 'cache hit': r.db.cache_hit == null ? '-' : Math.round(r.db.cache_hit * 1000) / 10 + '%', 'VM uptime': Math.floor(hostx.uptime_seconds / 3600) + ' h' }))),
+    el('h3', { style: 'margin-top:18px', textContent: 'Trends' }),
+    el('div', { className: 'grid' }, card('', trendChart(s.map((x) => x.cpu), { label: 'CPU %', color: 'var(--acc)' })), card('', trendChart(s.map((x) => x.mem), { label: 'Memory %', color: 'var(--acc2)' })),
+      card('', trendChart(s.map((x) => x.disk), { label: 'Disk used %', color: 'var(--warn)' })), card('', trendChart(s.map((x) => x.events_per_min), { label: 'Events per minute', color: 'var(--ok)', max: null }))),
+    card('Disk forecast', fc.growth_bytes_per_day ? kv({ 'growth': fmtSize(fc.growth_bytes_per_day) + ' per day (' + fc.confidence + ' confidence)', 'free space': fmtSize(fc.free_bytes), 'disk full in': fc.days_to_full + ' days at this rate', 'retention': fc.retention_days ? fc.retention_days + ' days' : (r.events.auto_purge ? 'unbounded (a dataset is kept forever)' : 'automatic purge is off'),
+        'storage needed at that retention': fc.steady_state_bytes ? fmtSize(fc.steady_state_bytes) : '-', 'days that fit (15% reserve)': fc.max_days_that_fit, 'extra disk needed': fc.extra_disk_needed_bytes ? fmtSize(fc.extra_disk_needed_bytes) : 'none' })
+      : el('div', { className: 'mute', textContent: 'Not enough completed days of data yet (needs two days with data). The forecast appears automatically.' })),
+    el('h3', { style: 'margin-top:18px', textContent: 'Recommendations (' + r.findings.length + ')' }),
+    ...(r.findings.length ? r.findings.map(finding) : [card('', el('span', { className: 'ok pill', textContent: 'Nothing to report.' }))]),
+    el('h3', { style: 'margin-top:18px', textContent: 'Cluster' }),
+    k.available ? el('div', {}, card('Nodes', table([{ h: 'Node', f: (n) => n.name }, { h: 'State', f: (n) => pill(n.ready ? 'Ready' : 'NotReady', n.ready ? 'ok' : 'bad') }, { h: 'Roles', f: (n) => n.roles.join(', ') || 'worker' },
+        { h: 'CPU used / allocatable', f: (n) => cores(n.cpu_used) + ' / ' + cores(n.cpu_allocatable) }, { h: 'Memory used / allocatable', f: (n) => (n.mem_used == null ? '-' : fmtSize(n.mem_used)) + ' / ' + fmtSize(n.mem_allocatable) }], k.nodes)),
+      card('Pods', table([{ h: 'Pod', f: (p) => p.name }, { h: 'Ready', f: (p) => pill(p.ready ? 'yes' : 'no', p.ready ? 'ok' : 'bad') }, { h: 'Restarts', f: (p) => p.restarts },
+        { h: 'CPU used / limit', f: (p) => cores(p.cpu_used) + ' / ' + cores(p.cpu_limit) + (p.cpu_used != null && p.cpu_limit ? ' (' + pct(p.cpu_used, p.cpu_limit) + ')' : '') },
+        { h: 'Memory used / limit', f: (p) => (p.mem_used == null ? '-' : fmtSize(p.mem_used)) + ' / ' + (p.mem_limit ? fmtSize(p.mem_limit) : '-') + (p.mem_used != null && p.mem_limit ? ' (' + pct(p.mem_used, p.mem_limit) + ')' : '') }], k.pods),
+        k.metrics.pods ? '' : el('div', { className: 'mute', style: 'margin-top:8px', textContent: 'Usage columns need metrics-server (not answering).' })),
+      k.pvcs.length ? card('Volumes', table([{ h: 'Volume', f: (v) => v.name }, { h: 'Storage class', f: (v) => v.storage_class || '-' }, { h: 'Requested', f: (v) => fmtSize(v.requested) }], k.pvcs),
+        el('div', { className: 'mute', style: 'margin-top:8px', textContent: 'With local-path storage the requested size is not a quota: data can use the whole VM disk, which is what the Disk gauge above measures.' })) : '')
+      : card('', el('div', { className: 'mute', textContent: 'Cluster details are unavailable: ' + (k.error || 'unknown') })),
+    el('details', { className: 'card' }, el('summary', { style: 'cursor:pointer', textContent: 'How these recommendations are decided (thresholds)' }),
+      el('div', { className: 'mono mute', style: 'margin-top:8px;white-space:pre-wrap', textContent: Object.entries(r.thresholds).map(([a, b]) => a + ' = ' + b).join('\n') }))];
 }
 
 // ---- Threat intelligence pages ---------------------------------------------------------
