@@ -221,6 +221,7 @@ else
 fi
 
 echo "== 8/9: Deploying Keycloak and asix-api =="
+$K kubectl apply -f "$K8S_DIR/31-capacity-rbac.yaml"      # read-only service account for the capacity dashboard
 PUBLIC_URL="${ASIX_PUBLIC_URL:-https://$(hostname -I | awk '{print $1}'):30443}"
 sed -e "s|asix-api:local|${IMAGE_TAG}|g" -e "s|__ASIX_PUBLIC_URL__|${PUBLIC_URL}|g" "$K8S_DIR/30-asix-api.yaml" | $K kubectl apply -f -
 
