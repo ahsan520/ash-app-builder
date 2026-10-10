@@ -13,6 +13,7 @@ spec:
       labels:
         app: asix-api
     spec:
+      serviceAccountName: asix-api          # read-only cluster view for Settings > Capacity (k8s/31-capacity-rbac.yaml)
       containers:
         - name: asix-api
           image: asix-api:local

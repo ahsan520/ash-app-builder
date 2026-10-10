@@ -564,6 +564,23 @@ data:
     GRANT SELECT, INSERT, UPDATE, DELETE ON retention_policies TO asix_admin;
     GRANT SELECT, INSERT, UPDATE, DELETE ON retention_runs TO asix_admin;
 
+    -- ============================================================
+    -- Capacity samples: one row every few minutes (platform-level, not per tenant), 30 days kept
+    -- ============================================================
+    CREATE TABLE IF NOT EXISTS capacity_samples (
+        id BIGSERIAL PRIMARY KEY,
+        sampled_at TIMESTAMP NOT NULL DEFAULT localtimestamp,
+        cpu_pct REAL, load1 REAL, cpu_count INTEGER,
+        mem_total_bytes BIGINT, mem_available_bytes BIGINT, swap_used_bytes BIGINT,
+        disk_total_bytes BIGINT, disk_free_bytes BIGINT,
+        db_bytes BIGINT, events_bytes BIGINT, events_per_min REAL,
+        pg_connections INTEGER, pg_max_connections INTEGER, cache_hit_ratio REAL,
+        pods_total INTEGER, pods_not_ready INTEGER, restarts_total INTEGER, oom_kills_24h INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_capacity_samples_time ON capacity_samples(sampled_at);
+    GRANT SELECT, INSERT, UPDATE, DELETE ON capacity_samples TO asix_admin;
+    GRANT USAGE, SELECT ON SEQUENCE capacity_samples_id_seq TO asix_admin;
+
     -- One-time, atomic conversion of events to a daily-partitioned table. The block either
     -- completes (row counts verified, old table dropped) or rolls back and fails the deploy,
     -- leaving the original table untouched. deploy.sh takes a pg_dump just before this runs.
