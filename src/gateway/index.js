@@ -1294,6 +1294,14 @@ app.post('/v1/storage/retention/run', ...guarded('storage:write'), async (req, r
   } catch (e) { console.error('Retention run failed:', e.message); apiError(res, 500, 'RETENTION_RUN_ERROR', 'Retention run failed'); }
 });
 
+// ---- Capacity & scaling (read-only recommendations) ---------------------------------------------
+const capacity = require('../capacity/capacity');
+app.get('/v1/capacity', ...guarded('capacity:read'), async (req, res) => {
+  const hours = Math.min(Math.max(parseInt(req.query.hours, 10) || 24, 1), 168);
+  try { res.status(200).json({ success: true, ...(await capacity.report(req.tenant_id, hours)) }); }
+  catch (e) { console.error('Capacity report failed:', e.message); apiError(res, 500, 'CAPACITY_ERROR', 'Failed to build the capacity report'); }
+});
+
 // Basic service endpoint.
 // ---- Parsing rules (XSIAM-style) ----------------------------------------------------------
 const parsingRules = require('../ingestion/parsing-rules');
