@@ -1,0 +1,65 @@
+# Read-only permissions for the capacity dashboard (Settings > Capacity & scaling).
+#
+# The asix-api pods read pod/PVC/workload state in their own namespace and node/metrics info
+# cluster-wide. Nothing here can create, change or delete anything, and it deliberately does
+# NOT include nodes/proxy (kubelet access), which can allow command execution inside pods.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: asix-api
+  namespace: asix-platform
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: asix-api-capacity-reader
+  namespace: asix-platform
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "persistentvolumeclaims"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: asix-api-capacity-reader
+  namespace: asix-platform
+subjects:
+  - kind: ServiceAccount
+    name: asix-api
+    namespace: asix-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: asix-api-capacity-reader
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: asix-api-node-reader
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: asix-api-node-reader
+subjects:
+  - kind: ServiceAccount
+    name: asix-api
+    namespace: asix-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: asix-api-node-reader
