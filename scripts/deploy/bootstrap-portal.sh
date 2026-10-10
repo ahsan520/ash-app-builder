@@ -77,7 +77,8 @@ SELECT t.id, 'portal-admin', ARRAY['auth:identity:read', 'search:events:read', '
   'detections:rules:read', 'detections:rules:write', 'alerts:read', 'alerts:write', 'threatintel:read', 'threatintel:write',
   'collectors:read', 'collectors:write', 'parsing:rules:read', 'parsing:rules:write', 'datamodel:rules:read', 'datamodel:rules:write',
   'notify:read', 'notify:write',
-  'storage:read', 'storage:write']
+  'storage:read', 'storage:write',
+  'capacity:read']
 FROM tenants t
 WHERE t.name = 'Default Tenant'
   AND NOT EXISTS (SELECT 1 FROM roles r WHERE r.tenant_id = t.id AND r.name = 'portal-admin');
@@ -87,7 +88,8 @@ UPDATE roles SET permissions = ARRAY['auth:identity:read', 'search:events:read',
   'detections:rules:read', 'detections:rules:write', 'alerts:read', 'alerts:write', 'threatintel:read', 'threatintel:write',
   'collectors:read', 'collectors:write', 'parsing:rules:read', 'parsing:rules:write', 'datamodel:rules:read', 'datamodel:rules:write',
   'notify:read', 'notify:write',
-  'storage:read', 'storage:write']
+  'storage:read', 'storage:write',
+  'capacity:read']
 WHERE name = 'portal-admin' AND tenant_id = (SELECT id FROM tenants WHERE name = 'Default Tenant');
 
 INSERT INTO users (tenant_id, username, email, role_ids)
