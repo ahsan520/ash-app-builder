@@ -9,7 +9,7 @@ is uploaded. The fix is structural, not just "be careful."
 `src/gateway/index.js` is now a 60-line file that only sets up Express and mounts routers. All
 route handlers live in `src/gateway/routes/<domain>.js`, one file per feature area:
 `core`, `detections`, `search`, `alerts`, `threat-intel`, `collectors`, `notifications`,
-`storage`, `capacity`, `parsing`, `data-model`, `modules`. Shared helpers (`db`, the auth middleware chain,
+`storage`, `capacity`, `parsing`, `data-model`, `modules`, `alert-triage`. Shared helpers (`db`, the auth middleware chain,
 `guarded()`, `apiError()`, `UUID_RE`, `SEVERITIES`, `ALERT_STATUSES`) live in `src/gateway/shared.js`
 and are imported, never redefined, by each route file.
 
@@ -45,8 +45,10 @@ Update the Status column in the same change that does the work, so the next sess
 |---|---|---|
 | Data safety (backups, restore test, volume checks) | done | `src/storage/safety.js`, `src/backup/*`, portal "Data safety" |
 | Module / profile skeleton + signed-license entitlements | done (skeleton) | `src/modules/*`, `src/gateway/routes/modules.js`, `scripts/license-tool.js`, portal "Modules" |
-| Alert triage (assign, notes, bulk close, dedupe) | next | new `src/gateway/routes/alert-triage.js`; needs new alert columns, so one edit to `12-schema-init.yaml` |
-| Regex-safety fix (user-supplied patterns, ReDoS) | open | `src/ingestion/parsing-rules.js`, `src/detection/rule-query.js`, `src/search/xql.js` |
+| Alert triage: assign, notes, bulk acknowledge/close | done | `src/gateway/routes/alert-triage.js`, `alerts.js` (assignee filter/column), `12-schema-init.yaml` (`alerts.assignee_id`, `alert_notes`), portal "Alerts", `tests/alert-triage.test.js` |
+| Alert dedupe / merge repeat alerts | open (split out of triage) | new file; `group_key` already exists on alerts |
+| Collector heartbeat (idle built-in source should not read as Disconnected) | open | `src/gateway/routes/collectors.js` (status is derived from events today) |
+| Regex-safety fix (user-supplied patterns, ReDoS) | **next** (small) | `src/ingestion/parsing-rules.js`, `src/detection/rule-query.js`, `src/search/xql.js` |
 | CI (run `tests/*.test.js` on push) | open | new `.github/workflows/ci.yml`, plus a `test` script in `package.json` |
 | Broker VM on Vector | open | new `src/brokers/*`, `deploy/` |
 | Content packs (residential) | open | new `src/packs/*`, manifest `content-packs` flips to `available` |
@@ -59,8 +61,15 @@ Update the Status column in the same change that does the work, so the next sess
 3. Prefer new files over edits to shared files (`shared.js`, `index.html`, `index.js`,
    `12-schema-init.yaml`) wherever the feature allows it.
 4. Run the in-repo tests before declaring a feature done: `node tests/modules.test.js`,
-   `tests/bioc-rules.test.js`, `tests/data-model-rules.test.js`, `tests/parsing-rules.test.js`
-   (they need `npm ci` first; `modules.test.js` uses `jose`). A CI workflow is still an open task above.
-5. A new permission string (for example `modules:read`) must also be added to the `portal-admin`
+   `tests/alert-triage.test.js`, `tests/bioc-rules.test.js`, `tests/data-model-rules.test.js`,
+   `tests/parsing-rules.test.js` (they need `npm ci` first; `modules.test.js` uses `jose`). A CI workflow is still an open task above.
+5. Route files must `require` everything they use. The route split once dropped the imports in
+   `data-model.js` and `search.js`, which caused 500s in production. Before packaging, check for
+   undefined names, for example `npx eslint --no-config-lookup --rule '{"no-undef":"error"}' src`
+   (with `sourceType: commonjs` and node globals), or add an ESLint `no-undef` step to the CI task.
+6. Anything that touches the database should be run once against a real Postgres, not only stubs:
+   apply `k8s/12-schema-init.yaml`'s `schema.sql` twice (it must be idempotent), then run
+   `ASIX_TEST_DB=1 DB_HOST=127.0.0.1 DB_PASSWORD=... node tests/alert-triage.test.js` as the pattern.
+7. A new permission string (for example `modules:read`) must also be added to the `portal-admin`
    role in `scripts/deploy/bootstrap-portal.sh`, in both the INSERT and the UPDATE lists, and that
    script re-run, or the portal page will show a 403.

@@ -36,9 +36,21 @@ register themselves via a manifest instead of being hard-coded into the gateway 
 | Module / profile skeleton | Done as a skeleton, see below |
 | Broker VM on Vector | Not started |
 | Content packs (residential) | Not started; the `content-packs` module is listed as planned |
-| Alert triage | Next |
-| Regex-safety fix | Not started |
+| Alert triage | Done (assign, notes, bulk acknowledge/close); dedupe split out as its own item |
+| Regex-safety fix | Next |
 | CI | Not started |
+
+### Alert triage (what exists)
+- Each alert can be assigned to a user of the same tenant (or unassigned), and carries analyst notes
+  (stored with the author's name at the time, so notes survive a user being deleted; deleting a user
+  just unassigns their alerts).
+- The Alerts list has an assignee column and filter (anyone / me / unassigned), and tick-boxes to
+  acknowledge or close up to 200 alerts at once. The alert detail shows the assignee picker and notes.
+- Uses the existing `alerts:read` / `alerts:write` permissions, so no role changes are needed.
+- Needs the new schema (`alerts.assignee_id`, `alert_notes`); it is applied by the normal schema-init
+  job on deploy and is safe to re-run.
+- Not built: dedupe/merge of repeat alerts, a "my open alerts" dashboard tile, notes on status changes,
+  note editing or deletion.
 
 ### How the three dials are implemented now
 - **Modules:** one manifest file per module in `src/modules/manifests/`. A module is on only if its
