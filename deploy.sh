@@ -162,9 +162,20 @@ if ! $K kubectl -n "$NAMESPACE" get secret asix-notify-secret &>/dev/null; then
   echo "Generated notification encryption key -> k8s secret 'asix-notify-secret' (copy kept in /root/asix-notify-key.txt - back it up)"
 fi
 
+# Nightly encrypted backups (k8s/32-backup.yaml): a passphrase secret and a host folder the job (uid 1000) can write to.
+# Created once and never rotated automatically: backups made with it cannot be read without it.
+if ! $K kubectl -n "$NAMESPACE" get secret asix-backup-secret &>/dev/null; then
+  BACKUP_KEY="$(openssl rand -base64 33)"
+  $K kubectl -n "$NAMESPACE" create secret generic asix-backup-secret --from-literal=BACKUP_PASSPHRASE="$BACKUP_KEY"
+  ( umask 077; echo "$BACKUP_KEY" > /root/asix-backup-key.txt )
+  echo "Generated the backup passphrase -> k8s secret 'asix-backup-secret' (copy in /root/asix-backup-key.txt: store it OUTSIDE this VM too)"
+fi
+mkdir -p /var/backups/asix/scheduled && chown 1000:1000 /var/backups/asix/scheduled && chmod 700 /var/backups/asix/scheduled
+
 echo "== 6/9: Deploying PostgreSQL =="
 $K kubectl apply -f "$K8S_DIR/10-postgresql.yaml"
 $K kubectl -n "$NAMESPACE" rollout status statefulset/postgresql --timeout=180s
+bash "$SCRIPT_DIR/scripts/deploy/protect-volumes.sh" "$NAMESPACE"      # Retain: deleting a claim no longer deletes the data
 
 echo "== 6a/9: Backing up PostgreSQL before schema changes =="
 BACKUP_DIR="/var/backups/asix/postgres"
@@ -176,7 +187,15 @@ if $K kubectl -n "$NAMESPACE" get pod postgresql-0 &>/dev/null; then
       pg_dump -U asix_admin -d asix_platform 2>/dev/null | gzip > "$BACKUP_FILE" \
       && [ -s "$BACKUP_FILE" ]; then
     echo "Backup saved: $BACKUP_FILE ($(du -h "$BACKUP_FILE" | cut -f1))"
-    ls -1t "$BACKUP_DIR"/*.sql.gz 2>/dev/null | tail -n +11 | xargs -r rm --
+    ls -1t "$BACKUP_DIR"/asix_platform-*.sql.gz 2>/dev/null | tail -n +11 | xargs -r rm --
+    KC_FILE="$BACKUP_DIR/keycloak-$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
+    if $K kubectl -n "$NAMESPACE" exec postgresql-0 -- env PGPASSWORD="$PG_PW" \
+        pg_dump -U asix_admin -d keycloak 2>/dev/null | gzip > "$KC_FILE" && [ -s "$KC_FILE" ]; then
+      echo "Keycloak backup saved: $KC_FILE ($(du -h "$KC_FILE" | cut -f1))"
+      ls -1t "$BACKUP_DIR"/keycloak-*.sql.gz 2>/dev/null | tail -n +11 | xargs -r rm --
+    else
+      rm -f "$KC_FILE"
+    fi
   else
     echo "NOTE: backup produced nothing (likely first-ever deploy, database still empty) - continuing"
     rm -f "$BACKUP_FILE"
@@ -224,6 +243,7 @@ echo "== 8/9: Deploying Keycloak and asix-api =="
 $K kubectl apply -f "$K8S_DIR/31-capacity-rbac.yaml"      # read-only service account for the capacity dashboard
 PUBLIC_URL="${ASIX_PUBLIC_URL:-https://$(hostname -I | awk '{print $1}'):30443}"
 sed -e "s|asix-api:local|${IMAGE_TAG}|g" -e "s|__ASIX_PUBLIC_URL__|${PUBLIC_URL}|g" "$K8S_DIR/30-asix-api.yaml" | $K kubectl apply -f -
+sed "s|asix-api:local|${IMAGE_TAG}|g" "$K8S_DIR/32-backup.yaml" | $K kubectl apply -f -      # nightly encrypted backup
 
 echo "== Waiting for rollout =="
 $K kubectl -n "$NAMESPACE" rollout status deployment/keycloak --timeout=180s
@@ -274,7 +294,10 @@ echo "  Broker ingest token (for any external broker VM) is in: /root/asix-broke
 echo "Postgres password:   /root/asix-postgres-password.txt"
 echo "Keycloak admin pass:  /root/asix-keycloak-password.txt"
 echo "Image deployed:       ${IMAGE_TAG}"
-echo "Postgres backups:     $BACKUP_DIR (last 10 kept) — restore with ./restore-postgres.sh"
+bash "$SCRIPT_DIR/scripts/deploy/protect-volumes.sh" "$NAMESPACE" >/dev/null 2>&1 || true
+echo "Nightly backups:      /var/backups/asix/scheduled (encrypted, 14 kept) - key: /root/asix-backup-key.txt (keep a copy off this VM)"
+echo "  Restore:            sudo scripts/restore-backup.sh list   |   see docs/data-safety.md"
+echo "Pre-deploy dumps:     $BACKUP_DIR (last 10 kept, plain SQL: asix_platform + keycloak)"
 echo "If this deploy broke something:"
 echo "  ./rollback.sh --quick        undo the last k8s rollout only (fast; needs the"
 echo "                               previous image still cached locally)"
