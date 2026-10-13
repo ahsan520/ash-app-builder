@@ -217,7 +217,7 @@ const NAV = [
   { id: 'threat', label: 'Threat Management', ic: '\u25CE', home: 'threat/correlations' },
   { id: 'posture', label: 'Posture Management', ic: '\u2630', soon: true },
   { id: 'inventory', label: 'Inventory', ic: '\u25A3', soon: true },
-  { id: 'modules', label: 'Modules', ic: '\u2756', soon: true },
+  { id: 'modules', label: 'Modules', ic: '\u2756', page: pgModules, crumb: ['Modules', 'Installed modules'] },
 ];
 const SETTINGS = [
   { group: 'General' },
@@ -1665,6 +1665,28 @@ async function pgSearch() {
     }).catch(() => { XS.fields = { fields: [], datasets: [] }; draw(); });
   }
   return wrap;
+}
+
+// ---- Modules & edition -----------------------------------------------------------------------
+const MOD_STATE = { enabled: ['On', 'ok'], locked: ['Locked', 'off'], planned: ['Planned', 'off'] };
+const modWhy = (m) => (m.state === 'planned' ? (m.included_in_profile ? 'Not built yet' : 'Not built yet; needs the Enterprise profile')
+  : !m.reason ? '' : m.reason === 'profile' ? 'Needs the Enterprise profile'
+  : m.reason === 'license' ? 'Needs a license that includes "' + m.entitlement + '"' : 'Needs ' + m.reason.replace('dependency:', '') + ' to be on');
+async function pgModules() {
+  const r = await api('/v1/modules');
+  const lic = r.license;
+  const licText = lic.status === 'valid' ? 'valid' + (lic.customer ? ' for ' + lic.customer : '') : lic.status === 'none' ? 'none installed' : lic.status;
+  const lim = (v) => (v === null || v === undefined ? 'unlimited' : String(v));
+  const on = r.modules.filter((m) => m.state === 'enabled').length;
+  return [...head('Modules', 'One platform, two editions. The profile sets the deployment shape and a signed license unlocks extra modules and limits. Menu entries and features follow this list.'),
+    el('div', { className: 'grid' },
+      card('Edition', kv({ profile: r.profile.label, storage: r.profile.deployment.storage, ingest: r.profile.deployment.ingest, 'high availability': r.profile.deployment.ha ? 'yes' : 'no' })),
+      card('License and limits', kv({ license: licText, 'expires (UTC)': lic.expires_at ? when(lic.expires_at) : '-', tenants: lim(r.limits.tenants), 'retention cap (days)': lim(r.limits.retention_days_max) }),
+        lic.reason ? el('div', { className: 'mute', style: 'margin-top:8px', textContent: lic.reason }) : '')),
+    card('Modules (' + on + ' of ' + r.modules.length + ' on)', table([
+      { h: 'Module', f: (m) => m.name }, { h: 'Edition', f: (m) => (m.tier === 'home' ? 'Home' : 'Enterprise') },
+      { h: 'State', f: (m) => pill(MOD_STATE[m.state][0], MOD_STATE[m.state][1]) },
+      { h: 'Why', f: (m) => modWhy(m) }, { h: 'What it does', f: (m) => m.description }], r.modules))];
 }
 
 // ---- boot ---------------------------------------------------------------------------
