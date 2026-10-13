@@ -231,6 +231,7 @@ const SETTINGS = [
   { id: 'parsing', label: 'Parsing rules', page: pgParsing },
   { id: 'datamodel', label: 'Data model rules', page: pgDataModel },
   { id: 'retention', label: 'Storage & retention', page: pgStorage },
+  { id: 'safety', label: 'Data safety', page: pgSafety },
   { group: 'Access' },
   { id: 'access', label: 'Users & roles', page: pgAccess },
   { id: 'tenants', label: 'Tenants', soon: true },
@@ -949,6 +950,38 @@ async function pgStorage() {
     card('Purge history', table([
       { h: 'Started (UTC)', f: (r) => when(r.started_at) }, { h: 'Trigger', f: (r) => r.trigger }, { h: 'Status', f: (r) => pill(r.status, r.status === 'completed' ? 'ok' : r.status === 'failed' ? 'bad' : 'off') },
       { h: 'Partitions dropped', f: (r) => r.partitions_dropped }, { h: 'Events deleted', f: (r) => r.rows_deleted.toLocaleString() }, { h: 'Error', cls: 'mono', f: (r) => r.error || '' }], ret.runs, 'No purges yet.'))];
+}
+
+// ---- Data safety --------------------------------------------------------------------------------
+const SAFETY_VERDICT = { ok: ['Protected', 'ok'], attention: ['Needs attention', 'off'], critical: ['At risk', 'bad'] };
+async function pgSafety() {
+  const r = await api('/v1/storage/safety');
+  const [vLabel, vCls] = SAFETY_VERDICT[r.verdict] || ['Unknown', 'off'];
+  const warnPill = (s) => pill(s, s === 'critical' ? 'bad' : s === 'warning' ? 'off' : 'off');
+  const warnCard = (w) => card('', el('div', { style: 'display:flex;gap:10px;align-items:center;flex-wrap:wrap' }, warnPill(w.severity), el('b', { textContent: w.title })),
+    el('div', { style: 'margin:8px 0', textContent: w.detail }), w.fix ? el('div', { className: 'ok pill', style: 'white-space:normal', textContent: 'What to do: ' + w.fix }) : '');
+  const vol = r.volumes;
+  return [...head('Data safety', 'Will your data survive a deleted pod, an upgrade, a deleted volume, or a lost disk? This page reads the real backup history and volume settings from the cluster.'),
+    card('', el('div', { style: 'display:flex;gap:12px;align-items:center;flex-wrap:wrap' }, pill(vLabel, vCls),
+      el('span', { className: 'mute', textContent: 'Backups run ' + r.schedule + ', ' + r.keep + ' kept, stored in ' + r.backup_dir }))),
+    el('h3', { style: 'margin-top:4px', textContent: r.warnings.length ? 'What needs attention (' + r.warnings.length + ')' : 'Checks' }),
+    r.warnings.length ? el('div', {}, r.warnings.map(warnCard)) : card('', el('span', { className: 'ok pill', textContent: 'Nothing to report.' })),
+    el('div', { className: 'grid' },
+      card('Last successful backup', r.last_success ? kv({ when: when(r.last_success.finished_at), trigger: r.last_success.trigger, databases: (r.last_success.databases || []).join(', '), size: fmtSize(r.last_success.bytes) }) : el('div', { className: 'mute', textContent: 'None yet.' })),
+      card('Last restore test', r.last_verified ? kv({ when: when(r.last_verified.verified_at), set: r.last_verified.set_name }) : el('div', { className: 'mute', textContent: 'A backup is restored into a scratch database about once a week to prove it works; none has run yet.' }))),
+    card('Data volumes', vol === null ? el('div', { className: 'mute', textContent: 'Volume settings could not be read from the cluster (see the checks above).' })
+      : vol.length === 0 ? el('div', { className: 'mute', textContent: 'No data volumes found yet.' })
+      : table([{ h: 'Claim', f: (v) => v.claim }, { h: 'Phase', f: (v) => pill(v.phase, v.phase === 'Bound' ? 'ok' : v.phase === 'Released' ? 'off' : 'bad') },
+        { h: 'Reclaim policy', f: (v) => pill(v.reclaim_policy, v.reclaim_policy === 'Retain' ? 'ok' : 'bad') }, { h: 'Capacity', f: (v) => fmtSize(v.capacity) },
+        { h: 'Path on disk', cls: 'mono', f: (v) => v.path || '-' }], vol)),
+    card('Backup history', table([
+      { h: 'Started (UTC)', f: (x) => when(x.started_at) }, { h: 'Trigger', f: (x) => x.trigger }, { h: 'Status', f: (x) => pill(x.status, x.status === 'completed' ? 'ok' : x.status === 'failed' ? 'bad' : 'off') },
+      { h: 'Databases', f: (x) => (x.databases || []).join(', ') }, { h: 'Size', f: (x) => (x.bytes ? fmtSize(x.bytes) : '-') },
+      { h: 'Restore-tested', f: (x) => (x.verified ? pill('yes', 'ok') : pill('no', 'off')) }, { h: 'Error', cls: 'mono', f: (x) => x.error || '' }], r.runs, 'No backups yet.')),
+    card('Restoring', el('div', { className: 'mute' },
+      'Restores run from the command line, not the portal, so a mistaken click here can never overwrite live data. On the VM: ',
+      el('span', { className: 'mono', textContent: 'sudo scripts/restore-backup.sh list' }), ' to see what is available, then ',
+      el('span', { className: 'mono', textContent: 'sudo scripts/restore-backup.sh restore <set> <database> --yes' }), '.'))];
 }
 
 // ---- Capacity & scaling ----------------------------------------------------------------------
