@@ -385,25 +385,33 @@ async function openAlert(id, holder) {
     const d = a.details || {};
     holder.replaceChildren(card(a.title,
       kv({ rule: a.rule_name, severity: a.severity, status: a.status, group: a.group_key, matching_events: a.event_count, first_seen_utc: when(a.first_event_at), last_seen_utc: when(a.last_event_at), condition: (d.threshold || '?') + ' in ' + (d.window_minutes || '?') + ' min' }),
-      buttons, el('h3', { textContent: 'Latest matching events' }),
+      buttons, await triagePanel(a), el('h3', { textContent: 'Latest matching events' }),
       table([{ h: 'Time (UTC)', f: (e) => when(e.event_time || e.received_at) }, { h: 'Event', cls: 'msg', f: (e) => e.raw }], events, 'The sample events are no longer available.')));
     holder.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   } catch (e) { holder.replaceChildren(errBox(e)); }
 }
 async function pgAlerts() {
-  const status = routeQuery.get('status') || 'active', sev = routeQuery.get('sev') || '';
-  const go = () => { const n = new URLSearchParams(); if (stSel.value !== 'active') n.set('status', stSel.value); if (sevSel.value) n.set('sev', sevSel.value); location.hash = '#/incidents' + (n.toString() ? '?' + n : ''); };
+  const status = routeQuery.get('status') || 'active', sev = routeQuery.get('sev') || '', who = routeQuery.get('assignee') || '';
+  const go = () => { const n = new URLSearchParams(); if (stSel.value !== 'active') n.set('status', stSel.value); if (sevSel.value) n.set('sev', sevSel.value); if (whoSel.value) n.set('assignee', whoSel.value); location.hash = '#/incidents' + (n.toString() ? '?' + n : ''); };
   const stSel = el('select', { onchange: go }, ...['active', 'open', 'acknowledged', 'closed', 'all'].map((v) => el('option', { value: v, textContent: v })));
   const sevSel = el('select', { onchange: go }, el('option', { value: '', textContent: 'any severity' }), ...SEV.map((v) => el('option', { value: v, textContent: v })));
-  stSel.value = status; sevSel.value = sev;
-  const p = new URLSearchParams({ status, limit: 100 }); if (sev) p.set('severity', sev);
+  const whoSel = el('select', { onchange: go }, ...[['', 'anyone'], ['me', 'assigned to me'], ['unassigned', 'unassigned']].map(([v, t]) => el('option', { value: v, textContent: t })));
+  stSel.value = status; sevSel.value = sev; whoSel.value = who;
+  const p = new URLSearchParams({ status, limit: 100 }); if (sev) p.set('severity', sev); if (who) p.set('assignee', who);
+  const picked = new Set(), bulkInfo = el('span', { className: 'mute', textContent: 'Select alerts to change several at once' });
+  const bulk = (st) => async () => {
+    if (!picked.size) return;
+    try { const out = await api('/v1/alerts/bulk', { method: 'POST', body: { ids: [...picked], status: st } }); window.alert(out.updated + ' of ' + out.requested + ' alerts changed to ' + st); route(); } catch (e) { window.alert(e.message); }
+  };
   const r = await api('/v1/alerts?' + p);
   const holder = el('div');
-  const list = table([{ h: 'Severity', f: (a) => sevPill(a.severity) }, { h: 'Alert', f: (a) => a.title }, { h: 'Events', f: (a) => a.event_count },
+  const list = table([{ h: '', f: (a) => el('input', { type: 'checkbox', onclick: (e) => e.stopPropagation(), onchange: (e) => { if (e.target.checked) picked.add(a.id); else picked.delete(a.id); bulkInfo.textContent = picked.size ? picked.size + ' selected' : 'Select alerts to change several at once'; } }) },
+    { h: 'Severity', f: (a) => sevPill(a.severity) }, { h: 'Alert', f: (a) => a.title }, { h: 'Events', f: (a) => a.event_count }, { h: 'Assignee', f: (a) => a.assignee_name || '-' },
     { h: 'Last seen (UTC)', f: (a) => when(a.last_event_at) }, { h: 'Status', f: (a) => pill(a.status, a.status === 'closed' ? 'off' : a.status === 'open' ? 'bad' : 'ok') }], r.alerts, 'No alerts match. Detection rules run every minute.');
   if (list.querySelectorAll) list.querySelectorAll('tbody tr').forEach((tr, i) => { tr.className = 'row'; tr.onclick = () => openAlert(r.alerts[i].id, holder); });
-  return [...head('Alerts', 'Alerts raised by detection rules. Click an alert for its matching events and to change its status.'),
-    card('', el('div', { style: 'display:flex;gap:10px;align-items:center' }, el('span', { className: 'mute', textContent: 'Show' }), stSel, sevSel, el('span', { className: 'mute', style: 'margin-left:auto', textContent: r.count + ' shown' }))),
+  return [...head('Alerts', 'Alerts raised by detection rules. Click an alert for its matching events, to assign it, add notes and change its status. Tick several to acknowledge or close them together.'),
+    card('', el('div', { style: 'display:flex;gap:10px;align-items:center' }, el('span', { className: 'mute', textContent: 'Show' }), stSel, sevSel, whoSel, el('span', { className: 'mute', style: 'margin-left:auto', textContent: r.count + ' shown' })),
+      el('div', { style: 'display:flex;gap:8px;align-items:center;margin-top:10px' }, el('button', { className: 'btn', textContent: 'Acknowledge selected', onclick: bulk('acknowledged') }), el('button', { className: 'btn', textContent: 'Close selected', onclick: bulk('closed') }), bulkInfo)),
     card('', list), holder];
 }
 // ---- Collectors & installers (XSIAM-style administration) -------------------------------
@@ -1687,6 +1695,22 @@ async function pgModules() {
       { h: 'Module', f: (m) => m.name }, { h: 'Edition', f: (m) => (m.tier === 'home' ? 'Home' : 'Enterprise') },
       { h: 'State', f: (m) => pill(MOD_STATE[m.state][0], MOD_STATE[m.state][1]) },
       { h: 'Why', f: (m) => modWhy(m) }, { h: 'What it does', f: (m) => m.description }], r.modules))];
+}
+
+// ---- Alert triage: assignee + notes --------------------------------------------------------
+const noteRow = (n) => el('div', { className: 'card', style: 'margin:6px 0' }, el('div', { className: 'mute', textContent: n.author_name + ' - ' + when(n.created_at) + ' UTC' }), el('div', { style: 'white-space:pre-wrap', textContent: n.body }));
+async function triagePanel(a) {
+  const [{ users, me }, { notes }] = await Promise.all([api('/v1/alert-assignees'), api('/v1/alerts/' + a.id + '/notes')]);
+  const sel = el('select', {}, el('option', { value: '', textContent: 'Unassigned' }), ...users.map((u) => el('option', { value: u.id, textContent: u.username + (u.id === me ? ' (me)' : '') })));
+  sel.value = a.assignee_id || '';
+  sel.onchange = async () => { try { await api('/v1/alerts/' + a.id + '/assignee', { method: 'PUT', body: { user_id: sel.value || null } }); } catch (e) { window.alert(e.message); sel.value = a.assignee_id || ''; } };
+  const list = el('div', {}, notes.map(noteRow));
+  const ta = el('textarea', { rows: 3, maxLength: 2000, placeholder: 'Add a note for the next analyst...', style: 'width:100%' });
+  const add = el('button', { className: 'btn pri', textContent: 'Add note', onclick: async () => {
+    const t = ta.value.trim(); if (!t) return;
+    try { const r = await api('/v1/alerts/' + a.id + '/notes', { method: 'POST', body: { body: t } }); list.append(noteRow(r.note)); ta.value = ''; } catch (e) { window.alert(e.message); }
+  } });
+  return el('div', {}, el('h3', { textContent: 'Assignee' }), sel, el('h3', { textContent: 'Notes' }), list, ta, el('div', { style: 'margin-top:8px' }, add));
 }
 
 // ---- boot ---------------------------------------------------------------------------

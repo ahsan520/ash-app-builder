@@ -35,13 +35,23 @@ router.get('/v1/alerts', ...guarded('alerts:read'), async (req, res) => {
     params.push(String(req.query.severity));
     where.push(`severity = $${params.length}`);
   }
+  const assignee = String(req.query.assignee || '');
+  if (assignee === 'unassigned') where.push('assignee_id IS NULL');
+  else if (assignee === 'me') {
+    if (!req.user_id) return apiError(res, 400, 'INVALID_ASSIGNEE', 'assignee=me needs a signed-in user');
+    params.push(req.user_id); where.push(`assignee_id = $${params.length}`);
+  } else if (assignee) {
+    if (!UUID_RE.test(assignee)) return apiError(res, 400, 'INVALID_ASSIGNEE', 'assignee must be me, unassigned or a user id');
+    params.push(assignee); where.push(`assignee_id = $${params.length}`);
+  }
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
   const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
   try {
     const r = await db.withTenant(req.tenant_id, (client) =>
       client.query(
         `SELECT id, rule_id, rule_name, severity, status, title, summary, group_key,
-                event_count, first_event_at, last_event_at, created_at
+                event_count, first_event_at, last_event_at, created_at, assignee_id,
+                (SELECT u.username FROM users u WHERE u.id = alerts.assignee_id) AS assignee_name
          FROM alerts WHERE ${where.join(' AND ')}
          ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
                   last_event_at DESC
