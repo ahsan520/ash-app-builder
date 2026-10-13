@@ -1,0 +1,66 @@
+# Nightly encrypted backup of the ASIX database, the Keycloak database and the database roles.
+#
+#  * runs the same image as the API (src/backup/backup.js), as the non-root "node" user
+#  * writes AES-256-GCM encrypted files to /var/backups/asix/scheduled on the VM
+#    (deploy.sh creates the folder and the passphrase secret asix-backup-secret)
+#  * every 7 days it also restores the new backup into a scratch database and compares it
+#  * results appear in Settings > Storage & retention > Data safety
+#
+# Run one now:   k3s kubectl -n asix-platform create job --from=cronjob/asix-backup backup-now-$(date +%s)
+# Restore:       sudo scripts/restore-backup.sh   (see docs/data-safety.md)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: asix-backup
+  namespace: asix-platform
+spec:
+  schedule: "17 2 * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 7200
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+          containers:
+            - name: backup
+              image: asix-api:local
+              imagePullPolicy: IfNotPresent
+              command: ["node", "src/backup/backup.js"]
+              env:
+                - { name: PGHOST, value: "postgresql.asix-platform.svc.cluster.local" }
+                - { name: PGPORT, value: "5432" }
+                - { name: PGUSER, value: "asix_admin" }
+                - name: PGPASSWORD
+                  valueFrom: { secretKeyRef: { name: postgresql-secret, key: POSTGRES_PASSWORD } }
+                - { name: DB_HOST, value: "postgresql.asix-platform.svc.cluster.local" }
+                - { name: DB_NAME, value: "asix_platform" }
+                - { name: DB_USER, value: "asix_admin" }
+                - name: DB_PASSWORD
+                  valueFrom: { secretKeyRef: { name: postgresql-secret, key: POSTGRES_PASSWORD } }
+                - name: BACKUP_PASSPHRASE
+                  valueFrom: { secretKeyRef: { name: asix-backup-secret, key: BACKUP_PASSPHRASE } }
+                - { name: BACKUP_DIR, value: "/backups" }
+                - { name: BACKUP_TMP, value: "/scratch" }
+                - { name: BACKUP_DATABASES, value: "asix_platform,keycloak" }
+                - { name: BACKUP_KEEP, value: "14" }
+                - { name: BACKUP_VERIFY_EVERY_DAYS, value: "7" }
+              resources:
+                requests: { cpu: "100m", memory: "128Mi" }
+                limits: { cpu: "1", memory: "512Mi" }
+              volumeMounts:
+                - { name: backups, mountPath: /backups }
+                - { name: scratch, mountPath: /scratch }
+          volumes:
+            - name: backups
+              hostPath: { path: /var/backups/asix/scheduled, type: Directory }
+            - name: scratch
+              emptyDir: { sizeLimit: 20Gi }

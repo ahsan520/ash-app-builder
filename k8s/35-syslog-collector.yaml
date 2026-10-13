@@ -27,6 +27,10 @@ spec:
   # both try to bind the same NodePort — this isn't a horizontally
   # scaled service in Phase 1, it's one collector process.
   replicas: 1
+  # Recreate, not RollingUpdate: a rolling update starts the new pod before the old one stops, and
+  # both would then write the same spool file on the shared volume.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: asix-syslog-collector

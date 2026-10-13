@@ -14,6 +14,8 @@ spec:
       labels:
         app: postgresql
     spec:
+      # Time for a clean (fast) shutdown: flushes WAL and checkpoints, so the next start needs no crash recovery.
+      terminationGracePeriodSeconds: 120
       containers:
         - name: postgresql
           image: postgres:16-alpine
@@ -47,11 +49,25 @@ spec:
               command: ["pg_isready", "-U", "asix_admin", "-d", "asix_platform"]
             initialDelaySeconds: 5
             periodSeconds: 10
+          # Crash recovery after an unclean stop can take minutes on a big database. Until this probe
+          # succeeds the liveness probe is not run, so Kubernetes cannot kill Postgres mid-recovery
+          # (which would restart the recovery and could loop forever).
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-U", "asix_admin", "-d", "asix_platform"]
+            periodSeconds: 5
+            failureThreshold: 120
           livenessProbe:
             exec:
               command: ["pg_isready", "-U", "asix_admin", "-d", "asix_platform"]
             initialDelaySeconds: 15
             periodSeconds: 20
+          lifecycle:
+            preStop:
+              # SIGINT = "fast" shutdown. Kubernetes' own SIGTERM would be a "smart" shutdown that waits
+              # for every client to disconnect and usually runs into the kill timeout instead.
+              exec:
+                command: ["sh", "-c", "kill -INT 1; i=0; while kill -0 1 2>/dev/null && [ $i -lt 110 ]; do sleep 1; i=$((i+1)); done"]
   volumeClaimTemplates:
     - metadata:
         name: postgresql-data

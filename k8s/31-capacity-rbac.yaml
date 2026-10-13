@@ -45,7 +45,7 @@ metadata:
   name: asix-api-node-reader
 rules:
   - apiGroups: [""]
-    resources: ["nodes"]
+    resources: ["nodes", "persistentvolumes"]      # persistentvolumes: Data safety card (reclaim policy, host path)
     verbs: ["get", "list"]
   - apiGroups: ["metrics.k8s.io"]
     resources: ["nodes"]

@@ -581,6 +581,25 @@ data:
     GRANT SELECT, INSERT, UPDATE, DELETE ON capacity_samples TO asix_admin;
     GRANT USAGE, SELECT ON SEQUENCE capacity_samples_id_seq TO asix_admin;
 
+    -- ============================================================
+    -- Backup history (written by the nightly backup job, read by the Data safety card)
+    -- ============================================================
+    CREATE TABLE IF NOT EXISTS backup_runs (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        trigger VARCHAR(20) NOT NULL DEFAULT 'scheduled',
+        set_name VARCHAR(40),
+        status VARCHAR(20) NOT NULL DEFAULT 'running',
+        started_at TIMESTAMP NOT NULL DEFAULT localtimestamp,
+        finished_at TIMESTAMP,
+        bytes BIGINT,
+        databases JSONB,
+        verified BOOLEAN NOT NULL DEFAULT false,
+        verified_at TIMESTAMP,
+        error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_backup_runs_started ON backup_runs(started_at DESC);
+    GRANT SELECT, INSERT, UPDATE, DELETE ON backup_runs TO asix_admin;
+
     -- One-time, atomic conversion of events to a daily-partitioned table. The block either
     -- completes (row counts verified, old table dropped) or rolls back and fails the deploy,
     -- leaving the original table untouched. deploy.sh takes a pg_dump just before this runs.
