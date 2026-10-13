@@ -42,10 +42,10 @@ const sumContainers = (pod, f) => (pod.spec.containers || []).reduce((a, c) => a
 
 async function snapshot(ns = process.env.POD_NAMESPACE || 'asix-platform', now = Date.now()) {
   if (!NS_RE.test(ns)) return { available: false, error: 'invalid namespace' };
-  const [nodesR, podsR, pvcR, depR, stsR, nmR, pmR] = await Promise.all([
+  const [nodesR, podsR, pvcR, depR, stsR, nmR, pmR, pvR] = await Promise.all([
     get('/api/v1/nodes'), get(`/api/v1/namespaces/${ns}/pods`), get(`/api/v1/namespaces/${ns}/persistentvolumeclaims`),
     get(`/apis/apps/v1/namespaces/${ns}/deployments`), get(`/apis/apps/v1/namespaces/${ns}/statefulsets`),
-    get('/apis/metrics.k8s.io/v1beta1/nodes'), get(`/apis/metrics.k8s.io/v1beta1/namespaces/${ns}/pods`)]);
+    get('/apis/metrics.k8s.io/v1beta1/nodes'), get(`/apis/metrics.k8s.io/v1beta1/namespaces/${ns}/pods`), get('/api/v1/persistentvolumes')]);
   const core = [nodesR, podsR];
   const bad = core.find((r) => r.status !== 200);
   if (bad) {
@@ -77,7 +77,11 @@ async function snapshot(ns = process.env.POD_NAMESPACE || 'asix-platform', now =
   const workloads = [...(depR.status === 200 ? depR.json.items : []).map((d) => ({ kind: 'Deployment', d })), ...(stsR.status === 200 ? stsR.json.items : []).map((d) => ({ kind: 'StatefulSet', d }))]
     .map(({ kind, d }) => ({ kind, name: d.metadata.name, desired: d.spec.replicas ?? 1, ready: d.status.readyReplicas || 0 }));
   const pvcs = (pvcR.status === 200 ? pvcR.json.items : []).map((c) => ({ name: c.metadata.name, storage_class: c.spec.storageClassName || null, requested: bytes(c.spec.resources.requests.storage), phase: c.status.phase }));
-  return { available: true, namespace: ns, nodes, pods, workloads, pvcs, metrics: { nodes: nmR.status === 200, pods: pmR.status === 200 } };
+  // PersistentVolumes that belong to (or, if Released, used to belong to) this namespace. null = could not be read.
+  const pvs = pvR.status !== 200 ? null : pvR.json.items.filter((v) => v.spec.claimRef && v.spec.claimRef.namespace === ns).map((v) => ({
+    name: v.metadata.name, claim: v.spec.claimRef.name, phase: v.status.phase, reclaim_policy: v.spec.persistentVolumeReclaimPolicy, storage_class: v.spec.storageClassName || null,
+    capacity: bytes(v.spec.capacity && v.spec.capacity.storage), path: (v.spec.local && v.spec.local.path) || (v.spec.hostPath && v.spec.hostPath.path) || null }));
+  return { available: true, namespace: ns, nodes, pods, workloads, pvcs, pvs, metrics: { nodes: nmR.status === 200, pods: pmR.status === 200 } };
 }
 
 module.exports = { snapshot, cpuCores, bytes, get };
