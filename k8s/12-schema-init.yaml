@@ -348,6 +348,30 @@ data:
     GRANT SELECT, INSERT, UPDATE, DELETE ON detection_rules TO asix_admin;
     GRANT SELECT, INSERT, UPDATE, DELETE ON alerts TO asix_admin;
 
+    -- Alert triage: who owns an alert, and analyst notes (idempotent upgrade)
+    ALTER TABLE alerts ADD COLUMN IF NOT EXISTS assignee_id UUID REFERENCES users(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_alerts_assignee ON alerts(tenant_id, assignee_id) WHERE assignee_id IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS alert_notes (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) NOT NULL,
+        alert_id UUID REFERENCES alerts(id) ON DELETE CASCADE NOT NULL,
+        author_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        author_name VARCHAR(255) NOT NULL,
+        body TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    ALTER TABLE alert_notes ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS alert_notes_tenant_isolation ON alert_notes;
+    CREATE POLICY alert_notes_tenant_isolation ON alert_notes
+        FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    CREATE INDEX IF NOT EXISTS idx_alert_notes_alert ON alert_notes(alert_id, created_at);
+    GRANT SELECT, INSERT, UPDATE, DELETE ON alert_notes TO asix_admin;
+
     -- Custom rules: correlation vs BIOC, plus an alert category (idempotent upgrade)
     ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'correlation';
     ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS category VARCHAR(100);
