@@ -7,6 +7,15 @@ const {
 
 // ---- Data model rules (XDM) ------------------------------------------------------------------
 const xdmSchema = require('../../ingestion/xdm-schema');
+const parsingRules = require('../../ingestion/parsing-rules');
+const rulesStore = require('../../ingestion/rules-store');
+const { parseLine: parseLineText, jsonEvent: parseJsonEvent } = require('../../ingest/http-ingest');
+// Same line handling as the Parsing rules simulator (routes/parsing.js): a pasted line starting with { is a JSON event.
+const parseIngestLine = (line, collector) => {
+  if (line.trim().startsWith('{')) { try { const it = parseJsonEvent(JSON.parse(line), collector); if (it) return it; } catch { /* not JSON: fall back to plain text */ } }
+  return parseLineText(line, collector);
+};
+const WIN_LINE = /^\[(Security|System|Application)\] /;
 
 router.get('/v1/data-model-rules', ...guarded('datamodel:rules:read'), async (req, res) => {
   try {

@@ -6,6 +6,7 @@ const {
 } = require('../shared');
 
 // ---- XQL-style search ---------------------------------------------------------------
+const xql = require('../../search/xql');
 router.post('/v1/search/xql', ...guarded('search:events:read'), async (req, res) => {
   const b = req.body || {};
   const mins = Number(b.minutes);
