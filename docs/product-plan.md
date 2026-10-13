@@ -28,6 +28,36 @@ Rules that keep it one product: Postgres stays first-class (not legacy); all con
 parsers, dashboards) is written in XQL, never raw SQL; one event envelope used end-to-end; modules
 register themselves via a manifest instead of being hard-coded into the gateway or portal menu.
 
+## Status of Phase 1 (updated this build)
+
+| Item | State |
+|---|---|
+| Data safety | Done |
+| Module / profile skeleton | Done as a skeleton, see below |
+| Broker VM on Vector | Not started |
+| Content packs (residential) | Not started; the `content-packs` module is listed as planned |
+| Alert triage | Next |
+| Regex-safety fix | Not started |
+| CI | Not started |
+
+### How the three dials are implemented now
+- **Modules:** one manifest file per module in `src/modules/manifests/`. A module is on only if its
+  tier is part of the profile, its license feature (if any) is granted, and everything it requires is
+  on. Modules with no backend yet are shown as `planned` and are never on. Today all ten Home modules
+  are available; the six Enterprise modules (SOAR, XDR, posture, AI assistant, compliance, MSSP) are
+  planned, so they cannot be switched on yet even with a license.
+- **Deployment profile:** `ASIX_PROFILE` = `home` (default) or `enterprise`. In this step it only
+  describes the target shape (storage, queue, archive, HA); it does not yet change how data is stored.
+- **Entitlements:** a license is a signed token (Ed25519) read from `ASIX_LICENSE_FILE` (default
+  `/etc/asix/license.jwt`) and verified with the public key at `/etc/asix/license.pub`. Missing,
+  expired or invalid licenses fall back to Home limits and never block the platform or touch data.
+  `scripts/license-tool.js` makes keys and signs licenses; the private key stays off the platform.
+- **Not enforced yet:** the `tenants` and `retention_days_max` limits are reported on the Modules
+  page but not yet applied by tenant creation or the retention job. The Home retention cap of 90 days
+  is a placeholder until the licensing decision below is made.
+- **Not yet done:** the portal menu does not hide or grey out entries based on module state, and there
+  is no per-tenant module toggle (that would need a schema change).
+
 ## Open decisions (ask before committing)
 - Smallest Home machine to design against (assumed: 4 vCPU / 8 GB / 100 GB until told otherwise).
 - Licensing model: open core vs. fully commercial with locked modules (business decision; the
