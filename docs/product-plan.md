@@ -34,11 +34,24 @@ register themselves via a manifest instead of being hard-coded into the gateway 
 |---|---|
 | Data safety | Done |
 | Module / profile skeleton | Done as a skeleton, see below |
-| Broker VM on Vector | Not started |
+| Broker VM on Vector | Done for syslog (see below) |
 | Content packs (residential) | Done for detection rules (see below); parsers and dashboards not yet |
+| Collector heartbeat | Done (see below) |
 | Alert triage | Done (assign, notes, bulk acknowledge/close); dedupe split out as its own item |
 | Regex-safety fix | Done (see below) |
 | CI | Done: lint (`no-undef`) and unit tests on every push; DB tests not included yet |
+
+### Broker VM and collector heartbeat (what exists)
+- A broker VM runs Vector: syslog in on UDP and TCP, forwarded over HTTPS to the existing HTTP ingest lane with a
+  per-broker ingestion key (revocable, named on the Collectors page), through a 1 GiB on-disk buffer that survives
+  ASIX outages. `scripts/deploy/bootstrap-broker.sh` installs and starts it; `docs/broker-vm.md` has the steps.
+- Vector rewrites events to the `ISO-time host app[pid]: message` shape the HTTP lane already parses, so parsing
+  rules and the data model need no change and there is no schema change.
+- Heartbeat: brokers (and the in-cluster syslog collector) ping `POST /v1/ingest/heartbeat` (or `/broker` for the
+  shared token) every 60 s, refreshing `collectors.last_seen`, so an idle source stays Connected. The Collectors
+  page merges the key-less (built-in) heartbeat rows with their event-derived counts.
+- Not built: managing brokers from the portal (config push, upgrades, capacity), syslog over TLS, non-syslog
+  sources on the broker, Kafka between broker and parser (Phase 3), a per-collector connected threshold (still 15 min).
 
 ### Alert triage (what exists)
 - Each alert can be assigned to a user of the same tenant (or unassigned), and carries analyst notes
