@@ -84,7 +84,7 @@ async function sampleOnce() {
                                    pg_connections, pg_max_connections, cache_hit_ratio, pods_total, pods_not_ready, restarts_total, oom_kills_24h)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
     [l.host.cpu_pct, l.host.load1, l.host.cpu_count, l.host.mem.total, l.host.mem.available, l.host.mem.swap_used, l.host.disk.total, l.host.disk.free, l.db.bytes, l.events.bytes, l.ingest_per_min,
-      l.db.connections, l.db.max_connections, l.db.cache_hit, k ? k.pods.length : null, k ? k.pods.filter((p) => !p.ready).length : null, k ? k.pods.reduce((a, p) => a + p.restarts, 0) : null, k ? k.pods.reduce((a, p) => a + p.oom_killed_24h, 0) : null]);
+      l.db.connections, l.db.max_connections, l.db.cache_hit, k ? k.pods.length : null, k ? k.pods.filter((p) => !p.ready && p.phase !== 'Succeeded').length : null, k ? k.pods.reduce((a, p) => a + p.restarts, 0) : null, k ? k.pods.reduce((a, p) => a + p.oom_killed_24h, 0) : null]);
   await db.query("DELETE FROM capacity_samples WHERE sampled_at < localtimestamp - ($1::int * interval '1 day')", [KEEP_DAYS]);
 }
 
