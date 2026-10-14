@@ -38,7 +38,7 @@ register themselves via a manifest instead of being hard-coded into the gateway 
 | Content packs (residential) | Not started; the `content-packs` module is listed as planned |
 | Alert triage | Done (assign, notes, bulk acknowledge/close); dedupe split out as its own item |
 | Regex-safety fix | Done (see below) |
-| CI | Next |
+| CI | Done: lint (`no-undef`) and unit tests on every push; DB tests not included yet |
 
 ### Alert triage (what exists)
 - Each alert can be assigned to a user of the same tenant (or unassigned), and carries analyst notes

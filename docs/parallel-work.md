@@ -49,7 +49,7 @@ Update the Status column in the same change that does the work, so the next sess
 | Alert dedupe / merge repeat alerts | open (split out of triage) | new file; `group_key` already exists on alerts |
 | Collector heartbeat (idle built-in source should not read as Disconnected) | open | `src/gateway/routes/collectors.js` (status is derived from events today) |
 | Regex-safety fix (user-supplied patterns, ReDoS) | done | `src/security/regex-safety.js` (new), wired into `src/ingestion/parsing-rules.js`, `src/detection/rule-query.js`, `src/search/xql.js`; `tests/regex-safety.test.js` |
-| CI (run `tests/*.test.js` on push) | **next** (small) | new `.github/workflows/ci.yml`, plus a `test` script in `package.json` |
+| CI (run `tests/*.test.js` on push) | done | `.github/workflows/ci.yml`, `eslint.config.js`, `test` and `lint` scripts in `package.json` |
 | Broker VM on Vector | open | new `src/brokers/*`, `deploy/` |
 | Content packs (residential) | open | new `src/packs/*`, manifest `content-packs` flips to `available` |
 
@@ -62,11 +62,11 @@ Update the Status column in the same change that does the work, so the next sess
    `12-schema-init.yaml`) wherever the feature allows it.
 4. Run the in-repo tests before declaring a feature done: `node tests/modules.test.js`,
    `tests/alert-triage.test.js`, `tests/bioc-rules.test.js`, `tests/data-model-rules.test.js`,
-   `tests/parsing-rules.test.js`, `tests/regex-safety.test.js` (they need `npm ci` first; `modules.test.js` uses `jose`). A CI workflow is still an open task above.
+   `tests/parsing-rules.test.js`, `tests/regex-safety.test.js` (they need `npm ci` first; `modules.test.js` uses `jose`). CI (`.github/workflows/ci.yml`) now runs `npm run lint` (ESLint `no-undef`) and `npm test` (every `tests/*.test.js`, on Node 20 and 22) on each push; run both locally before packaging. New tests must be named `*.test.js` to be picked up. Tests that need Postgres stay gated behind `ASIX_TEST_DB=1` and do not run in CI yet.
 5. Route files must `require` everything they use. The route split once dropped the imports in
    `data-model.js` and `search.js`, which caused 500s in production. Before packaging, check for
    undefined names, for example `npx eslint --no-config-lookup --rule '{"no-undef":"error"}' src`
-   (with `sourceType: commonjs` and node globals), or add an ESLint `no-undef` step to the CI task.
+   (with `sourceType: commonjs` and node globals), (this is now `npm run lint`).
 6. Anything that touches the database should be run once against a real Postgres, not only stubs:
    apply `k8s/12-schema-init.yaml`'s `schema.sql` twice (it must be idempotent), then run
    `ASIX_TEST_DB=1 DB_HOST=127.0.0.1 DB_PASSWORD=... node tests/alert-triage.test.js` as the pattern.
