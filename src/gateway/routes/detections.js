@@ -137,7 +137,7 @@ router.post('/v1/detections/rules/:id/reset', ...guarded('detections:rules:write
     const out = await db.withTenant(req.tenant_id, async (client) => {
       const cur = await client.query('SELECT builtin_key FROM detection_rules WHERE id = $1 AND tenant_id = $2', [id, req.tenant_id]);
       if (!cur.rows.length) return { status: 404, code: 'NOT_FOUND', msg: 'Rule not found' };
-      const def = BUILTIN_RULES.find((b) => b.key === cur.rows[0].builtin_key);
+      const def = BUILTIN_RULES.find((b) => b.key === cur.rows[0].builtin_key) || require('../../packs').findRuleByBuiltinKey(cur.rows[0].builtin_key);
       if (!def) return { status: 400, code: 'NOT_BUILTIN', msg: 'Only built-in rules can be reset' };
       await client.query(
         `UPDATE detection_rules SET name = $3, description = $4, severity = $5, mitre = $6, definition = $7::jsonb,

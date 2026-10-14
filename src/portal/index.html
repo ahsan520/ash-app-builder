@@ -218,6 +218,7 @@ const NAV = [
   { id: 'posture', label: 'Posture Management', ic: '\u2630', soon: true },
   { id: 'inventory', label: 'Inventory', ic: '\u25A3', soon: true },
   { id: 'modules', label: 'Modules', ic: '\u2756', page: pgModules, crumb: ['Modules', 'Installed modules'] },
+  { id: 'packs', label: 'Content packs', ic: '\u2750', page: pgPacks, crumb: ['Content packs', 'Available packs'] },
 ];
 const SETTINGS = [
   { group: 'General' },
@@ -1711,6 +1712,33 @@ async function triagePanel(a) {
     try { const r = await api('/v1/alerts/' + a.id + '/notes', { method: 'POST', body: { body: t } }); list.append(noteRow(r.note)); ta.value = ''; } catch (e) { window.alert(e.message); }
   } });
   return el('div', {}, el('h3', { textContent: 'Assignee' }), sel, el('h3', { textContent: 'Notes' }), list, ta, el('div', { style: 'margin-top:8px' }, add));
+}
+
+// ---- Content packs ---------------------------------------------------------------------------
+const PACK_STATE = { available: ['Not installed', 'off'], partial: ['Partly installed', 'off'], installed: ['Installed', 'ok'] };
+async function pgPacks() {
+  const r = await api('/v1/packs');
+  const act = async (fn) => { try { await fn(); route(); } catch (e) { window.alert(e.message); } };
+  const btn = (t, f, pri) => el('button', { className: 'btn' + (pri ? ' pri' : ''), style: 'margin-right:4px', textContent: t, onclick: f });
+  const remove = async (p) => {
+    if (!window.confirm('Remove \"' + p.name + '\"? Its rules are deleted.')) return;
+    try { await api('/v1/packs/' + p.id, { method: 'DELETE' }); route(); } catch (e) {
+      if (e.status === 409 && window.confirm('Some of these rules have raised alerts. Removing the pack deletes those alerts too. Continue?')) act(() => api('/v1/packs/' + p.id + '?delete_alerts=true', { method: 'DELETE' }));
+      else if (e.status !== 409) window.alert(e.message);
+    }
+  };
+  const acts = (p) => el('div', { style: 'margin-top:10px' },
+    p.state === 'installed' ? '' : btn(p.state === 'partial' ? 'Add missing rules' : 'Install', () => act(() => api('/v1/packs/' + p.id + '/install', { method: 'POST', body: {} })), true),
+    p.state === 'available' ? '' : btn('Restore shipped rules', () => { if (window.confirm('Put every rule from \"' + p.name + '\" back to the version shipped with ASIX? Your edits to these rules will be lost.')) act(() => api('/v1/packs/' + p.id + '/install', { method: 'POST', body: { overwrite: true } })); }),
+    p.state === 'available' ? '' : btn('Remove', () => remove(p)));
+  return [...head('Content packs', 'Ready-made detection rules for common home setups. Installing a pack adds its rules to Threat Management, where you can edit, disable or tune them like any other rule. Installing again never duplicates a rule or overwrites your edits.'),
+    ...r.packs.map((p) => card(p.name + '  v' + p.version,
+      el('div', { style: 'margin-bottom:6px' }, pill(PACK_STATE[p.state][0], PACK_STATE[p.state][1]), ' ', el('span', { className: 'mute', textContent: p.installed_rules + ' of ' + p.rule_count + ' rules installed' + (p.open_alerts ? ', ' + p.open_alerts + ' active alert' + (p.open_alerts > 1 ? 's' : '') : '') })),
+      el('div', { textContent: p.description }),
+      el('div', { className: 'mute', style: 'margin:6px 0', textContent: 'Expects: ' + p.sources.join('; ') }),
+      table([{ h: 'Rule', f: (x) => el('div', {}, el('div', { textContent: x.name }), el('div', { className: 'mute', style: 'font-size:12px', textContent: x.description })) },
+        { h: 'Severity', f: (x) => sevPill(x.severity) }, { h: 'MITRE', f: (x) => (x.mitre || []).join(', ') }], p.rules),
+      acts(p)))];
 }
 
 // ---- boot ---------------------------------------------------------------------------

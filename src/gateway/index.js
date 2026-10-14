@@ -54,6 +54,7 @@ app.use(require('./routes/capacity'));
 app.use(require('./routes/parsing'));
 app.use(require('./routes/data-model'));
 app.use(require('./routes/modules'));
+app.use(require('./routes/packs'));
 
 app.get('/', (req, res) => {
   res.json({

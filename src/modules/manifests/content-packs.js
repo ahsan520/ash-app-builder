@@ -3,11 +3,11 @@
 module.exports = {
   id: "content-packs",
   name: "Content packs",
-  description: "Installable bundles of rules, parsers and dashboards (residential packs first).",
+  description: "Installable bundles of detection rules (residential packs first; parsers and dashboards come later).",
   tier: "home",             // lowest edition that includes it: 'home' or 'enterprise'
   entitlement: null,        // license feature that unlocks it; null = no license needed
-  status: "planned",         // 'available' = backend exists, 'planned' = not built yet
+  status: "available",         // 'available' = backend exists, 'planned' = not built yet
   requires: ["detections", "ingestion"],
-  permissions: [],
+  permissions: ["detections:rules:read", "detections:rules:write"],
   portal_area: "Modules",
 };
