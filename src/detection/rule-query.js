@@ -14,6 +14,7 @@ const COLUMN_FIELDS = new Set(['raw', 'source_type', 'collector_id']);
 const FIELD_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 const OPS = ['contains', 'equals', 'not_equals', 'regex'];
 const { compileCondition, XqlError } = require('../search/xql');
+const { assertSafeRegex } = require('../security/regex-safety');
 const ID_RE = /^[a-z_]{1,30}$/;
 const BUILDER_OPS = ['=', '!=', 'contains', 'not contains', '~=', 'in', 'not in', '>', '<', 'is set', 'is empty'];
 const EVENT_TYPES = ['process', 'file', 'network', 'image_load', 'registry', 'event_log', 'network_connections'];
@@ -24,8 +25,7 @@ const int = (v, d, lo, hi) => {
   return Number.isInteger(n) && n >= lo && n <= hi ? n : null;
 };
 function regexOk(s) {
-  if (s.length > 500) return false;
-  try { new RegExp(s); return true; } catch { return false; }
+  try { assertSafeRegex(s, { mode: 'pg' }); new RegExp(s); return true; } catch { return false; }
 }
 
 // Returns { def } (cleaned definition) or { error } (message for the user).
@@ -33,7 +33,7 @@ function normalizeDefinition(input) {
   const d = input && typeof input === 'object' ? input : {};
   const out = {};
   out.regex = typeof d.regex === 'string' ? d.regex.trim() : '';
-  if (out.regex && !regexOk(out.regex)) return { error: 'Match text is not a valid regular expression (max 500 chars)' };
+  if (out.regex && !regexOk(out.regex)) return { error: 'Match text is not a valid, safe regular expression (max 500 chars, no back-references)' };
   out.source_type = typeof d.source_type === 'string' ? d.source_type.trim().slice(0, 100) : '';
   out.filters = [];
   for (const f of Array.isArray(d.filters) ? d.filters : []) {
@@ -42,7 +42,7 @@ function normalizeDefinition(input) {
     if (!FIELD_RE.test(field)) return { error: 'Invalid field name: ' + field.slice(0, 40) };
     if (!OPS.includes(f.op)) return { error: 'Invalid filter operator' };
     const value = String(f.value ?? '').slice(0, 500);
-    if (f.op === 'regex' && !regexOk(value)) return { error: 'Filter on ' + field + ' is not a valid regular expression' };
+    if (f.op === 'regex' && !regexOk(value)) return { error: 'Filter on ' + field + ' is not a valid, safe regular expression (max 500 chars, no back-references)' };
     out.filters.push({ field, op: f.op, value });
   }
   if (out.filters.length > 10) return { error: 'At most 10 filters' };

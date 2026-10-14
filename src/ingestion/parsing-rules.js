@@ -21,7 +21,8 @@ class RuleError extends Error { constructor(message, pos) { super(message); this
 const SOURCE_RE = /^[A-Za-z0-9._-]{1,50}$/;
 const HEADER_KEYS = ['vendor', 'product', 'target_dataset', 'no_hit', 'content_id', 'source_type'];
 const READONLY = new Set(['_raw', 'source_type', 'collector_id', '_id']);
-const MAX_SRC = 60000, MAX_REGEX = 300, MAX_VAL = 8192, MAX_KEYS = 200;
+const { assertSafeRegex, RegexSafetyError, clampSubject } = require('../security/regex-safety');
+const MAX_SRC = 60000, MAX_VAL = 8192, MAX_KEYS = 200;
 const KW = new Set(['and', 'or', 'not', 'contains', 'in', 'null', 'true', 'false']);
 
 // ---- tokenizer ------------------------------------------------------------------------
@@ -58,12 +59,13 @@ const reCache = new Map();
 function toRegex(pattern, flags) {
   const key = flags + '\u0000' + pattern;
   if (reCache.has(key)) return reCache.get(key);
-  let p = String(pattern), f = flags;
-  if (p.startsWith('(?i)')) { p = p.slice(4); f += 'i'; }
-  if (p.length > MAX_REGEX) throw new RuleError(`Regex longer than ${MAX_REGEX} characters`);
-  if (/\((?:[^()\\]|\\.)*[+*](?:[^()\\]|\\.)*\)[+*{]/.test(p)) throw new RuleError('Regex has a nested quantifier such as (a+)+ which can hang the parser; simplify it');
+  let checked;
+  try { checked = assertSafeRegex(pattern, { mode: 'js', flags }); } catch (e) {
+    if (e instanceof RegexSafetyError) throw new RuleError(e.message);
+    throw e;
+  }
   let re;
-  try { re = new RegExp(p, f); } catch (e) { throw new RuleError('Invalid regular expression: ' + e.message); }
+  try { re = new RegExp(checked.source, checked.flags); } catch (e) { throw new RuleError('Invalid regular expression: ' + e.message); }
   if (reCache.size > 500) reCache.clear();
   reCache.set(key, re);
   return re;
@@ -256,7 +258,7 @@ function compare(op, a, b) {
   if (op === '=') return a === null || a === undefined ? (b === null || b === undefined) : (b === null || b === undefined) ? false : (isNum(a) && isNum(b) ? Number(a) === Number(b) : str(a) === str(b));
   if (op === '!=') return !compare('=', a, b);
   if (a === null || a === undefined || b === null || b === undefined) return false;
-  if (op === '~=') return toRegex(String(b), '').test(str(a));
+  if (op === '~=') return toRegex(String(b), '').test(clampSubject(str(a) ?? ''));
   if (op === 'contains') return str(a).toLowerCase().includes(str(b).toLowerCase());
   const [x, y] = isNum(a) && isNum(b) ? [Number(a), Number(b)] : [str(a), str(b)];
   return op === '<' ? x < y : op === '>' ? x > y : op === '<=' ? x <= y : x >= y;
@@ -300,7 +302,7 @@ function callFn(n, rec) {
     case 'parse_timestamp': return parseTimestamp(v[0], v[1]);
     case 'regextract': {
       if (v[0] === null || v[1] === null) return null;
-      const re = toRegex(String(v[1]), 'g'), s = str(v[0]); const out = []; let m; re.lastIndex = 0;
+      const re = toRegex(String(v[1]), 'g'), s = clampSubject(str(v[0])); const out = []; let m; re.lastIndex = 0;
       while ((m = re.exec(s)) && out.length < 20) { out.push(m[1] !== undefined ? m[1] : m[0]); if (m[0] === '') re.lastIndex++; }
       return out;
     }

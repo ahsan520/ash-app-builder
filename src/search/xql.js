@@ -14,6 +14,7 @@
 // parameter or checked against a strict identifier pattern - nothing is concatenated into SQL.
 
 const XDM_CONSTANTS = require('../ingestion/xdm-schema').CONSTANTS;
+const { assertSafeRegex, RegexSafetyError } = require('../security/regex-safety');
 
 class XqlError extends Error {}
 
@@ -127,7 +128,8 @@ class Compiler {
     if (op.v === '=') return `${fe} = ${this.bind(String(v.v))}`;
     if (op.v === '!=') return `${fe} IS DISTINCT FROM ${this.bind(String(v.v))}`;
     if (op.v === '~=') {
-      const s = String(v.v); if (s.length > 500) c.fail('regex too long');
+      const s = String(v.v);
+      try { assertSafeRegex(s, { mode: 'pg' }); } catch (e) { if (e instanceof RegexSafetyError) c.fail(e.message); throw e; }
       try { new RegExp(s); } catch { c.fail('invalid regular expression'); }
       return `COALESCE(${fe} ~* ${this.bind(s)}, false)`;
     }
