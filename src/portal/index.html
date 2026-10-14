@@ -385,8 +385,8 @@ async function openAlert(id, holder) {
       ...(a.status === 'open' ? [act('acknowledged', 'Acknowledge', true), act('closed', 'Close')] : a.status === 'acknowledged' ? [act('closed', 'Close', true), act('open', 'Reopen')] : [act('open', 'Reopen', true)]));
     const d = a.details || {};
     holder.replaceChildren(card(a.title,
-      kv({ rule: a.rule_name, severity: a.severity, status: a.status, group: a.group_key, matching_events: a.event_count, first_seen_utc: when(a.first_event_at), last_seen_utc: when(a.last_event_at), condition: (d.threshold || '?') + ' in ' + (d.window_minutes || '?') + ' min' }),
-      buttons, await triagePanel(a), el('h3', { textContent: 'Latest matching events' }),
+      kv({ rule: a.rule_name, severity: a.severity, status: a.status, group: a.group_key, matching_events: a.event_count, first_seen_utc: when(a.first_event_at), last_seen_utc: when(a.last_event_at), condition: (d.threshold || '?') + ' in ' + (d.window_minutes || '?') + ' min', merged_alerts: a.merged_count || 0, merged_into: a.merged_into_id || '-' }),
+      buttons, a.merged_count ? await mergedPanel(a) : '', await triagePanel(a), el('h3', { textContent: 'Latest matching events' }),
       table([{ h: 'Time (UTC)', f: (e) => when(e.event_time || e.received_at) }, { h: 'Event', cls: 'msg', f: (e) => e.raw }], events, 'The sample events are no longer available.')));
     holder.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   } catch (e) { holder.replaceChildren(errBox(e)); }
@@ -407,12 +407,13 @@ async function pgAlerts() {
   const r = await api('/v1/alerts?' + p);
   const holder = el('div');
   const list = table([{ h: '', f: (a) => el('input', { type: 'checkbox', onclick: (e) => e.stopPropagation(), onchange: (e) => { if (e.target.checked) picked.add(a.id); else picked.delete(a.id); bulkInfo.textContent = picked.size ? picked.size + ' selected' : 'Select alerts to change several at once'; } }) },
-    { h: 'Severity', f: (a) => sevPill(a.severity) }, { h: 'Alert', f: (a) => a.title }, { h: 'Events', f: (a) => a.event_count }, { h: 'Assignee', f: (a) => a.assignee_name || '-' },
+    { h: 'Severity', f: (a) => sevPill(a.severity) }, { h: 'Alert', f: (a) => a.title }, { h: 'Events', f: (a) => a.event_count + (a.merged_count ? ' (' + a.merged_count + ' merged)' : '') }, { h: 'Assignee', f: (a) => a.assignee_name || '-' },
     { h: 'Last seen (UTC)', f: (a) => when(a.last_event_at) }, { h: 'Status', f: (a) => pill(a.status, a.status === 'closed' ? 'off' : a.status === 'open' ? 'bad' : 'ok') }], r.alerts, 'No alerts match. Detection rules run every minute.');
   if (list.querySelectorAll) list.querySelectorAll('tbody tr').forEach((tr, i) => { tr.className = 'row'; tr.onclick = () => openAlert(r.alerts[i].id, holder); });
   return [...head('Alerts', 'Alerts raised by detection rules. Click an alert for its matching events, to assign it, add notes and change its status. Tick several to acknowledge or close them together.'),
     card('', el('div', { style: 'display:flex;gap:10px;align-items:center' }, el('span', { className: 'mute', textContent: 'Show' }), stSel, sevSel, whoSel, el('span', { className: 'mute', style: 'margin-left:auto', textContent: r.count + ' shown' })),
-      el('div', { style: 'display:flex;gap:8px;align-items:center;margin-top:10px' }, el('button', { className: 'btn', textContent: 'Acknowledge selected', onclick: bulk('acknowledged') }), el('button', { className: 'btn', textContent: 'Close selected', onclick: bulk('closed') }), bulkInfo)),
+      el('div', { style: 'display:flex;gap:8px;align-items:center;margin-top:10px' }, el('button', { className: 'btn', textContent: 'Acknowledge selected', onclick: bulk('acknowledged') }), el('button', { className: 'btn', textContent: 'Close selected', onclick: bulk('closed') }), bulkInfo,
+        el('button', { className: 'btn', style: 'margin-left:auto', textContent: 'Find repeat alerts', onclick: () => openDedupe(holder) }))),
     card('', list), holder];
 }
 // ---- Collectors & installers (XSIAM-style administration) -------------------------------
@@ -1712,6 +1713,27 @@ async function triagePanel(a) {
     try { const r = await api('/v1/alerts/' + a.id + '/notes', { method: 'POST', body: { body: t } }); list.append(noteRow(r.note)); ta.value = ''; } catch (e) { window.alert(e.message); }
   } });
   return el('div', {}, el('h3', { textContent: 'Assignee' }), sel, el('h3', { textContent: 'Notes' }), list, ta, el('div', { style: 'margin-top:8px' }, add));
+}
+
+// ---- Alert dedupe: find and merge repeat alerts ---------------------------------------------------
+async function mergedPanel(a) {
+  const { merged } = await api('/v1/alerts/' + a.id + '/merged');
+  return el('div', {}, el('h3', { textContent: 'Merged repeat alerts' }),
+    table([{ h: 'Alert', f: (m) => m.title }, { h: 'Events', f: (m) => m.event_count }, { h: 'First seen (UTC)', f: (m) => when(m.first_event_at || m.created_at) }, { h: 'Last seen (UTC)', f: (m) => when(m.last_event_at) }], merged, 'None.'));
+}
+async function openDedupe(holder) {
+  holder.replaceChildren(el('div', { className: 'mute', textContent: 'Looking for repeat alerts...' }));
+  try {
+    const r = await api('/v1/alert-duplicates');
+    const done = async (fn) => { try { const out = await fn(); window.alert(out.merged + ' alert' + (out.merged === 1 ? '' : 's') + ' merged.'); route(); } catch (e) { window.alert(e.message); } };
+    if (!r.groups.length) return holder.replaceChildren(card('Repeat alerts', el('div', { className: 'mute', textContent: 'No repeat alerts. Each active alert is the only one for its rule and group.' })));
+    holder.replaceChildren(card('Repeat alerts: ' + r.alert_count + ' alerts in ' + r.group_count + ' groups',
+      el('div', { className: 'mute', style: 'margin-bottom:8px', textContent: 'Repeats are active alerts from the same rule and group. Merging keeps the oldest alert, adds up the event counts, closes the others (still readable, linked to it) and moves their notes across.' }),
+      el('button', { className: 'btn pri', textContent: 'Merge all groups', onclick: () => { if (window.confirm('Merge every group of repeat alerts into its oldest alert?')) done(() => api('/v1/alert-duplicates/merge', { method: 'POST', body: {} })); } })),
+      ...r.groups.map((g) => card(g.rule_name + (g.group_key === 'all' ? '' : ': ' + g.group_key) + '  (' + g.count + ' alerts, ' + g.total_events + ' events)',
+        table([{ h: 'Severity', f: (a) => sevPill(a.severity) }, { h: 'Status', f: (a) => a.status }, { h: 'Events', f: (a) => a.event_count }, { h: 'First seen (UTC)', f: (a) => when(a.first_event_at || a.created_at) }, { h: 'Last seen (UTC)', f: (a) => when(a.last_event_at) }, { h: 'Assignee', f: (a) => a.assignee_name || '-' }], g.alerts),
+        el('div', { style: 'margin-top:8px' }, el('button', { className: 'btn', textContent: 'Merge into the oldest', onclick: () => { if (window.confirm('Merge ' + (g.alerts.length - 1) + ' alert(s) into the oldest one?')) done(() => api('/v1/alerts/merge', { method: 'POST', body: { primary_id: g.alerts[0].id, ids: g.alerts.slice(1).map((a) => a.id) } })); } })))));
+  } catch (e) { holder.replaceChildren(errBox(e)); }
 }
 
 // ---- Content packs ---------------------------------------------------------------------------

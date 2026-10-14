@@ -50,7 +50,7 @@ router.get('/v1/alerts', ...guarded('alerts:read'), async (req, res) => {
     const r = await db.withTenant(req.tenant_id, (client) =>
       client.query(
         `SELECT id, rule_id, rule_name, severity, status, title, summary, group_key,
-                event_count, first_event_at, last_event_at, created_at, assignee_id,
+                event_count, first_event_at, last_event_at, created_at, assignee_id, merged_into_id, merged_count,
                 (SELECT u.username FROM users u WHERE u.id = alerts.assignee_id) AS assignee_name
          FROM alerts WHERE ${where.join(' AND ')}
          ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
