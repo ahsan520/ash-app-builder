@@ -37,8 +37,8 @@ register themselves via a manifest instead of being hard-coded into the gateway 
 | Broker VM on Vector | Not started |
 | Content packs (residential) | Not started; the `content-packs` module is listed as planned |
 | Alert triage | Done (assign, notes, bulk acknowledge/close); dedupe split out as its own item |
-| Regex-safety fix | Next |
-| CI | Not started |
+| Regex-safety fix | Done (see below) |
+| CI | Next |
 
 ### Alert triage (what exists)
 - Each alert can be assigned to a user of the same tenant (or unassigned), and carries analyst notes
@@ -51,6 +51,19 @@ register themselves via a manifest instead of being hard-coded into the gateway 
   job on deploy and is safe to re-run.
 - Not built: dedupe/merge of repeat alerts, a "my open alerts" dashboard tile, notes on status changes,
   note editing or deletion.
+
+### Regex safety (what exists)
+- One checker, `src/security/regex-safety.js`, used everywhere a user can supply a pattern.
+- **Parsing rules (`~=`, `regextract`)** run in the Node process, where a bad pattern can freeze ingest. Patterns are
+  parsed and refused at save time if they have nested repeats `(a+)+`, repeated alternatives that start the same
+  way `(a|ab)+`, a repeated group that can match nothing `(a|)*`, two adjacent overlapping repeats `\d+\d+`, a
+  back-reference, more than 4 open-ended repeats, or more than 300 characters. Values are also cut to 4096
+  characters before matching, which bounds the cost of anything that slips through.
+- **Detection rules and XQL `~=`** are matched by PostgreSQL (already under `statement_timeout`), so they get the
+  length limit (500) and a back-reference ban only.
+- The check is conservative: it can refuse a harmless pattern, and the error message says what to change.
+- Not built: running user patterns on an RE2 engine or in a worker with a hard timeout (would remove the need for the
+  structural check).
 
 ### How the three dials are implemented now
 - **Modules:** one manifest file per module in `src/modules/manifests/`. A module is on only if its

@@ -48,8 +48,8 @@ Update the Status column in the same change that does the work, so the next sess
 | Alert triage: assign, notes, bulk acknowledge/close | done | `src/gateway/routes/alert-triage.js`, `alerts.js` (assignee filter/column), `12-schema-init.yaml` (`alerts.assignee_id`, `alert_notes`), portal "Alerts", `tests/alert-triage.test.js` |
 | Alert dedupe / merge repeat alerts | open (split out of triage) | new file; `group_key` already exists on alerts |
 | Collector heartbeat (idle built-in source should not read as Disconnected) | open | `src/gateway/routes/collectors.js` (status is derived from events today) |
-| Regex-safety fix (user-supplied patterns, ReDoS) | **next** (small) | `src/ingestion/parsing-rules.js`, `src/detection/rule-query.js`, `src/search/xql.js` |
-| CI (run `tests/*.test.js` on push) | open | new `.github/workflows/ci.yml`, plus a `test` script in `package.json` |
+| Regex-safety fix (user-supplied patterns, ReDoS) | done | `src/security/regex-safety.js` (new), wired into `src/ingestion/parsing-rules.js`, `src/detection/rule-query.js`, `src/search/xql.js`; `tests/regex-safety.test.js` |
+| CI (run `tests/*.test.js` on push) | **next** (small) | new `.github/workflows/ci.yml`, plus a `test` script in `package.json` |
 | Broker VM on Vector | open | new `src/brokers/*`, `deploy/` |
 | Content packs (residential) | open | new `src/packs/*`, manifest `content-packs` flips to `available` |
 
@@ -62,7 +62,7 @@ Update the Status column in the same change that does the work, so the next sess
    `12-schema-init.yaml`) wherever the feature allows it.
 4. Run the in-repo tests before declaring a feature done: `node tests/modules.test.js`,
    `tests/alert-triage.test.js`, `tests/bioc-rules.test.js`, `tests/data-model-rules.test.js`,
-   `tests/parsing-rules.test.js` (they need `npm ci` first; `modules.test.js` uses `jose`). A CI workflow is still an open task above.
+   `tests/parsing-rules.test.js`, `tests/regex-safety.test.js` (they need `npm ci` first; `modules.test.js` uses `jose`). A CI workflow is still an open task above.
 5. Route files must `require` everything they use. The route split once dropped the imports in
    `data-model.js` and `search.js`, which caused 500s in production. Before packaging, check for
    undefined names, for example `npx eslint --no-config-lookup --rule '{"no-undef":"error"}' src`
