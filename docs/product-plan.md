@@ -37,9 +37,13 @@ register themselves via a manifest instead of being hard-coded into the gateway 
 | Broker VM on Vector | Done for syslog (see below) |
 | Content packs (residential) | Done for detection rules (see below); parsers and dashboards not yet |
 | Collector heartbeat | Done (see below) |
-| Alert triage | Done (assign, notes, bulk acknowledge/close); dedupe split out as its own item |
+| Alert triage | Done (assign, notes, bulk acknowledge/close) |
+| Alert dedupe | Done (see below): find and merge repeat alerts, by hand or all at once |
 | Regex-safety fix | Done (see below) |
 | CI | Done: lint (`no-undef`) and unit tests on every push; DB tests not included yet |
+
+Every Phase 1 item is now done. The next part is Phase 2 (foundation for scale), starting with the event envelope and
+the event-store interface.
 
 ### Broker VM and collector heartbeat (what exists)
 - A broker VM runs Vector: syslog in on UDP and TCP, forwarded over HTTPS to the existing HTTP ingest lane with a
@@ -62,8 +66,27 @@ register themselves via a manifest instead of being hard-coded into the gateway 
 - Uses the existing `alerts:read` / `alerts:write` permissions, so no role changes are needed.
 - Needs the new schema (`alerts.assignee_id`, `alert_notes`); it is applied by the normal schema-init
   job on deploy and is safe to re-run.
-- Not built: dedupe/merge of repeat alerts, a "my open alerts" dashboard tile, notes on status changes,
-  note editing or deletion.
+- Not built: a "my open alerts" dashboard tile, notes on status changes, note editing or deletion.
+
+### Alert dedupe (what exists)
+- **What counts as a repeat:** two active (open or acknowledged) alerts from the same rule with the same group key. The rule
+  runner already folds new hits into an alert that saw events within twice the rule window; repeats appear when a noisy
+  source goes quiet for longer and then returns. Alert raising itself is unchanged.
+- **What a merge does:** the oldest alert is kept. It takes the summed event count, the earliest first-seen and latest
+  last-seen time, and the worst severity. Status becomes open if any merged alert was open (an unhandled repeat is not hidden
+  behind an acknowledged one). It keeps its owner, or takes the owner of the most recently active repeat that had one.
+  The other alerts are closed and linked to it (`merged_into_id`); nothing is deleted. Their notes move to the kept alert,
+  and an "ASIX" note records who merged how many. Closed alerts are never updated by the rule runner or the IOC matcher, so
+  the kept alert simply carries on absorbing new events.
+- **Portal:** Alerts page, button **Find repeat alerts**: groups with their alerts, **Merge into the oldest** per group or
+  **Merge all groups**. The list shows `(N merged)` next to the event count; the alert detail lists what was merged into it.
+- **API:** `GET /v1/alert-duplicates`, `POST /v1/alerts/merge` (`{primary_id, ids}`, up to 200, all must be active and from
+  the same rule and group, else 409), `POST /v1/alert-duplicates/merge` (everything, one savepoint per group),
+  `GET /v1/alerts/:id/merged`. Uses `alerts:read` / `alerts:write`, so no role changes are needed.
+- **Schema:** `alerts.merged_into_id` and `alerts.merged_count`, added by the normal schema-init job and safe to re-run.
+- Not built: merging automatically on a schedule or as alerts are raised, undoing a merge (reopening a merged alert works but
+  it stays linked and is not offered for merging again), merging alerts from different rules, and keeping the sample events
+  of the merged alerts (the kept alert shows its own).
 
 ### Regex safety (what exists)
 - One checker, `src/security/regex-safety.js`, used everywhere a user can supply a pattern.
