@@ -1049,7 +1049,7 @@ async function pgCapacity() {
     el('h3', { style: 'margin-top:18px', textContent: 'Cluster' }),
     k.available ? el('div', {}, card('Nodes', table([{ h: 'Node', f: (n) => n.name }, { h: 'State', f: (n) => pill(n.ready ? 'Ready' : 'NotReady', n.ready ? 'ok' : 'bad') }, { h: 'Roles', f: (n) => n.roles.join(', ') || 'worker' },
         { h: 'CPU used / allocatable', f: (n) => cores(n.cpu_used) + ' / ' + cores(n.cpu_allocatable) }, { h: 'Memory used / allocatable', f: (n) => (n.mem_used == null ? '-' : fmtSize(n.mem_used)) + ' / ' + fmtSize(n.mem_allocatable) }], k.nodes)),
-      card('Pods', table([{ h: 'Pod', f: (p) => p.name }, { h: 'Ready', f: (p) => pill(p.ready ? 'yes' : 'no', p.ready ? 'ok' : 'bad') }, { h: 'Restarts', f: (p) => p.restarts },
+      card('Pods', table([{ h: 'Pod', f: (p) => p.name }, { h: 'Ready', f: (p) => (p.phase === 'Succeeded' ? pill('completed', 'off') : pill(p.ready ? 'yes' : 'no', p.ready ? 'ok' : 'bad')) }, { h: 'Restarts', f: (p) => p.restarts },
         { h: 'CPU used / limit', f: (p) => cores(p.cpu_used) + ' / ' + cores(p.cpu_limit) + (p.cpu_used != null && p.cpu_limit ? ' (' + pct(p.cpu_used, p.cpu_limit) + ')' : '') },
         { h: 'Memory used / limit', f: (p) => (p.mem_used == null ? '-' : fmtSize(p.mem_used)) + ' / ' + (p.mem_limit ? fmtSize(p.mem_limit) : '-') + (p.mem_used != null && p.mem_limit ? ' (' + pct(p.mem_used, p.mem_limit) + ')' : '') }], k.pods),
         k.metrics.pods ? '' : el('div', { className: 'mute', style: 'margin-top:8px', textContent: 'Usage columns need metrics-server (not answering).' })),
