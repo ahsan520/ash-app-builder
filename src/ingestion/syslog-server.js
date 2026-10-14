@@ -25,6 +25,10 @@
 //     prolonged data-node/network outage; oldest-write events drop once
 //     the cap is hit
 //
+//   INGEST_HEARTBEAT_URL (default: INGEST_API_URL with /v1/ingest/events replaced by
+//     /v1/ingest/heartbeat/broker) and SYSLOG_HEARTBEAT_SECONDS (default 60, 0 = off) - a quiet
+//     collector pings the data node so it keeps showing as Connected on the Collectors page.
+//
 // Ports default to 5514, not 514, so this can run unprivileged.
 
 const { SyslogListener } = require('./syslog-listener');
@@ -65,8 +69,32 @@ const listener = new SyslogListener({
 
 listener.start();
 
+// Heartbeat: independent of event traffic, never throws, never blocks the listener.
+const hbSeconds = Number(process.env.SYSLOG_HEARTBEAT_SECONDS ?? 60);
+const hbUrl = process.env.INGEST_HEARTBEAT_URL || ingestApiUrl.replace(/\/v1\/ingest\/events\/?$/, '/v1/ingest/heartbeat/broker');
+let hbTimer = null;
+async function heartbeat() {
+  try {
+    const res = await fetch(hbUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ingestApiToken}` },
+      body: JSON.stringify({ tenant_id: tenantId, tenant_name: tenantId ? undefined : tenantName, collector_id: listener.collectorId, version: 'syslog-listener' }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) console.error(`[heartbeat] data node answered ${res.status}`);
+  } catch (e) {
+    console.error('[heartbeat] failed:', e.message);
+  }
+}
+if (hbSeconds > 0 && hbUrl !== ingestApiUrl) {
+  heartbeat();
+  hbTimer = setInterval(heartbeat, hbSeconds * 1000);
+  hbTimer.unref();
+}
+
 function shutdown(signal) {
   console.log(`${signal} received, shutting down syslog broker`);
+  if (hbTimer) clearInterval(hbTimer);
   listener.stop();
   process.exit(0);
 }

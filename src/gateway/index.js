@@ -17,6 +17,7 @@ app.disable('x-powered-by');
 // HTTP ingestion lane (per-key auth). Mounted BEFORE the global JSON parser: it authenticates
 // first and then parses with its own, larger body limit.
 app.use(require('../ingest/http-ingest').router);
+app.use(require('../ingest/heartbeat').router);
 
 app.use(express.json());
 
