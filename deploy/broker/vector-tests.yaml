@@ -1,0 +1,48 @@
+# Run with:  vector test deploy/broker/vector.yaml deploy/broker/vector-tests.yaml
+# Checks the line format the ASIX HTTP ingest lane expects.
+tests:
+  - name: rfc5424 sshd line becomes an ASIX file-syslog line
+    inputs:
+      - insert_at: to_asix_line
+        type: log
+        log_fields:
+          timestamp: "2026-10-13T10:00:01Z"
+          hostname: web01
+          appname: sshd
+          procid: "2201"
+          message: "Failed password for invalid user admin from 203.0.113.9 port 51234 ssh2"
+    outputs:
+      - extract_from: to_asix_line
+        conditions:
+          - type: vrl
+            source: |
+              .message == "2026-10-13T10:00:01+00:00 web01 sshd[2201]: Failed password for invalid user admin from 203.0.113.9 port 51234 ssh2"
+
+  - name: missing pid, spaces and newlines are cleaned
+    inputs:
+      - insert_at: to_asix_line
+        type: log
+        log_fields:
+          timestamp: "2026-10-13T10:00:02Z"
+          hostname: "my host"
+          appname: "my app: x"
+          message: "line one\nline two"
+    outputs:
+      - extract_from: to_asix_line
+        conditions:
+          - type: vrl
+            source: |
+              .message == "2026-10-13T10:00:02+00:00 my_host my_app_x: line one line two"
+
+  - name: missing fields still produce a parseable line
+    inputs:
+      - insert_at: to_asix_line
+        type: log
+        log_fields:
+          message: "hello"
+    outputs:
+      - extract_from: to_asix_line
+        conditions:
+          - type: vrl
+            source: |
+              match(string!(.message), r'^\d{4}-\d{2}-\d{2}T\S+ unknown-host syslog: hello$')

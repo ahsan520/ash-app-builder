@@ -1,0 +1,14 @@
+[Unit]
+Description=ASIX broker heartbeat
+After=network-online.target vector.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/asix-broker/asix-broker-heartbeat.sh
+User=vector
+Group=vector
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true

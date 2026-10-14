@@ -1,0 +1,90 @@
+# ASIX broker VM: Vector receives syslog (UDP + TCP) and forwards it to the ASIX data node's
+# HTTP ingest lane (POST /v1/ingest/http) with a per-broker ingestion key.
+#
+# Create the key in the portal (Settings > Collectors > Installers), one per broker, so it can be
+# revoked on its own. All settings come from /etc/asix-broker/broker.env (see broker.env.example).
+#
+# Test without a network:   vector test deploy/broker/vector.yaml deploy/broker/vector-tests.yaml
+data_dir: /var/lib/vector
+
+# Local-only API, used by the heartbeat timer to confirm Vector is healthy.
+api:
+  enabled: true
+  address: 127.0.0.1:8686
+
+sources:
+  syslog_udp:
+    type: syslog
+    mode: udp
+    address: 0.0.0.0:${ASIX_SYSLOG_PORT:-514}
+  syslog_tcp:
+    type: syslog
+    mode: tcp
+    address: 0.0.0.0:${ASIX_SYSLOG_PORT:-514}
+    connection_limit: 500
+
+transforms:
+  # Rewrites each parsed syslog event into one "ISO-time host app[pid]: message" line, a shape the
+  # ASIX HTTP lane already parses (host, app_name, proc_id, event time) with no server change.
+  to_asix_line:
+    type: remap
+    inputs: [syslog_udp, syslog_tcp]
+    source: |
+      # The syslog source gives a timestamp; a string is also accepted so the tests can set one.
+      t = timestamp(.timestamp) ?? parse_timestamp(.timestamp, format: "%+") ?? now()
+      ts, err = format_timestamp(t, format: "%+")
+      if err != null { ts = format_timestamp!(now(), format: "%+") }
+
+      host = string(.hostname) ?? string(.source_ip) ?? "unknown-host"
+      host = replace(host, r'\s+', "_")
+
+      app = string(.appname) ?? "syslog"
+      app = replace(app, r'[\s:\[\]]+', "_")
+
+      tag = app
+      pid = to_string(.procid) ?? ""
+      if pid != "" && pid != "null" {
+        pid = replace(pid, r'[^0-9]', "")
+        if pid != "" { tag = app + "[" + pid + "]" }
+      }
+
+      msg = string(.message) ?? ""
+      msg = replace(msg, r'[\r\n]+', " ")
+
+      .message = ts + " " + host + " " + tag + ": " + msg
+
+sinks:
+  asix:
+    type: http
+    inputs: [to_asix_line]
+    uri: ${ASIX_INGEST_URL}
+    method: post
+    encoding:
+      codec: text
+    framing:
+      method: newline_delimited
+    request:
+      headers:
+        Authorization: "Bearer ${ASIX_INGEST_KEY}"
+        Content-Type: text/plain
+        X-ASIX-Collector: ${ASIX_BROKER_NAME}
+        X-ASIX-Platform: linux
+        X-ASIX-Source-Type: syslog
+        X-ASIX-Version: vector-broker
+      retry_attempts: 100000
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 60
+      timeout_secs: 30
+    # The ASIX lane accepts at most 1000 events and 1 MB per request.
+    batch:
+      max_events: 500
+      max_bytes: 900000
+      timeout_secs: 5
+    # Survives a data node outage or reboot: events wait on disk (1 GiB) and the syslog sources
+    # slow down instead of dropping when it is full.
+    buffer:
+      type: disk
+      max_size: 1073741824
+      when_full: block
+    tls:
+      ca_file: ${ASIX_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}
