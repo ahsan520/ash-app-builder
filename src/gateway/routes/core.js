@@ -4,6 +4,7 @@ const {
   db, authMiddleware, tenantMiddleware, rbacMiddleware, auditMiddleware, brokerAuthMiddleware,
   guarded, UUID_RE, SEVERITIES, ALERT_STATUSES, apiError,
 } = require('../shared');
+const { getEventStore } = require('../../events');
 
 router.get('/v1/health/status', async (req, res) => {
   try {
@@ -142,23 +143,16 @@ router.post('/v1/ingest/events', brokerAuthMiddleware, async (req, res) => {
       resolvedTenantId = tenantResult.rows[0].id;
     }
 
+    let stored;
     await db.withTenant(resolvedTenantId, async (client) => {
-      for (const event of events) {
-        await client.query(
-          `
-          INSERT INTO events (tenant_id, source_type, collector_id, event_time, raw, parsed)
-          VALUES ($1, $2, $3, $4, $5, $6)
-          `,
-          [
-            resolvedTenantId,
-            source_type,
-            collector_id || null,
-            event.event_time || null,
-            event.raw,
-            JSON.stringify(event.parsed || {}),
-          ]
-        );
-      }
+      // Written through the event store (src/events): validated, NUL-safe, one INSERT per batch.
+      stored = await getEventStore().insertBatch(resolvedTenantId, events.map((event) => ({
+        source_type,
+        collector_id: collector_id || null,
+        event_time: event && event.event_time,
+        raw: event && event.raw,
+        parsed: event && event.parsed,
+      })), { client });
 
       // One audit row per batch, not per event — this is high-volume
       // ingestion traffic, not a user action; per-event audit rows would
@@ -172,8 +166,11 @@ router.post('/v1/ingest/events', brokerAuthMiddleware, async (req, res) => {
       );
     });
 
-    res.status(202).json({ success: true, inserted: events.length });
+    res.status(202).json({ success: true, inserted: stored.inserted });
   } catch (error) {
+    if (error && (error.code === 'INVALID_ENVELOPE' || error.code === 'INVALID_TENANT')) {
+      return res.status(400).json({ success: false, error: { code: 'INGEST_INVALID_EVENT', message: error.message } });
+    }
     console.error('Event ingestion failed:', error.message);
     res.status(500).json({
       success: false,

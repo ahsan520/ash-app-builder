@@ -16,6 +16,7 @@ const express = require('express');
 const db = require('../db');
 const parsingRules = require('../ingestion/parsing-rules');
 const rulesStore = require('../ingestion/rules-store');
+const { getEventStore } = require('../events');
 
 const KEY_PREFIX = 'asix_ik_';
 const MAX_EVENTS = 1000;
@@ -156,11 +157,10 @@ router.post(
 
     try {
       await db.withTenant(key.tenant_id, async (client) => {
-        if (kept.length) await client.query(
-          `INSERT INTO events (tenant_id, source_type, collector_id, event_time, raw, parsed)
-           SELECT $1, x.s, $2, x.t, x.r, x.p::jsonb
-           FROM unnest($3::timestamp[], $4::text[], $5::text[], $6::text[]) AS x(t, r, p, s)`,
-          [key.tenant_id, collector, kept.map((i) => i.time), kept.map((i) => i.raw), kept.map((i) => JSON.stringify(i.parsed)), kept.map((i) => i.source_type || sourceType)]);
+        // Events are written through the event store (src/events), inside this same transaction.
+        if (kept.length) await getEventStore().insertBatch(key.tenant_id, kept.map((i) => ({
+          source_type: i.source_type || sourceType, collector_id: collector, event_time: i.time, raw: i.raw, parsed: i.parsed,
+        })), { client });
         await client.query(
           `INSERT INTO collectors (tenant_id, key_id, name, platform, os, version, last_ip, events_total)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -176,6 +176,7 @@ router.post(
       });
       res.status(202).json({ success: true, accepted: kept.length, dropped });
     } catch (e) {
+      if (e && e.code === 'INVALID_ENVELOPE') return err(res, 400, 'INGEST_INVALID_EVENT', e.message);
       console.error('HTTP ingestion failed:', e.message);
       err(res, 500, 'INGEST_ERROR', 'Failed to persist events');
     }
