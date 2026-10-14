@@ -372,6 +372,11 @@ data:
     CREATE INDEX IF NOT EXISTS idx_alert_notes_alert ON alert_notes(alert_id, created_at);
     GRANT SELECT, INSERT, UPDATE, DELETE ON alert_notes TO asix_admin;
 
+    -- Alert dedupe: repeat alerts folded into one primary alert (idempotent upgrade)
+    ALTER TABLE alerts ADD COLUMN IF NOT EXISTS merged_into_id UUID REFERENCES alerts(id) ON DELETE SET NULL;
+    ALTER TABLE alerts ADD COLUMN IF NOT EXISTS merged_count INTEGER NOT NULL DEFAULT 0;
+    CREATE INDEX IF NOT EXISTS idx_alerts_merged_into ON alerts(merged_into_id) WHERE merged_into_id IS NOT NULL;
+
     -- Custom rules: correlation vs BIOC, plus an alert category (idempotent upgrade)
     ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'correlation';
     ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS category VARCHAR(100);
