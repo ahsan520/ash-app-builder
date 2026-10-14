@@ -122,6 +122,48 @@ class PostgresEventStore extends EventStore {
     });
   }
 
+  // Executes an XQL-compiled SQL query. The SQL is safe by construction (from xql.compile) and carries
+  // its own tenant_id filter; nothing is prepended here. Row-level security (db.withTenant) is a second
+  // layer only when the connecting role does not own the table.
+  async _querySQL(tenant, sql, params, opts) {
+    return this._run(tenant, opts, async (client) => {
+      await client.query("SET LOCAL statement_timeout = '20s'");
+      const result = await client.query(sql, params);
+      const fields = result.fields ? result.fields.map((f) => f.name) : [];
+      return { rows: result.rows, fields };
+    });
+  }
+
+  // Used by detection rules (rule-runner.js / rule-query.js buildMatch) and the IOC matcher.
+  // group_expr is a trusted SQL fragment like "COALESCE(parsed #>> '{xdm,source,ipv4}'::text[], 'unknown')"
+  // that the rule definition author controls via group_by — never raw user input.
+  async _queryAggregated(tenant, { since, until, source_type, collector_id, limit, group_expr, sample_ids }) {
+    return this._run(tenant, null, async (client) => {
+      await client.query("SET LOCAL statement_timeout = '20s'");
+      const params = [tenant];
+      const add = (v) => { params.push(v); return '$' + params.length; };
+      const where = ['tenant_id = $1'];
+
+      if (since) { where.push(`received_at >= ${add(since)}::timestamp`); }
+      if (until) { where.push(`received_at < ${add(until)}::timestamp`); }
+      if (source_type) { where.push(`source_type = ${add(source_type)}`); }
+      if (collector_id) { where.push(`collector_id = ${add(collector_id)}`); }
+
+      // group_expr is a SQL fragment, not a parameter — it comes from the rule's group_by whitelist.
+      const g = group_expr || "'all'";
+      const sampleCols = sample_ids
+        ? `, (array_agg(id ORDER BY received_at DESC))[1:5] AS sample_ids, (array_agg(raw ORDER BY received_at DESC))[1] AS sample_raw`
+        : '';
+      const text = `
+        SELECT ${g} AS gkey, COUNT(*)::int AS n, MIN(received_at) AS first_at, MAX(received_at) AS last_at${sampleCols}
+        FROM events WHERE ${where.join(' AND ')}
+        GROUP BY 1 HAVING COUNT(*) >= 1
+        ORDER BY n DESC LIMIT ${limit}`;
+      const result = await client.query(text, params);
+      return result.rows;
+    });
+  }
+
   async close() { /* the shared pool belongs to src/db */ }
 }
 

@@ -15,6 +15,10 @@
 //   count(tenantId, filter?)              -> number
 //   sourceTypes(tenantId, { since? })     -> string[]              (distinct, sorted, max 100)
 //   deleteBefore(tenantId, cutoff)        -> { deleted }           (received_at < cutoff)
+//   querySQL(tenantId, sql, params, opts?) -> { rows, fields }      (XQL-compiled SQL, controlled escape hatch)
+//   queryAggregated(tenantId, spec)        -> object[]              (group-by for rule/IOC matchers)
+//   querySQL and queryAggregated take PostgreSQL SQL / a PostgreSQL group expression, so only the Postgres
+//   adapter implements them today; other adapters throw NOT_IMPLEMENTED (see docs/event-store.md).
 //
 // Order is always (received_at, id). `since` is inclusive, `until` exclusive, both on received_at.
 // Cursors (`next` / `after`) are opaque and only valid with the adapter that produced them.
@@ -145,6 +149,33 @@ class EventStore {
     return this._deleteBefore(tenant, c);
   }
 
+  // Run an XQL-compiled SQL query. The SQL and its params come from compile() in src/search/xql.js,
+  // which is safe by construction (parameters are bound; field names pass IDENT_RE) and which puts
+  // the tenant filter in the SQL itself. This method does NOT add a tenant filter: the only thing
+  // beyond XQL's own filter is row-level security via db.withTenant(), and that does not apply to a
+  // role that owns the table. Callers must pass SQL that already filters on this tenant.
+  // `opts.client` runs in an existing transaction (like insertBatch). Returns { rows, fields }.
+  async querySQL(tenantId, sql, params = [], opts = {}) {
+    const tenant = assertTenant(tenantId);
+    if (typeof sql !== 'string' || !sql.trim()) throw new EventStoreError('INVALID_QUERY', 'sql must be a non-empty string');
+    if (!Array.isArray(params)) throw new EventStoreError('INVALID_QUERY', 'params must be an array');
+    return this._querySQL(tenant, sql, params, opts);
+  }
+
+  // Structured aggregation for detection rules and the IOC matcher: a group-by + count with
+  // optional since/source_type/collector_id filters, in a single scan. Adapters implement it
+  // natively; `spec` fields all come from validated rule definitions, never from user SQL.
+  // Returns objects { gkey, n, first_at, last_at } ordered by n desc.
+  async queryAggregated(tenantId, spec = {}) {
+    const tenant = assertTenant(tenantId);
+    if (spec === null || typeof spec !== 'object') throw new EventStoreError('INVALID_QUERY', 'spec must be an object');
+    const f = normalizeFilter(spec);
+    let limit = spec.limit === undefined ? 1000 : spec.limit;
+    if (!Number.isInteger(limit) || limit < 1) throw new EventStoreError('INVALID_QUERY', 'limit must be a whole number of at least 1');
+    limit = Math.min(limit, MAX_SCAN);
+    return this._queryAggregated(tenant, { ...f, limit, group_expr: spec.group_expr || null, sample_ids: !!spec.sample_ids });
+  }
+
   async close() { /* adapters that own connections override this */ }
 
   // ---- adapter hooks (input is already validated and normalised) -----------------------------
@@ -155,12 +186,16 @@ class EventStore {
   // _count(tenant, filter) -> number
   // _sourceTypes(tenant, { since, limit }) -> string[]
   // _deleteBefore(tenant, isoCutoff) -> { deleted }
-  async _insert(tenant, envelopes, opts) { throw new Error('not implemented'); }
-  async _getByIds(tenant, ids) { throw new Error('not implemented'); }
-  async _scan(tenant, q) { throw new Error('not implemented'); }
-  async _count(tenant, filter) { throw new Error('not implemented'); }
-  async _sourceTypes(tenant, q) { throw new Error('not implemented'); }
-  async _deleteBefore(tenant, cutoff) { throw new Error('not implemented'); }
+  // _querySQL(tenant, sql, params, opts) -> { rows, fields }      (XQL-compiled query, tenant-scoped)
+  // _queryAggregated(tenant, { since, until, source_type, collector_id, limit, group_expr, sample_ids }) -> object[]
+  async _insert(tenant, envelopes, opts) { throw new EventStoreError('NOT_IMPLEMENTED', 'insertBatch'); }
+  async _getByIds(tenant, ids) { throw new EventStoreError('NOT_IMPLEMENTED', 'getByIds'); }
+  async _scan(tenant, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'scan'); }
+  async _count(tenant, f) { throw new EventStoreError('NOT_IMPLEMENTED', 'count'); }
+  async _sourceTypes(tenant, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'sourceTypes'); }
+  async _deleteBefore(tenant, cutoff) { throw new EventStoreError('NOT_IMPLEMENTED', 'deleteBefore'); }
+  async _querySQL(tenant, sql, params, opts) { throw new EventStoreError('NOT_IMPLEMENTED', 'querySQL'); }
+  async _queryAggregated(tenant, spec) { throw new EventStoreError('NOT_IMPLEMENTED', 'queryAggregated'); }
 }
 
 module.exports = { EventStore, EventStoreError, MAX_BATCH, MAX_SCAN, DEFAULT_SCAN, MAX_IDS, MAX_SOURCE_TYPES, encodeCursor, decodeCursor };
