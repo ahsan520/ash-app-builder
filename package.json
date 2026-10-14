@@ -11,6 +11,11 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "start:syslog": "node src/ingestion/syslog-server.js"
+    "start:syslog": "node src/ingestion/syslog-server.js",
+    "test": "node --test tests/*.test.js",
+    "lint": "npx --yes eslint@9 ."
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
