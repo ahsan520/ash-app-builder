@@ -51,7 +51,7 @@ Update the Status column in the same change that does the work, so the next sess
 | Regex-safety fix (user-supplied patterns, ReDoS) | done | `src/security/regex-safety.js` (new), wired into `src/ingestion/parsing-rules.js`, `src/detection/rule-query.js`, `src/search/xql.js`; `tests/regex-safety.test.js` |
 | CI (run `tests/*.test.js` on push) | done | `.github/workflows/ci.yml`, `eslint.config.js`, `test` and `lint` scripts in `package.json` |
 | Broker VM on Vector | open | new `src/brokers/*`, `deploy/` |
-| Content packs (residential) | open | new `src/packs/*`, manifest `content-packs` flips to `available` |
+| Content packs (residential) | done (rules only; parsers and dashboards not yet) | `src/packs/*` (loader, service, `catalog/<id>.js` one file per pack), `src/gateway/routes/packs.js`, manifest `content-packs` now `available`, portal "Content packs", `tests/packs.test.js`, `tests/packs-db.test.js` |
 
 ## Checklist for any session picking up a task here
 1. Confirm which zip/version you're starting from; diff it against what's currently described as
@@ -62,7 +62,7 @@ Update the Status column in the same change that does the work, so the next sess
    `12-schema-init.yaml`) wherever the feature allows it.
 4. Run the in-repo tests before declaring a feature done: `node tests/modules.test.js`,
    `tests/alert-triage.test.js`, `tests/bioc-rules.test.js`, `tests/data-model-rules.test.js`,
-   `tests/parsing-rules.test.js`, `tests/regex-safety.test.js` (they need `npm ci` first; `modules.test.js` uses `jose`). CI (`.github/workflows/ci.yml`) now runs `npm run lint` (ESLint `no-undef`) and `npm test` (every `tests/*.test.js`, on Node 20 and 22) on each push; run both locally before packaging. New tests must be named `*.test.js` to be picked up. Tests that need Postgres stay gated behind `ASIX_TEST_DB=1` and do not run in CI yet.
+   `tests/parsing-rules.test.js`, `tests/regex-safety.test.js`, `tests/packs.test.js` (they need `npm ci` first; `modules.test.js` uses `jose`). CI (`.github/workflows/ci.yml`) now runs `npm run lint` (ESLint `no-undef`) and `npm test` (every `tests/*.test.js`, on Node 20 and 22) on each push; run both locally before packaging. New tests must be named `*.test.js` to be picked up. Tests that need Postgres stay gated behind `ASIX_TEST_DB=1` and do not run in CI yet (`tests/packs-db.test.js` is the pattern: it skips itself without that variable).
 5. Route files must `require` everything they use. The route split once dropped the imports in
    `data-model.js` and `search.js`, which caused 500s in production. Before packaging, check for
    undefined names, for example `npx eslint --no-config-lookup --rule '{"no-undef":"error"}' src`

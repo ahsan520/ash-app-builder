@@ -35,7 +35,7 @@ register themselves via a manifest instead of being hard-coded into the gateway 
 | Data safety | Done |
 | Module / profile skeleton | Done as a skeleton, see below |
 | Broker VM on Vector | Not started |
-| Content packs (residential) | Not started; the `content-packs` module is listed as planned |
+| Content packs (residential) | Done for detection rules (see below); parsers and dashboards not yet |
 | Alert triage | Done (assign, notes, bulk acknowledge/close); dedupe split out as its own item |
 | Regex-safety fix | Done (see below) |
 | CI | Done: lint (`no-undef`) and unit tests on every push; DB tests not included yet |
@@ -64,6 +64,24 @@ register themselves via a manifest instead of being hard-coded into the gateway 
 - The check is conservative: it can refuse a harmless pattern, and the error message says what to change.
 - Not built: running user patterns on an RE2 engine or in a worker with a hard timeout (would remove the need for the
   structural check).
+
+### Content packs (what exists)
+- A pack is one file in `src/packs/catalog/<id>.js` (file name = id): name, version, the log sources it expects, and a
+  list of detection rules (correlation or BIOC). Packs are validated at load; a bad pack is skipped with a log line and
+  fails `tests/packs.test.js`.
+- Three residential packs ship: **Home Linux server** (SSH and sudo), **Home router and firewall** (OpenWrt-style
+  messages) and **Home Mac** (commands that weaken macOS protections). They match on fields the built-in parsers already
+  produce or on raw text, so no new parser is needed.
+- Portal page **Content packs**: install, add missing rules, restore shipped rules, remove. API: `GET /v1/packs`,
+  `POST /v1/packs/:id/install` (`{enabled, overwrite}`), `DELETE /v1/packs/:id` (`?delete_alerts=true` needed if the
+  rules have raised alerts). Uses `detections:rules:read` / `detections:rules:write`, so no role changes; gated on the
+  `content-packs` module being on.
+- Installed rules are ordinary `detection_rules` rows with `builtin_key = pack:<pack>:<rule>`. That makes install
+  idempotent through the existing unique index and needs no schema change. Installing again never overwrites edits;
+  "restore" does, and keeps the enabled state. The rules page shows them as built-in (no Delete button there; remove
+  the pack instead) and its Reset button works for them.
+- Not built: parser and dashboard content in packs, pack upgrade notices (the version is shown but not tracked per
+  tenant), per-rule tuning inside the Packs page, packs signed and delivered from a marketplace (Phase 4).
 
 ### How the three dials are implemented now
 - **Modules:** one manifest file per module in `src/modules/manifests/`. A module is on only if its
