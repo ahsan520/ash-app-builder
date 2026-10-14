@@ -42,8 +42,38 @@ register themselves via a manifest instead of being hard-coded into the gateway 
 | Regex-safety fix | Done (see below) |
 | CI | Done: lint (`no-undef`) and unit tests on every push; DB tests not included yet |
 
-Every Phase 1 item is now done. The next part is Phase 2 (foundation for scale), starting with the event envelope and
-the event-store interface.
+Every Phase 1 item is now done. Phase 2 (foundation for scale) has started: see "Status of Phase 2" below.
+
+## Status of Phase 2 (updated this build)
+
+| Item | State |
+|---|---|
+| Event envelope | Done (see below) |
+| Event-store interface, Postgres adapter, conformance suite | Done (see below); ingest writes go through it |
+| Search, detections, IOC matcher, retention moved behind the store | Not started (next) |
+| ClickHouse adapter (same conformance suite) | Not started |
+| Parsers as separate workers | Not started |
+
+### Event envelope and event store (what exists)
+- **One shape:** every event is an envelope (`id`, `tenant_id`, `source_type`, `collector_id`, `received_at`,
+  `event_time`, `raw`, `parsed`) that maps one to one onto the existing `events` table, so there is no schema change.
+  `makeEnvelope()` validates and cleans it (UTC times, NUL characters removed, size limits). Details and limits:
+  `docs/event-store.md`.
+- **One interface:** `src/events/event-store.js` defines `insertBatch`, `getByIds`, `scan` (cursor paging, stable order),
+  `count`, `sourceTypes` and `deleteBefore`. Every call is scoped to one tenant. Inserts are idempotent on
+  `(id, received_at)`, which is what a queue that delivers at least once (Phase 3) needs.
+- **Adapters:** Postgres (plain or daily-partitioned `events`, row-level security kept) and an in-memory one for tests.
+  `ASIX_EVENT_STORE` picks the adapter (default `postgres`).
+- **Conformance suite:** `tests/event-store-conformance.js` is the contract as a test. The in-memory adapter runs it in CI;
+  the Postgres adapter runs it with `ASIX_TEST_DB=1` (checked against both table layouts). A ClickHouse adapter is done
+  when it passes the same suite.
+- **Ingest switched over:** the HTTP key lane and the broker lane write through the store. The broker lane is now one
+  statement per batch instead of one per event. A malformed event is now a `400` (`INGEST_INVALID_EVENT`) instead of a
+  `500`, and a NUL character no longer fails the batch. Routes, auth, rate limits, parsing rules and audit rows are unchanged.
+- Not built: reads (XQL search, detection rules, the IOC matcher, the retention job, and the counts on the collectors,
+  storage and capacity pages) still use SQL directly. Moving them needs a query form that is not SQL, because XQL compiles to
+  SQL today; that is the next part. Also not built: a ClickHouse adapter, parsers as separate workers, and any
+  per-tenant choice of adapter (one adapter per process).
 
 ### Broker VM and collector heartbeat (what exists)
 - A broker VM runs Vector: syslog in on UDP and TCP, forwarded over HTTPS to the existing HTTP ingest lane with a

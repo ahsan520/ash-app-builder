@@ -17,6 +17,11 @@ and are imported, never redefined, by each route file.
 appended to an existing one unless they genuinely belong to that domain. Two sessions building
 unrelated features then touch different files and cannot collide.
 
+**Events go through the event store (Phase 2).** New code writes events with `getEventStore().insertBatch()` from
+`src/events` and does not run `INSERT INTO events` itself. Reads still use SQL until the search, detection and
+retention paths are moved behind the store (see `docs/event-store.md`); do not add new raw `events` queries
+where a store method already does the job.
+
 ## Modules: one manifest file per module
 Modules register themselves by dropping a file in `src/modules/manifests/<id>.js` (the file name
 must equal the `id`). Two sessions adding two modules touch two different files. The registry
@@ -53,6 +58,14 @@ Update the Status column in the same change that does the work, so the next sess
 | Broker VM on Vector | done (syslog only, see `docs/broker-vm.md`) | `deploy/broker/*` (Vector config, tests, heartbeat timer), `scripts/deploy/bootstrap-broker.sh`, `docs/broker-vm.md`; reuses the HTTP ingest lane and per-installer ingestion keys, no schema change |
 | Content packs (residential) | done (rules only; parsers and dashboards not yet) | `src/packs/*` (loader, service, `catalog/<id>.js` one file per pack), `src/gateway/routes/packs.js`, manifest `content-packs` now `available`, portal "Content packs", `tests/packs.test.js`, `tests/packs-db.test.js` |
 
+## Task table (Phase 2 of `docs/product-plan.md`, foundation for scale)
+| Task | Status | Main files (prefer new files) |
+|---|---|---|
+| Event envelope + event-store interface + Postgres adapter + conformance suite | done (see `docs/event-store.md`) | `src/events/*` (new), `tests/event-store-conformance.js`, `tests/event-envelope.test.js`, `tests/event-store-memory.test.js`, `tests/event-store-postgres.test.js`, `tests/event-ingest-db.test.js`; ingest writes switched in `src/ingest/http-ingest.js` and `src/gateway/routes/core.js`; no schema change |
+| Move reads behind the store: search (XQL), detection rules, IOC matcher, retention | not started (needs a query form that is not SQL) | `src/search/xql.js`, `src/detection/*`, `src/storage/retention.js`, `src/gateway/routes/{search,collectors,storage}.js`, `src/capacity/capacity.js` |
+| ClickHouse adapter (same conformance suite) | not started | `src/events/clickhouse-store.js` (new), one line in `src/events/index.js`, `tests/event-store-clickhouse.test.js` |
+| Parsers as separate workers | not started | `src/ingestion/*`, `src/ingest/http-ingest.js` |
+
 ## Checklist for any session picking up a task here
 1. Confirm which zip/version you're starting from; diff it against what's currently described as
    "latest" before writing anything.
@@ -62,7 +75,7 @@ Update the Status column in the same change that does the work, so the next sess
    `12-schema-init.yaml`) wherever the feature allows it.
 4. Run the in-repo tests before declaring a feature done: `node tests/modules.test.js`,
    `tests/alert-triage.test.js`, `tests/alert-dedupe.test.js`, `tests/bioc-rules.test.js`, `tests/data-model-rules.test.js`,
-   `tests/parsing-rules.test.js`, `tests/regex-safety.test.js`, `tests/packs.test.js`, `tests/heartbeat.test.js` (they need `npm ci` first; `modules.test.js` uses `jose`). CI (`.github/workflows/ci.yml`) now runs `npm run lint` (ESLint `no-undef`) and `npm test` (every `tests/*.test.js`, on Node 20 and 22) on each push; run both locally before packaging. New tests must be named `*.test.js` to be picked up. Tests that need Postgres stay gated behind `ASIX_TEST_DB=1` and do not run in CI yet (`tests/packs-db.test.js`, `tests/heartbeat-db.test.js` and `tests/alert-dedupe-db.test.js` are the pattern: they skip themselves without that variable). Broker config changes: also run `vector test deploy/broker/vector.yaml deploy/broker/vector-tests.yaml` (needs the Vector binary; not in CI).
+   `tests/parsing-rules.test.js`, `tests/regex-safety.test.js`, `tests/packs.test.js`, `tests/heartbeat.test.js`, `tests/event-envelope.test.js`, `tests/event-store-memory.test.js` (they need `npm ci` first; `modules.test.js` uses `jose`). CI (`.github/workflows/ci.yml`) now runs `npm run lint` (ESLint `no-undef`) and `npm test` (every `tests/*.test.js`, on Node 20 and 22) on each push; run both locally before packaging. New tests must be named `*.test.js` to be picked up. Tests that need Postgres stay gated behind `ASIX_TEST_DB=1` and do not run in CI yet (`tests/packs-db.test.js`, `tests/heartbeat-db.test.js`, `tests/alert-dedupe-db.test.js`, `tests/event-store-postgres.test.js` and `tests/event-ingest-db.test.js` are the pattern: they skip themselves without that variable). Broker config changes: also run `vector test deploy/broker/vector.yaml deploy/broker/vector-tests.yaml` (needs the Vector binary; not in CI).
 5. Route files must `require` everything they use. The route split once dropped the imports in
    `data-model.js` and `search.js`, which caused 500s in production. Before packaging, check for
    undefined names, for example `npx eslint --no-config-lookup --rule '{"no-undef":"error"}' src`
