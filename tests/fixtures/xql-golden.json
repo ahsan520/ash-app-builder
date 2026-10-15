@@ -1,0 +1,3512 @@
+{
+ "tenant": "11111111-1111-4111-8111-111111111111",
+ "from": "2026-10-01T00:00:00.000Z",
+ "to": "2026-10-02T00:00:00.000Z",
+ "compile": [
+  {
+   "query": "dataset = syslog",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND source_type = $2 ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "syslog"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "dataset = syslog",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND source_type = $4 ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     "syslog"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "dataset = \"mac\" | limit 5",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND source_type = $2 ORDER BY COALESCE(event_time, received_at) DESC LIMIT 6",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "mac"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 5
+   }
+  },
+  {
+   "query": "dataset = \"mac\" | limit 5",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND source_type = $4 ORDER BY COALESCE(event_time, received_at) DESC LIMIT 6",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     "mac"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 5
+   }
+  },
+  {
+   "query": "dataset in (syslog, mac)",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND source_type IN ($2, $3) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "syslog",
+     "mac"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "dataset in (syslog, mac)",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND source_type IN ($4, $5) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     "syslog",
+     "mac"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "dataset = syslog | filter host = \"web01\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND source_type = $2 AND ((parsed #>> $3::text[]) = $4) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "syslog",
+     [
+      "host"
+     ],
+     "web01"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "dataset = syslog | filter host = \"web01\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND source_type = $4 AND ((parsed #>> $5::text[]) = $6) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     "syslog",
+     [
+      "host"
+     ],
+     "web01"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "dataset = syslog | filter host = \"web01\" and _raw contains \"Failed password\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND source_type = $2 AND ((parsed #>> $3::text[]) = $4 AND COALESCE(raw ILIKE $5, false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "syslog",
+     [
+      "host"
+     ],
+     "web01",
+     "%Failed password%"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "dataset = syslog | filter host = \"web01\" and _raw contains \"Failed password\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND source_type = $4 AND ((parsed #>> $5::text[]) = $6 AND COALESCE(raw ILIKE $7, false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     "syslog",
+     [
+      "host"
+     ],
+     "web01",
+     "%Failed password%"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter host != \"web01\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND ((parsed #>> $2::text[]) IS DISTINCT FROM $3) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "host"
+     ],
+     "web01"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter host != \"web01\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND ((parsed #>> $4::text[]) IS DISTINCT FROM $5) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "host"
+     ],
+     "web01"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter _raw contains \"100%_done\\\\x\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND (COALESCE(raw ILIKE $2, false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "%100\\%\\_done\\\\x%"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter _raw contains \"100%_done\\\\x\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND (COALESCE(raw ILIKE $4, false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     "%100\\%\\_done\\\\x%"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter _raw not contains \"debug\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND (NOT COALESCE(raw ILIKE $2, false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "%debug%"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter _raw not contains \"debug\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND (NOT COALESCE(raw ILIKE $4, false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     "%debug%"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter app_name in (\"sshd\", \"sudo\")",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND (COALESCE((parsed #>> $2::text[]) IN ($3, $4), false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "app_name"
+     ],
+     "sshd",
+     "sudo"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter app_name in (\"sshd\", \"sudo\")",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND (COALESCE((parsed #>> $4::text[]) IN ($5, $6), false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "app_name"
+     ],
+     "sshd",
+     "sudo"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter app_name not in (\"sshd\", \"sudo\")",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND (NOT COALESCE((parsed #>> $2::text[]) IN ($3, $4), false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "app_name"
+     ],
+     "sshd",
+     "sudo"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter app_name not in (\"sshd\", \"sudo\")",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND (NOT COALESCE((parsed #>> $4::text[]) IN ($5, $6), false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "app_name"
+     ],
+     "sshd",
+     "sudo"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter xdm.source.ipv4 = null",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND ((parsed #>> $2::text[]) IS NULL) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "xdm",
+      "source",
+      "ipv4"
+     ]
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter xdm.source.ipv4 = null",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND ((parsed #>> $4::text[]) IS NULL) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "xdm",
+      "source",
+      "ipv4"
+     ]
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter xdm.source.ipv4 != null",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND ((parsed #>> $2::text[]) IS NOT NULL) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "xdm",
+      "source",
+      "ipv4"
+     ]
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter xdm.source.ipv4 != null",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND ((parsed #>> $4::text[]) IS NOT NULL) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "xdm",
+      "source",
+      "ipv4"
+     ]
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter bytes > 100",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND (COALESCE((CASE WHEN ((parsed #>> $2::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $2::text[]))::text::numeric END) > $3, false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "bytes"
+     ],
+     100
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter bytes > 100",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND (COALESCE((CASE WHEN ((parsed #>> $4::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $4::text[]))::text::numeric END) > $5, false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "bytes"
+     ],
+     100
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter bytes >= 100.5 and bytes < 1000",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND (COALESCE((CASE WHEN ((parsed #>> $2::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $2::text[]))::text::numeric END) >= $3, false) AND COALESCE((CASE WHEN ((parsed #>> $4::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $4::text[]))::text::numeric END) < $5, false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "bytes"
+     ],
+     100.5,
+     [
+      "bytes"
+     ],
+     1000
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter bytes >= 100.5 and bytes < 1000",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND (COALESCE((CASE WHEN ((parsed #>> $4::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $4::text[]))::text::numeric END) >= $5, false) AND COALESCE((CASE WHEN ((parsed #>> $6::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $6::text[]))::text::numeric END) < $7, false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "bytes"
+     ],
+     100.5,
+     [
+      "bytes"
+     ],
+     1000
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter bytes <= -3",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND (COALESCE((CASE WHEN ((parsed #>> $2::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $2::text[]))::text::numeric END) <= $3, false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "bytes"
+     ],
+     -3
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter bytes <= -3",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND (COALESCE((CASE WHEN ((parsed #>> $4::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $4::text[]))::text::numeric END) <= $5, false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "bytes"
+     ],
+     -3
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter _raw ~= \"sudo|su\\\\[\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND (COALESCE(raw ~* $2, false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "sudo|su\\["
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter _raw ~= \"sudo|su\\\\[\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND (COALESCE(raw ~* $4, false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     "sudo|su\\["
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter not host = \"a\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND (NOT ((parsed #>> $2::text[]) = $3)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "host"
+     ],
+     "a"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter not host = \"a\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND (NOT ((parsed #>> $4::text[]) = $5)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "host"
+     ],
+     "a"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter (host = \"a\" or host = \"b\") and app_name = \"x\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND ((((parsed #>> $2::text[]) = $3) OR ((parsed #>> $4::text[]) = $5)) AND (parsed #>> $6::text[]) = $7) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "host"
+     ],
+     "a",
+     [
+      "host"
+     ],
+     "b",
+     [
+      "app_name"
+     ],
+     "x"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter (host = \"a\" or host = \"b\") and app_name = \"x\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND ((((parsed #>> $4::text[]) = $5) OR ((parsed #>> $6::text[]) = $7)) AND (parsed #>> $8::text[]) = $9) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "host"
+     ],
+     "a",
+     [
+      "host"
+     ],
+     "b",
+     [
+      "app_name"
+     ],
+     "x"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter host = \"a\" or host = \"b\" or host = \"c\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND ((((parsed #>> $2::text[]) = $3) OR ((parsed #>> $4::text[]) = $5)) OR ((parsed #>> $6::text[]) = $7)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "host"
+     ],
+     "a",
+     [
+      "host"
+     ],
+     "b",
+     [
+      "host"
+     ],
+     "c"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter host = \"a\" or host = \"b\" or host = \"c\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND ((((parsed #>> $4::text[]) = $5) OR ((parsed #>> $6::text[]) = $7)) OR ((parsed #>> $8::text[]) = $9)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "host"
+     ],
+     "a",
+     [
+      "host"
+     ],
+     "b",
+     [
+      "host"
+     ],
+     "c"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter host = \"a\" and app_name = \"b\" or host = \"c\" and app_name = \"d\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND (((parsed #>> $2::text[]) = $3 AND (parsed #>> $4::text[]) = $5) OR ((parsed #>> $6::text[]) = $7 AND (parsed #>> $8::text[]) = $9)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "host"
+     ],
+     "a",
+     [
+      "app_name"
+     ],
+     "b",
+     [
+      "host"
+     ],
+     "c",
+     [
+      "app_name"
+     ],
+     "d"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter host = \"a\" and app_name = \"b\" or host = \"c\" and app_name = \"d\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND (((parsed #>> $4::text[]) = $5 AND (parsed #>> $6::text[]) = $7) OR ((parsed #>> $8::text[]) = $9 AND (parsed #>> $10::text[]) = $11)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "host"
+     ],
+     "a",
+     [
+      "app_name"
+     ],
+     "b",
+     [
+      "host"
+     ],
+     "c",
+     [
+      "app_name"
+     ],
+     "d"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter xdm.event.outcome = XDM_CONST.OUTCOME_FAILED",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND ((parsed #>> $2::text[]) = $3) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "xdm",
+      "event",
+      "outcome"
+     ],
+     "FAILED"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter xdm.event.outcome = XDM_CONST.OUTCOME_FAILED",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND ((parsed #>> $4::text[]) = $5) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "xdm",
+      "event",
+      "outcome"
+     ],
+     "FAILED"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter xdm.event.type = \"authentication\" and xdm.source.ipv4 != null",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND ((parsed #>> $2::text[]) = $3 AND (parsed #>> $4::text[]) IS NOT NULL) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "xdm",
+      "event",
+      "type"
+     ],
+     "authentication",
+     [
+      "xdm",
+      "source",
+      "ipv4"
+     ]
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter xdm.event.type = \"authentication\" and xdm.source.ipv4 != null",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND ((parsed #>> $4::text[]) = $5 AND (parsed #>> $6::text[]) IS NOT NULL) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "xdm",
+      "event",
+      "type"
+     ],
+     "authentication",
+     [
+      "xdm",
+      "source",
+      "ipv4"
+     ]
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter _id = \"abc\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND (id::text = $2) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "abc"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter _id = \"abc\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND (id::text = $4) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     "abc"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter source_type = \"syslog\" and collector_id = \"c1\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND (source_type = $2 AND collector_id = $3) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "syslog",
+     "c1"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter source_type = \"syslog\" and collector_id = \"c1\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND (source_type = $4 AND collector_id = $5) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     "syslog",
+     "c1"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter dataset = \"syslog\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND (source_type = $2) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "syslog"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter dataset = \"syslog\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND (source_type = $4) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     "syslog"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter raw contains \"x\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND (COALESCE(raw ILIKE $2, false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "%x%"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter raw contains \"x\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND (COALESCE(raw ILIKE $4, false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     "%x%"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter a.b.c = \"deep\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND ((parsed #>> $2::text[]) = $3) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "a",
+      "b",
+      "c"
+     ],
+     "deep"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter a.b.c = \"deep\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND ((parsed #>> $4::text[]) = $5) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "a",
+      "b",
+      "c"
+     ],
+     "deep"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "dataset = syslog | filter host = \"a\" | filter app_name = \"b\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND source_type = $2 AND ((parsed #>> $3::text[]) = $4) AND ((parsed #>> $5::text[]) = $6) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "syslog",
+     [
+      "host"
+     ],
+     "a",
+     [
+      "app_name"
+     ],
+     "b"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "dataset = syslog | filter host = \"a\" | filter app_name = \"b\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND source_type = $4 AND ((parsed #>> $5::text[]) = $6) AND ((parsed #>> $7::text[]) = $8) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     "syslog",
+     [
+      "host"
+     ],
+     "a",
+     [
+      "app_name"
+     ],
+     "b"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "dataset = syslog | fields _time, host, app_name as app",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT (COALESCE(event_time, received_at))::text AS \"_time\", (parsed #>> $3::text[]) AS \"host\", (parsed #>> $4::text[]) AS \"app\" FROM events WHERE tenant_id = $1 AND source_type = $2 ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "syslog",
+     [
+      "host"
+     ],
+     [
+      "app_name"
+     ]
+    ],
+    "mode": "fields",
+    "columns": [
+     "_time",
+     "host",
+     "app"
+    ],
+    "limit": 1000
+   }
+  },
+  {
+   "query": "dataset = syslog | fields _time, host, app_name as app",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT (COALESCE(event_time, received_at))::text AS \"_time\", (parsed #>> $5::text[]) AS \"host\", (parsed #>> $6::text[]) AS \"app\" FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND source_type = $4 ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     "syslog",
+     [
+      "host"
+     ],
+     [
+      "app_name"
+     ]
+    ],
+    "mode": "fields",
+    "columns": [
+     "_time",
+     "host",
+     "app"
+    ],
+    "limit": 50
+   }
+  },
+  {
+   "query": "dataset = syslog | fields host | sort host",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $3::text[]) AS \"host\" FROM events WHERE tenant_id = $1 AND source_type = $2 ORDER BY \"host\" DESC NULLS LAST LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "syslog",
+     [
+      "host"
+     ]
+    ],
+    "mode": "fields",
+    "columns": [
+     "host"
+    ],
+    "limit": 1000
+   }
+  },
+  {
+   "query": "dataset = syslog | fields host | sort host",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $5::text[]) AS \"host\" FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND source_type = $4 ORDER BY \"host\" DESC NULLS LAST LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     "syslog",
+     [
+      "host"
+     ]
+    ],
+    "mode": "fields",
+    "columns": [
+     "host"
+    ],
+    "limit": 50
+   }
+  },
+  {
+   "query": "fields _raw, _id",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT raw AS \"_raw\", id::text AS \"_id\" FROM events WHERE tenant_id = $1 ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111"
+    ],
+    "mode": "fields",
+    "columns": [
+     "_raw",
+     "_id"
+    ],
+    "limit": 1000
+   }
+  },
+  {
+   "query": "fields _raw, _id",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT raw AS \"_raw\", id::text AS \"_id\" FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z"
+    ],
+    "mode": "fields",
+    "columns": [
+     "_raw",
+     "_id"
+    ],
+    "limit": 50
+   }
+  },
+  {
+   "query": "fields host as h | sort asc h",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $2::text[]) AS \"h\" FROM events WHERE tenant_id = $1 ORDER BY \"h\" ASC NULLS LAST LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "host"
+     ]
+    ],
+    "mode": "fields",
+    "columns": [
+     "h"
+    ],
+    "limit": 1000
+   }
+  },
+  {
+   "query": "fields host as h | sort asc h",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $4::text[]) AS \"h\" FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 ORDER BY \"h\" ASC NULLS LAST LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "host"
+     ]
+    ],
+    "mode": "fields",
+    "columns": [
+     "h"
+    ],
+    "limit": 50
+   }
+  },
+  {
+   "query": "fields host, app_name | sort desc host, asc app_name",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "sort: expected a field name (near character 41)",
+   "xqlError": true
+  },
+  {
+   "query": "fields host, app_name | sort desc host, asc app_name",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "sort: expected a field name (near character 41)",
+   "xqlError": true
+  },
+  {
+   "query": "sort _time",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 ORDER BY COALESCE(event_time, received_at) DESC NULLS LAST LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "sort _time",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 ORDER BY COALESCE(event_time, received_at) DESC NULLS LAST LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "sort asc _time",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 ORDER BY COALESCE(event_time, received_at) ASC NULLS LAST LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "sort asc _time",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 ORDER BY COALESCE(event_time, received_at) ASC NULLS LAST LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "sort desc _insert_time",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 ORDER BY received_at DESC NULLS LAST LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "sort desc _insert_time",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 ORDER BY received_at DESC NULLS LAST LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "sort host",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 ORDER BY (parsed #>> $2::text[]) DESC NULLS LAST LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "host"
+     ]
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "sort host",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 ORDER BY (parsed #>> $4::text[]) DESC NULLS LAST LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "host"
+     ]
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "sort xdm.source.ipv4 desc",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 ORDER BY (parsed #>> $2::text[]) DESC NULLS LAST LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "xdm",
+      "source",
+      "ipv4"
+     ]
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "sort xdm.source.ipv4 desc",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 ORDER BY (parsed #>> $4::text[]) DESC NULLS LAST LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "xdm",
+      "source",
+      "ipv4"
+     ]
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "dataset = syslog | limit 10",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND source_type = $2 ORDER BY COALESCE(event_time, received_at) DESC LIMIT 11",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "syslog"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 10
+   }
+  },
+  {
+   "query": "dataset = syslog | limit 10",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND source_type = $4 ORDER BY COALESCE(event_time, received_at) DESC LIMIT 11",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     "syslog"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 10
+   }
+  },
+  {
+   "query": "limit 1",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 ORDER BY COALESCE(event_time, received_at) DESC LIMIT 2",
+    "values": [
+     "11111111-1111-4111-8111-111111111111"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1
+   }
+  },
+  {
+   "query": "limit 1",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 ORDER BY COALESCE(event_time, received_at) DESC LIMIT 2",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1
+   }
+  },
+  {
+   "query": "limit 99999",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 ORDER BY COALESCE(event_time, received_at) DESC LIMIT 5001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 5000
+   }
+  },
+  {
+   "query": "limit 99999",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 ORDER BY COALESCE(event_time, received_at) DESC LIMIT 5001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 5000
+   }
+  },
+  {
+   "query": "dataset = syslog | filter host = \"a\" | sort asc _time | limit 7",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND source_type = $2 AND ((parsed #>> $3::text[]) = $4) ORDER BY COALESCE(event_time, received_at) ASC NULLS LAST LIMIT 8",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "syslog",
+     [
+      "host"
+     ],
+     "a"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 7
+   }
+  },
+  {
+   "query": "dataset = syslog | filter host = \"a\" | sort asc _time | limit 7",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND source_type = $4 AND ((parsed #>> $5::text[]) = $6) ORDER BY COALESCE(event_time, received_at) ASC NULLS LAST LIMIT 8",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     "syslog",
+     [
+      "host"
+     ],
+     "a"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 7
+   }
+  },
+  {
+   "query": "comp count()",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT COUNT(*) AS \"count\" FROM events WHERE tenant_id = $1 ORDER BY COUNT(*) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111"
+    ],
+    "mode": "comp",
+    "columns": [
+     "count"
+    ],
+    "limit": 1000
+   }
+  },
+  {
+   "query": "comp count()",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT COUNT(*) AS \"count\" FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 ORDER BY COUNT(*) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z"
+    ],
+    "mode": "comp",
+    "columns": [
+     "count"
+    ],
+    "limit": 50
+   }
+  },
+  {
+   "query": "comp count() as hits",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT COUNT(*) AS \"hits\" FROM events WHERE tenant_id = $1 ORDER BY COUNT(*) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111"
+    ],
+    "mode": "comp",
+    "columns": [
+     "hits"
+    ],
+    "limit": 1000
+   }
+  },
+  {
+   "query": "comp count() as hits",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT COUNT(*) AS \"hits\" FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 ORDER BY COUNT(*) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z"
+    ],
+    "mode": "comp",
+    "columns": [
+     "hits"
+    ],
+    "limit": 50
+   }
+  },
+  {
+   "query": "comp count(host) as c",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT COUNT((parsed #>> $2::text[])) AS \"c\" FROM events WHERE tenant_id = $1 ORDER BY COUNT((parsed #>> $2::text[])) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "host"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "c"
+    ],
+    "limit": 1000
+   }
+  },
+  {
+   "query": "comp count(host) as c",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT COUNT((parsed #>> $4::text[])) AS \"c\" FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 ORDER BY COUNT((parsed #>> $4::text[])) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "host"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "c"
+    ],
+    "limit": 50
+   }
+  },
+  {
+   "query": "comp count_distinct(host) as hosts by app_name",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $3::text[]) AS \"app_name\", COUNT(DISTINCT (parsed #>> $2::text[])) AS \"hosts\" FROM events WHERE tenant_id = $1 GROUP BY 1 ORDER BY COUNT(DISTINCT (parsed #>> $2::text[])) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "host"
+     ],
+     [
+      "app_name"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "app_name",
+     "hosts"
+    ],
+    "limit": 1000
+   }
+  },
+  {
+   "query": "comp count_distinct(host) as hosts by app_name",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $5::text[]) AS \"app_name\", COUNT(DISTINCT (parsed #>> $4::text[])) AS \"hosts\" FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 GROUP BY 1 ORDER BY COUNT(DISTINCT (parsed #>> $4::text[])) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "host"
+     ],
+     [
+      "app_name"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "app_name",
+     "hosts"
+    ],
+    "limit": 50
+   }
+  },
+  {
+   "query": "comp count() as hits, count_distinct(host) as hosts by app_name",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $3::text[]) AS \"app_name\", COUNT(*) AS \"hits\", COUNT(DISTINCT (parsed #>> $2::text[])) AS \"hosts\" FROM events WHERE tenant_id = $1 GROUP BY 1 ORDER BY COUNT(DISTINCT (parsed #>> $2::text[])) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "host"
+     ],
+     [
+      "app_name"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "app_name",
+     "hits",
+     "hosts"
+    ],
+    "limit": 1000
+   }
+  },
+  {
+   "query": "comp count() as hits, count_distinct(host) as hosts by app_name",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $5::text[]) AS \"app_name\", COUNT(*) AS \"hits\", COUNT(DISTINCT (parsed #>> $4::text[])) AS \"hosts\" FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 GROUP BY 1 ORDER BY COUNT(DISTINCT (parsed #>> $4::text[])) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "host"
+     ],
+     [
+      "app_name"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "app_name",
+     "hits",
+     "hosts"
+    ],
+    "limit": 50
+   }
+  },
+  {
+   "query": "comp count() as n by host, app_name",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $2::text[]) AS \"host\", (parsed #>> $3::text[]) AS \"app_name\", COUNT(*) AS \"n\" FROM events WHERE tenant_id = $1 GROUP BY 1, 2 ORDER BY COUNT(*) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "host"
+     ],
+     [
+      "app_name"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "host",
+     "app_name",
+     "n"
+    ],
+    "limit": 1000
+   }
+  },
+  {
+   "query": "comp count() as n by host, app_name",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $4::text[]) AS \"host\", (parsed #>> $5::text[]) AS \"app_name\", COUNT(*) AS \"n\" FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 GROUP BY 1, 2 ORDER BY COUNT(*) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "host"
+     ],
+     [
+      "app_name"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "host",
+     "app_name",
+     "n"
+    ],
+    "limit": 50
+   }
+  },
+  {
+   "query": "comp sum(bytes) as total by host",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $3::text[]) AS \"host\", SUM((CASE WHEN ((parsed #>> $2::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $2::text[]))::text::numeric END)) AS \"total\" FROM events WHERE tenant_id = $1 GROUP BY 1 ORDER BY SUM((CASE WHEN ((parsed #>> $2::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $2::text[]))::text::numeric END)) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "bytes"
+     ],
+     [
+      "host"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "host",
+     "total"
+    ],
+    "limit": 1000
+   }
+  },
+  {
+   "query": "comp sum(bytes) as total by host",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $5::text[]) AS \"host\", SUM((CASE WHEN ((parsed #>> $4::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $4::text[]))::text::numeric END)) AS \"total\" FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 GROUP BY 1 ORDER BY SUM((CASE WHEN ((parsed #>> $4::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $4::text[]))::text::numeric END)) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "bytes"
+     ],
+     [
+      "host"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "host",
+     "total"
+    ],
+    "limit": 50
+   }
+  },
+  {
+   "query": "comp min(bytes), max(bytes), avg(bytes) by host",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $5::text[]) AS \"host\", MIN((CASE WHEN ((parsed #>> $2::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $2::text[]))::text::numeric END)) AS \"min_bytes\", MAX((CASE WHEN ((parsed #>> $3::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $3::text[]))::text::numeric END)) AS \"max_bytes\", AVG((CASE WHEN ((parsed #>> $4::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $4::text[]))::text::numeric END)) AS \"avg_bytes\" FROM events WHERE tenant_id = $1 GROUP BY 1 ORDER BY AVG((CASE WHEN ((parsed #>> $4::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $4::text[]))::text::numeric END)) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "bytes"
+     ],
+     [
+      "bytes"
+     ],
+     [
+      "bytes"
+     ],
+     [
+      "host"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "host",
+     "min_bytes",
+     "max_bytes",
+     "avg_bytes"
+    ],
+    "limit": 1000
+   }
+  },
+  {
+   "query": "comp min(bytes), max(bytes), avg(bytes) by host",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $7::text[]) AS \"host\", MIN((CASE WHEN ((parsed #>> $4::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $4::text[]))::text::numeric END)) AS \"min_bytes\", MAX((CASE WHEN ((parsed #>> $5::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $5::text[]))::text::numeric END)) AS \"max_bytes\", AVG((CASE WHEN ((parsed #>> $6::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $6::text[]))::text::numeric END)) AS \"avg_bytes\" FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 GROUP BY 1 ORDER BY AVG((CASE WHEN ((parsed #>> $6::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $6::text[]))::text::numeric END)) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "bytes"
+     ],
+     [
+      "bytes"
+     ],
+     [
+      "bytes"
+     ],
+     [
+      "host"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "host",
+     "min_bytes",
+     "max_bytes",
+     "avg_bytes"
+    ],
+    "limit": 50
+   }
+  },
+  {
+   "query": "comp avg(xdm.network.bytes) as a",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT AVG((CASE WHEN ((parsed #>> $2::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $2::text[]))::text::numeric END)) AS \"a\" FROM events WHERE tenant_id = $1 ORDER BY AVG((CASE WHEN ((parsed #>> $2::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $2::text[]))::text::numeric END)) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "xdm",
+      "network",
+      "bytes"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "a"
+    ],
+    "limit": 1000
+   }
+  },
+  {
+   "query": "comp avg(xdm.network.bytes) as a",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT AVG((CASE WHEN ((parsed #>> $4::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $4::text[]))::text::numeric END)) AS \"a\" FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 ORDER BY AVG((CASE WHEN ((parsed #>> $4::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $4::text[]))::text::numeric END)) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "xdm",
+      "network",
+      "bytes"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "a"
+    ],
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter host = \"a\" | comp count() as hits by app_name | sort desc hits",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $4::text[]) AS \"app_name\", COUNT(*) AS \"hits\" FROM events WHERE tenant_id = $1 AND ((parsed #>> $2::text[]) = $3) GROUP BY 1 ORDER BY \"hits\" DESC NULLS LAST LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "host"
+     ],
+     "a",
+     [
+      "app_name"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "app_name",
+     "hits"
+    ],
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter host = \"a\" | comp count() as hits by app_name | sort desc hits",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $6::text[]) AS \"app_name\", COUNT(*) AS \"hits\" FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND ((parsed #>> $4::text[]) = $5) GROUP BY 1 ORDER BY \"hits\" DESC NULLS LAST LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "host"
+     ],
+     "a",
+     [
+      "app_name"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "app_name",
+     "hits"
+    ],
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter host = \"a\" | comp count() as hits by app_name | sort asc app_name | limit 3",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $4::text[]) AS \"app_name\", COUNT(*) AS \"hits\" FROM events WHERE tenant_id = $1 AND ((parsed #>> $2::text[]) = $3) GROUP BY 1 ORDER BY \"app_name\" ASC NULLS LAST LIMIT 4",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "host"
+     ],
+     "a",
+     [
+      "app_name"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "app_name",
+     "hits"
+    ],
+    "limit": 3
+   }
+  },
+  {
+   "query": "filter host = \"a\" | comp count() as hits by app_name | sort asc app_name | limit 3",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $6::text[]) AS \"app_name\", COUNT(*) AS \"hits\" FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND ((parsed #>> $4::text[]) = $5) GROUP BY 1 ORDER BY \"app_name\" ASC NULLS LAST LIMIT 4",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "host"
+     ],
+     "a",
+     [
+      "app_name"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "app_name",
+     "hits"
+    ],
+    "limit": 3
+   }
+  },
+  {
+   "query": "dataset in (syslog, mac) | filter _raw ~= \"sudo|su\\\\[\" | comp count() as hits, count_distinct(host) as hosts by app_name",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $6::text[]) AS \"app_name\", COUNT(*) AS \"hits\", COUNT(DISTINCT (parsed #>> $5::text[])) AS \"hosts\" FROM events WHERE tenant_id = $1 AND source_type IN ($2, $3) AND (COALESCE(raw ~* $4, false)) GROUP BY 1 ORDER BY COUNT(DISTINCT (parsed #>> $5::text[])) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "syslog",
+     "mac",
+     "sudo|su\\[",
+     [
+      "host"
+     ],
+     [
+      "app_name"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "app_name",
+     "hits",
+     "hosts"
+    ],
+    "limit": 1000
+   }
+  },
+  {
+   "query": "dataset in (syslog, mac) | filter _raw ~= \"sudo|su\\\\[\" | comp count() as hits, count_distinct(host) as hosts by app_name",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $8::text[]) AS \"app_name\", COUNT(*) AS \"hits\", COUNT(DISTINCT (parsed #>> $7::text[])) AS \"hosts\" FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND source_type IN ($4, $5) AND (COALESCE(raw ~* $6, false)) GROUP BY 1 ORDER BY COUNT(DISTINCT (parsed #>> $7::text[])) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     "syslog",
+     "mac",
+     "sudo|su\\[",
+     [
+      "host"
+     ],
+     [
+      "app_name"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "app_name",
+     "hits",
+     "hosts"
+    ],
+    "limit": 50
+   }
+  },
+  {
+   "query": "comp count() by _time",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT (COALESCE(event_time, received_at))::text AS \"_time\", COUNT(*) AS \"count\" FROM events WHERE tenant_id = $1 GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111"
+    ],
+    "mode": "comp",
+    "columns": [
+     "_time",
+     "count"
+    ],
+    "limit": 1000
+   }
+  },
+  {
+   "query": "comp count() by _time",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT (COALESCE(event_time, received_at))::text AS \"_time\", COUNT(*) AS \"count\" FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z"
+    ],
+    "mode": "comp",
+    "columns": [
+     "_time",
+     "count"
+    ],
+    "limit": 50
+   }
+  },
+  {
+   "query": "comp count() by source_type",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT source_type AS \"source_type\", COUNT(*) AS \"count\" FROM events WHERE tenant_id = $1 GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111"
+    ],
+    "mode": "comp",
+    "columns": [
+     "source_type",
+     "count"
+    ],
+    "limit": 1000
+   }
+  },
+  {
+   "query": "comp count() by source_type",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT source_type AS \"source_type\", COUNT(*) AS \"count\" FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z"
+    ],
+    "mode": "comp",
+    "columns": [
+     "source_type",
+     "count"
+    ],
+    "limit": 50
+   }
+  },
+  {
+   "query": "fields xdm.a as a, xdm.b as b | sort a",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $2::text[]) AS \"a\", (parsed #>> $3::text[]) AS \"b\" FROM events WHERE tenant_id = $1 ORDER BY \"a\" DESC NULLS LAST LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "xdm",
+      "a"
+     ],
+     [
+      "xdm",
+      "b"
+     ]
+    ],
+    "mode": "fields",
+    "columns": [
+     "a",
+     "b"
+    ],
+    "limit": 1000
+   }
+  },
+  {
+   "query": "fields xdm.a as a, xdm.b as b | sort a",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT (parsed #>> $4::text[]) AS \"a\", (parsed #>> $5::text[]) AS \"b\" FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 ORDER BY \"a\" DESC NULLS LAST LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "xdm",
+      "a"
+     ],
+     [
+      "xdm",
+      "b"
+     ]
+    ],
+    "mode": "fields",
+    "columns": [
+     "a",
+     "b"
+    ],
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter \"x\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "filter: expected a field name (near character 8)",
+   "xqlError": true
+  },
+  {
+   "query": "filter \"x\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "filter: expected a field name (near character 8)",
+   "xqlError": true
+  },
+  {
+   "query": "filter host =",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "filter: expected a quoted \"text\" or a number (at end of stage)",
+   "xqlError": true
+  },
+  {
+   "query": "filter host =",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "filter: expected a quoted \"text\" or a number (at end of stage)",
+   "xqlError": true
+  },
+  {
+   "query": "filter host = a",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "filter: expected a quoted \"text\" or a number (near character 15)",
+   "xqlError": true
+  },
+  {
+   "query": "filter host = a",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "filter: expected a quoted \"text\" or a number (near character 15)",
+   "xqlError": true
+  },
+  {
+   "query": "filter bytes > \"x\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "filter: > needs a number (at end of stage)",
+   "xqlError": true
+  },
+  {
+   "query": "filter bytes > \"x\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "filter: > needs a number (at end of stage)",
+   "xqlError": true
+  },
+  {
+   "query": "filter _time > 5",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "filter: use the time range picker to limit time (at end of stage)",
+   "xqlError": true
+  },
+  {
+   "query": "filter _time > 5",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "filter: use the time range picker to limit time (at end of stage)",
+   "xqlError": true
+  },
+  {
+   "query": "filter host in (null)",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "filter: null is not allowed in a list (near character 21)",
+   "xqlError": true
+  },
+  {
+   "query": "filter host in (null)",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "filter: null is not allowed in a list (near character 21)",
+   "xqlError": true
+  },
+  {
+   "query": "filter host contains null",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "filter: contains needs a value (at end of stage)",
+   "xqlError": true
+  },
+  {
+   "query": "filter host contains null",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "filter: contains needs a value (at end of stage)",
+   "xqlError": true
+  },
+  {
+   "query": "filter host not = \"x\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "filter: expected contains or in after not (near character 17)",
+   "xqlError": true
+  },
+  {
+   "query": "filter host not = \"x\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "filter: expected contains or in after not (near character 17)",
+   "xqlError": true
+  },
+  {
+   "query": "dataset",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "dataset: expected = or in (at end of stage)",
+   "xqlError": true
+  },
+  {
+   "query": "dataset",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "dataset: expected = or in (at end of stage)",
+   "xqlError": true
+  },
+  {
+   "query": "dataset = ",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "dataset: expected a dataset name (at end of stage)",
+   "xqlError": true
+  },
+  {
+   "query": "dataset = ",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "dataset: expected a dataset name (at end of stage)",
+   "xqlError": true
+  },
+  {
+   "query": "filter host = \"a\" | dataset = x",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "dataset: dataset must be the first stage (near character 21)",
+   "xqlError": true
+  },
+  {
+   "query": "filter host = \"a\" | dataset = x",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "dataset: dataset must be the first stage (near character 21)",
+   "xqlError": true
+  },
+  {
+   "query": "fields host | filter host = \"a\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "filter: filter must come before fields / comp (near character 15)",
+   "xqlError": true
+  },
+  {
+   "query": "fields host | filter host = \"a\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "filter: filter must come before fields / comp (near character 15)",
+   "xqlError": true
+  },
+  {
+   "query": "comp count() | fields host",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "fields: fields cannot follow comp (near character 16)",
+   "xqlError": true
+  },
+  {
+   "query": "comp count() | fields host",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "fields: fields cannot follow comp (near character 16)",
+   "xqlError": true
+  },
+  {
+   "query": "comp count() | comp count()",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "comp: only one comp stage is allowed (near character 16)",
+   "xqlError": true
+  },
+  {
+   "query": "comp count() | comp count()",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "comp: only one comp stage is allowed (near character 16)",
+   "xqlError": true
+  },
+  {
+   "query": "comp sum() by host",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "comp: sum() needs a field (near character 12)",
+   "xqlError": true
+  },
+  {
+   "query": "comp sum() by host",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "comp: sum() needs a field (near character 12)",
+   "xqlError": true
+  },
+  {
+   "query": "comp foo() by host",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "comp: expected an aggregate: count(), count_distinct(), sum(), min(), max(), avg() (near character 6)",
+   "xqlError": true
+  },
+  {
+   "query": "comp foo() by host",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "comp: expected an aggregate: count(), count_distinct(), sum(), min(), max(), avg() (near character 6)",
+   "xqlError": true
+  },
+  {
+   "query": "sort nope | comp count()",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT COUNT(*) AS \"count\" FROM events WHERE tenant_id = $1 ORDER BY (parsed #>> $2::text[]) DESC NULLS LAST LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     [
+      "nope"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "count"
+    ],
+    "limit": 1000
+   }
+  },
+  {
+   "query": "sort nope | comp count()",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT COUNT(*) AS \"count\" FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 ORDER BY (parsed #>> $4::text[]) DESC NULLS LAST LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     [
+      "nope"
+     ]
+    ],
+    "mode": "comp",
+    "columns": [
+     "count"
+    ],
+    "limit": 50
+   }
+  },
+  {
+   "query": "comp count() as c | sort host",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "sort: \"host\" is not an output column of comp (at end of stage)",
+   "xqlError": true
+  },
+  {
+   "query": "comp count() as c | sort host",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "sort: \"host\" is not an output column of comp (at end of stage)",
+   "xqlError": true
+  },
+  {
+   "query": "limit 0",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "limit: expected a positive number (near character 7)",
+   "xqlError": true
+  },
+  {
+   "query": "limit 0",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "limit: expected a positive number (near character 7)",
+   "xqlError": true
+  },
+  {
+   "query": "limit x",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "limit: expected a positive number (near character 7)",
+   "xqlError": true
+  },
+  {
+   "query": "limit x",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "limit: expected a positive number (near character 7)",
+   "xqlError": true
+  },
+  {
+   "query": "bogus stage",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "bogus: unknown stage \"bogus\" (use dataset, filter, fields, sort, limit, comp) (near character 1)",
+   "xqlError": true
+  },
+  {
+   "query": "bogus stage",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "bogus: unknown stage \"bogus\" (use dataset, filter, fields, sort, limit, comp) (near character 1)",
+   "xqlError": true
+  },
+  {
+   "query": "filter host = \"unterminated",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "Unterminated string starting at character 15",
+   "xqlError": true
+  },
+  {
+   "query": "filter host = \"unterminated",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "Unterminated string starting at character 15",
+   "xqlError": true
+  },
+  {
+   "query": "filter host = \"a\" @",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "Unexpected character \"@\" at character 19",
+   "xqlError": true
+  },
+  {
+   "query": "filter host = \"a\" @",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "Unexpected character \"@\" at character 19",
+   "xqlError": true
+  },
+  {
+   "query": "filter _raw ~= \"(a+)+\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND (COALESCE(raw ~* $2, false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 1001",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "(a+)+"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 1000
+   }
+  },
+  {
+   "query": "filter _raw ~= \"(a+)+\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "ok": {
+    "sql": "SELECT id::text AS \"_id\", COALESCE(event_time, received_at) AS \"_time\", source_type, collector_id, raw AS \"_raw\", parsed FROM events WHERE tenant_id = $1 AND COALESCE(event_time, received_at) >= $2 AND COALESCE(event_time, received_at) <= $3 AND (COALESCE(raw ~* $4, false)) ORDER BY COALESCE(event_time, received_at) DESC LIMIT 51",
+    "values": [
+     "11111111-1111-4111-8111-111111111111",
+     "2026-10-01T00:00:00.000Z",
+     "2026-10-02T00:00:00.000Z",
+     "(a+)+"
+    ],
+    "mode": "raw",
+    "columns": null,
+    "limit": 50
+   }
+  },
+  {
+   "query": "filter _raw ~= \"(unclosed\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "filter: invalid regular expression (at end of stage)",
+   "xqlError": true
+  },
+  {
+   "query": "filter _raw ~= \"(unclosed\"",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "filter: invalid regular expression (at end of stage)",
+   "xqlError": true
+  },
+  {
+   "query": "filter host = \"a\" extra",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "filter: unexpected \"extra\" (near character 19)",
+   "xqlError": true
+  },
+  {
+   "query": "filter host = \"a\" extra",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "filter: unexpected \"extra\" (near character 19)",
+   "xqlError": true
+  },
+  {
+   "query": "",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "Enter a query, for example: dataset = syslog | limit 100",
+   "xqlError": true
+  },
+  {
+   "query": "",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "Enter a query, for example: dataset = syslog | limit 100",
+   "xqlError": true
+  },
+  {
+   "query": "   ",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111"
+   },
+   "error": "Enter a query, for example: dataset = syslog | limit 100",
+   "xqlError": true
+  },
+  {
+   "query": "   ",
+   "opts": {
+    "tenantId": "11111111-1111-4111-8111-111111111111",
+    "from": "2026-10-01T00:00:00.000Z",
+    "to": "2026-10-02T00:00:00.000Z",
+    "limit": 50
+   },
+   "error": "Enter a query, for example: dataset = syslog | limit 100",
+   "xqlError": true
+  }
+ ],
+ "condition": [
+  {
+   "query": "xdm.event.outcome = XDM_CONST.OUTCOME_FAILED",
+   "pre": [
+    null
+   ],
+   "ok": {
+    "frags": [
+     "((parsed #>> $2::text[]) = $3)"
+    ],
+    "values": [
+     null,
+     [
+      "xdm",
+      "event",
+      "outcome"
+     ],
+     "FAILED"
+    ]
+   }
+  },
+  {
+   "query": "xdm.event.outcome = XDM_CONST.OUTCOME_FAILED",
+   "pre": [
+    null,
+    "x",
+    "y"
+   ],
+   "ok": {
+    "frags": [
+     "((parsed #>> $4::text[]) = $5)"
+    ],
+    "values": [
+     null,
+     "x",
+     "y",
+     [
+      "xdm",
+      "event",
+      "outcome"
+     ],
+     "FAILED"
+    ]
+   }
+  },
+  {
+   "query": "dataset = syslog",
+   "pre": [
+    null
+   ],
+   "ok": {
+    "frags": [
+     "source_type = $2"
+    ],
+    "values": [
+     null,
+     "syslog"
+    ]
+   }
+  },
+  {
+   "query": "dataset = syslog",
+   "pre": [
+    null,
+    "x",
+    "y"
+   ],
+   "ok": {
+    "frags": [
+     "source_type = $4"
+    ],
+    "values": [
+     null,
+     "x",
+     "y",
+     "syslog"
+    ]
+   }
+  },
+  {
+   "query": "dataset = syslog | filter host = \"a\"",
+   "pre": [
+    null
+   ],
+   "ok": {
+    "frags": [
+     "source_type = $2",
+     "((parsed #>> $3::text[]) = $4)"
+    ],
+    "values": [
+     null,
+     "syslog",
+     [
+      "host"
+     ],
+     "a"
+    ]
+   }
+  },
+  {
+   "query": "dataset = syslog | filter host = \"a\"",
+   "pre": [
+    null,
+    "x",
+    "y"
+   ],
+   "ok": {
+    "frags": [
+     "source_type = $4",
+     "((parsed #>> $5::text[]) = $6)"
+    ],
+    "values": [
+     null,
+     "x",
+     "y",
+     "syslog",
+     [
+      "host"
+     ],
+     "a"
+    ]
+   }
+  },
+  {
+   "query": "filter host = \"a\" or host = \"b\"",
+   "pre": [
+    null
+   ],
+   "ok": {
+    "frags": [
+     "(((parsed #>> $2::text[]) = $3) OR ((parsed #>> $4::text[]) = $5))"
+    ],
+    "values": [
+     null,
+     [
+      "host"
+     ],
+     "a",
+     [
+      "host"
+     ],
+     "b"
+    ]
+   }
+  },
+  {
+   "query": "filter host = \"a\" or host = \"b\"",
+   "pre": [
+    null,
+    "x",
+    "y"
+   ],
+   "ok": {
+    "frags": [
+     "(((parsed #>> $4::text[]) = $5) OR ((parsed #>> $6::text[]) = $7))"
+    ],
+    "values": [
+     null,
+     "x",
+     "y",
+     [
+      "host"
+     ],
+     "a",
+     [
+      "host"
+     ],
+     "b"
+    ]
+   }
+  },
+  {
+   "query": "host = \"a\" and bytes > 5",
+   "pre": [
+    null
+   ],
+   "ok": {
+    "frags": [
+     "((parsed #>> $2::text[]) = $3 AND COALESCE((CASE WHEN ((parsed #>> $4::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $4::text[]))::text::numeric END) > $5, false))"
+    ],
+    "values": [
+     null,
+     [
+      "host"
+     ],
+     "a",
+     [
+      "bytes"
+     ],
+     5
+    ]
+   }
+  },
+  {
+   "query": "host = \"a\" and bytes > 5",
+   "pre": [
+    null,
+    "x",
+    "y"
+   ],
+   "ok": {
+    "frags": [
+     "((parsed #>> $4::text[]) = $5 AND COALESCE((CASE WHEN ((parsed #>> $6::text[]))::text ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ((parsed #>> $6::text[]))::text::numeric END) > $7, false))"
+    ],
+    "values": [
+     null,
+     "x",
+     "y",
+     [
+      "host"
+     ],
+     "a",
+     [
+      "bytes"
+     ],
+     5
+    ]
+   }
+  },
+  {
+   "query": "xdm.event.type = \"process_injection\" and not xdm.source.process.executable.path ~= \"\\\\\\\\(MsMpEng|csrss)\\\\.exe$\"",
+   "pre": [
+    null
+   ],
+   "ok": {
+    "frags": [
+     "((parsed #>> $2::text[]) = $3 AND NOT (COALESCE((parsed #>> $4::text[]) ~* $5, false)))"
+    ],
+    "values": [
+     null,
+     [
+      "xdm",
+      "event",
+      "type"
+     ],
+     "process_injection",
+     [
+      "xdm",
+      "source",
+      "process",
+      "executable",
+      "path"
+     ],
+     "\\\\(MsMpEng|csrss)\\.exe$"
+    ]
+   }
+  },
+  {
+   "query": "xdm.event.type = \"process_injection\" and not xdm.source.process.executable.path ~= \"\\\\\\\\(MsMpEng|csrss)\\\\.exe$\"",
+   "pre": [
+    null,
+    "x",
+    "y"
+   ],
+   "ok": {
+    "frags": [
+     "((parsed #>> $4::text[]) = $5 AND NOT (COALESCE((parsed #>> $6::text[]) ~* $7, false)))"
+    ],
+    "values": [
+     null,
+     "x",
+     "y",
+     [
+      "xdm",
+      "event",
+      "type"
+     ],
+     "process_injection",
+     [
+      "xdm",
+      "source",
+      "process",
+      "executable",
+      "path"
+     ],
+     "\\\\(MsMpEng|csrss)\\.exe$"
+    ]
+   }
+  },
+  {
+   "query": "dataset in (a, b)",
+   "pre": [
+    null
+   ],
+   "error": "dataset: expected = (near character 9)",
+   "xqlError": true
+  },
+  {
+   "query": "dataset in (a, b)",
+   "pre": [
+    null,
+    "x",
+    "y"
+   ],
+   "error": "dataset: expected = (near character 9)",
+   "xqlError": true
+  },
+  {
+   "query": "sort host",
+   "pre": [
+    null
+   ],
+   "error": "filter: expected an operator (=, !=, >, <, >=, <=, ~=, contains, in) (near character 13)",
+   "xqlError": true
+  },
+  {
+   "query": "sort host",
+   "pre": [
+    null,
+    "x",
+    "y"
+   ],
+   "error": "filter: expected an operator (=, !=, >, <, >=, <=, ~=, contains, in) (near character 13)",
+   "xqlError": true
+  },
+  {
+   "query": "",
+   "pre": [
+    null
+   ],
+   "error": "Enter a condition, for example: xdm.event.outcome = XDM_CONST.OUTCOME_FAILED",
+   "xqlError": true
+  },
+  {
+   "query": "",
+   "pre": [
+    null,
+    "x",
+    "y"
+   ],
+   "error": "Enter a condition, for example: xdm.event.outcome = XDM_CONST.OUTCOME_FAILED",
+   "xqlError": true
+  },
+  {
+   "query": "host =",
+   "pre": [
+    null
+   ],
+   "error": "filter: expected a quoted \"text\" or a number (at end of stage)",
+   "xqlError": true
+  },
+  {
+   "query": "host =",
+   "pre": [
+    null,
+    "x",
+    "y"
+   ],
+   "error": "filter: expected a quoted \"text\" or a number (at end of stage)",
+   "xqlError": true
+  }
+ ]
+}
