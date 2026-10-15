@@ -22,6 +22,7 @@
 
 const { EventStore, EventStoreError } = require('./event-store');
 const { ENVELOPE_VERSION, UUID_RE } = require('./envelope');
+const { toClickHouse } = require('../search/xql-clickhouse');
 
 // Plain column names on purpose: an alias such as `toString(id) AS id` would shadow the column inside
 // WHERE and ORDER BY (comparing text with UUIDs, sorting times as text). JSONEachRow already renders
@@ -210,12 +211,14 @@ class ClickHouseEventStore extends EventStore {
     if (q.after) {
       params.after_ts = cursorTime(q.after.ts);
       params.after_id = q.after.id;
-      where.push(`(received_at, id) ${q.order === 'desc' ? '<' : '>'} ({after_ts:DateTime64(3, 'UTC')}, {after_id:UUID})`);
+      // ties are ordered by the id as TEXT: ClickHouse's own UUID order is not the hex-string order the contract (and
+      // the other adapters) use, so comparing UUIDs made paging order differ from the other engines
+      where.push(`(received_at, toString(id)) ${q.order === 'desc' ? '<' : '>'} ({after_ts:DateTime64(3, 'UTC')}, {after_id:String})`);
     }
     const limit = Number(q.limit);
     if (!Number.isInteger(limit) || limit < 1) throw new EventStoreError('INVALID_QUERY', 'limit must be a whole number of at least 1');
     const rows = await this._rows(
-      `SELECT ${COLUMNS} FROM ${this._table} FINAL WHERE ${where.join(' AND ')} ORDER BY received_at ${dir}, id ${dir} LIMIT ${limit}`,
+      `SELECT ${COLUMNS} FROM ${this._table} FINAL WHERE ${where.join(' AND ')} ORDER BY received_at ${dir}, toString(id) ${dir} LIMIT ${limit}`,
       { params });
     return rows.map((row) => ({ event: rowToEnvelope(row), cursorTs: row.received_at }));
   }
@@ -254,6 +257,20 @@ class ClickHouseEventStore extends EventStore {
 
   // XQL compiles to PostgreSQL SQL and detection rules pass a PostgreSQL group expression, so neither
   // runs here yet. They fail loudly (NOT_IMPLEMENTED from the base class) instead of returning wrong data.
+
+  // An XQL plan becomes ClickHouse SQL (src/search/xql-clickhouse.js); every value is a query parameter.
+  async _search(tenant, plan) {
+    const q = toClickHouse(plan, tenant, this._table);
+    const rows = await this._rows(q.sql, { params: q.params });
+    return rows.map((r) => {
+      const out = Object.fromEntries(q.columns.map(({ c, name }) => [name, r[c] === undefined ? null : r[c]]));   // not out[name] =: __proto__
+      if (q.mode === 'raw') {
+        out._time = new Date(isoTime(out._time));
+        try { out.parsed = out.parsed ? JSON.parse(out.parsed) : {}; } catch (_) { out.parsed = {}; }
+      }
+      return out;
+    });
+  }
 
   async close() { this._conn = null; }
 }

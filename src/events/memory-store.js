@@ -5,6 +5,7 @@
 // local experiments only; src/events/index.js refuses to use it when NODE_ENV=production.
 
 const { EventStore } = require('./event-store');
+const { runPlan } = require('../search/xql-eval');
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const clone = (v) => structuredClone(v);
@@ -52,6 +53,8 @@ class MemoryEventStore extends EventStore {
     if (q.after) rows = rows.filter((e) => sign * (cmp(e.received_at, q.after.ts) || cmp(e.id, q.after.id)) > 0);
     return rows.slice(0, q.limit).map((e) => ({ event: clone(e), cursorTs: e.received_at }));
   }
+
+  async _search(tenant, plan) { return clone(runPlan(plan, this._rows(tenant))); }
 
   async _count(tenant, f) { return this._filter(tenant, f).length; }
 

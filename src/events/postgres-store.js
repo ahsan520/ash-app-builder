@@ -12,6 +12,7 @@
 
 const { EventStore } = require('./event-store');
 const { ENVELOPE_VERSION } = require('./envelope');
+const { toSql } = require('../search/xql-postgres');
 
 const COLUMNS = `id, tenant_id, source_type, collector_id, received_at::text AS received_at_txt,
                  event_time::text AS event_time_txt, raw, parsed`;
@@ -119,6 +120,15 @@ class PostgresEventStore extends EventStore {
     return this._run(tenant, null, async (client) => {
       const r = await client.query('DELETE FROM events WHERE tenant_id = $1 AND received_at < $2::timestamp', [tenant, cutoff]);
       return { deleted: r.rowCount };
+    });
+  }
+
+  // An XQL plan becomes SQL here (src/search/xql-postgres.js: every value is a bound parameter, the tenant is $1).
+  async _search(tenant, plan, opts) {
+    const q = toSql(plan, tenant);
+    return this._run(tenant, opts, async (client) => {
+      await client.query("SET LOCAL statement_timeout = '20s'");
+      return (await client.query(q.sql, q.values)).rows;
     });
   }
 

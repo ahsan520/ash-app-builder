@@ -7,27 +7,27 @@ const {
 
 // ---- XQL-style search ---------------------------------------------------------------
 const xql = require('../../search/xql');
+const { getEventStore } = require('../../events');
 router.post('/v1/search/xql', ...guarded('search:events:read'), async (req, res) => {
   const b = req.body || {};
   const mins = Number(b.minutes);
   const from = b.from ? new Date(b.from) : mins > 0 ? new Date(Date.now() - mins * 60000) : null;
   const to = b.to ? new Date(b.to) : null;
   if ((from && isNaN(from)) || (to && isNaN(to))) return apiError(res, 400, 'INVALID_TIME', 'Invalid time range');
-  let q;
+  let plan;
   try {
-    q = xql.compile(b.query, { tenantId: req.tenant_id, from: from && from.toISOString(), to: to && to.toISOString(), limit: b.limit });
+    plan = xql.parse(b.query, { from: from && from.toISOString(), to: to && to.toISOString(), limit: b.limit });
   } catch (e) {
     if (e instanceof xql.XqlError) return apiError(res, 400, 'XQL_SYNTAX', e.message);
     throw e;
   }
   const t0 = Date.now();
   try {
-    const rows = await db.withTenant(req.tenant_id, async (client) => {
-      await client.query("SET LOCAL statement_timeout = '20s'");
-      return (await client.query(q.sql, q.values)).rows;
-    });
-    const truncated = rows.length > q.limit;
-    if (truncated) rows.length = q.limit;
+    // The event store runs the plan on whatever engine this deployment uses (src/events); the route no longer sees SQL.
+    const result = await getEventStore().search(req.tenant_id, plan);
+    const rows = result.rows;
+    const q = { mode: result.mode, columns: result.columns };
+    const truncated = result.truncated;
     const str = (v) => (v === null || v === undefined ? null : v instanceof Date ? v.toISOString().replace('T', ' ').replace(/\..*$/, '') : typeof v === 'object' ? JSON.stringify(v) : String(v));
     let columns = q.columns, out;
     if (q.mode === 'raw') {

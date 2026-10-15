@@ -15,6 +15,7 @@
 //   count(tenantId, filter?)              -> number
 //   sourceTypes(tenantId, { since? })     -> string[]              (distinct, sorted, max 100)
 //   deleteBefore(tenantId, cutoff)        -> { deleted }           (received_at < cutoff)
+//   search(tenantId, plan, opts?)         -> { rows, truncated, mode, columns }  (an XQL query plan, see src/search/xql-plan.js)
 //   querySQL(tenantId, sql, params, opts?) -> { rows, fields }      (XQL-compiled SQL, controlled escape hatch)
 //   queryAggregated(tenantId, spec)        -> object[]              (group-by for rule/IOC matchers)
 //   querySQL and queryAggregated take PostgreSQL SQL / a PostgreSQL group expression, so only the Postgres
@@ -25,6 +26,7 @@
 
 const crypto = require('crypto');
 const { UUID_RE, EnvelopeError, makeEnvelope, normalizeTime } = require('./envelope');
+const { validatePlan, PlanError } = require('../search/xql-plan');
 
 const MAX_BATCH = 5000;
 const MAX_SCAN = 1000;
@@ -149,6 +151,19 @@ class EventStore {
     return this._deleteBefore(tenant, c);
   }
 
+  // Run an XQL query plan (the result of xql.parse(), see src/search/xql-plan.js). The plan holds no SQL: each adapter
+  // turns it into its own query or evaluates it, always for this tenant only. The plan is validated first (field
+  // names, sizes, limits), so even a hand-built plan cannot inject anything. Rows are keyed by output column; 'raw'
+  // mode rows are { _id, _time (Date), source_type, collector_id, _raw, parsed }. `truncated` is true when there were
+  // more than plan.limit rows (the extra one is dropped). Numbers may come back as numbers or numeric strings.
+  async search(tenantId, plan, opts = {}) {
+    const tenant = assertTenant(tenantId);
+    try { validatePlan(plan); } catch (e) { if (e instanceof PlanError) throw new EventStoreError('INVALID_QUERY', e.message); throw e; }
+    const rows = await this._search(tenant, plan, opts || {});
+    const truncated = rows.length > plan.limit;
+    return { rows: truncated ? rows.slice(0, plan.limit) : rows, truncated, mode: plan.mode, columns: plan.columns || null };
+  }
+
   // Run an XQL-compiled SQL query. The SQL and its params come from compile() in src/search/xql.js,
   // which is safe by construction (parameters are bound; field names pass IDENT_RE) and which puts
   // the tenant filter in the SQL itself. This method does NOT add a tenant filter: the only thing
@@ -186,6 +201,7 @@ class EventStore {
   // _count(tenant, filter) -> number
   // _sourceTypes(tenant, { since, limit }) -> string[]
   // _deleteBefore(tenant, isoCutoff) -> { deleted }
+  // _search(tenant, plan, opts) -> object[]      at most plan.limit + 1 rows, already ordered; plan is validated
   // _querySQL(tenant, sql, params, opts) -> { rows, fields }      (XQL-compiled query, tenant-scoped)
   // _queryAggregated(tenant, { since, until, source_type, collector_id, limit, group_expr, sample_ids }) -> object[]
   async _insert(tenant, envelopes, opts) { throw new EventStoreError('NOT_IMPLEMENTED', 'insertBatch'); }
@@ -194,6 +210,7 @@ class EventStore {
   async _count(tenant, f) { throw new EventStoreError('NOT_IMPLEMENTED', 'count'); }
   async _sourceTypes(tenant, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'sourceTypes'); }
   async _deleteBefore(tenant, cutoff) { throw new EventStoreError('NOT_IMPLEMENTED', 'deleteBefore'); }
+  async _search(tenant, plan, opts) { throw new EventStoreError('NOT_IMPLEMENTED', 'search'); }
   async _querySQL(tenant, sql, params, opts) { throw new EventStoreError('NOT_IMPLEMENTED', 'querySQL'); }
   async _queryAggregated(tenant, spec) { throw new EventStoreError('NOT_IMPLEMENTED', 'queryAggregated'); }
 }
