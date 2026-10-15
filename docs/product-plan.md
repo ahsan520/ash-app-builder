@@ -50,8 +50,9 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) has started: see 
 |---|---|
 | Event envelope | Done (see below) |
 | Event-store interface, Postgres adapter, conformance suite | Done (see below); ingest writes go through it |
-| Search, detections, IOC matcher, retention moved behind the store | Not started (next) |
-| ClickHouse adapter (same conformance suite) | Done — `src/events/clickhouse-store.js`; passes the conformance suite against a real ClickHouse 24.8 and runs in its own CI job. Reads that use `querySQL` / `queryAggregated` are not available on it yet |
+| XQL search moved behind the store (query plan + `store.search()`) | Done (see below) |
+| Detections, IOC matcher, retention and the page counts moved behind the store | Not started (next) |
+| ClickHouse adapter (same conformance suite) | Done — `src/events/clickhouse-store.js`; passes the conformance suite against a real ClickHouse 24.8 and runs in its own CI job. Reads that use `querySQL` / `queryAggregated` are not available on it yet; XQL `search()` is |
 | Parsers as separate workers | Not started |
 
 ### Event envelope and event store (what exists)
@@ -70,10 +71,20 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) has started: see 
 - **Ingest switched over:** the HTTP key lane and the broker lane write through the store. The broker lane is now one
   statement per batch instead of one per event. A malformed event is now a `400` (`INGEST_INVALID_EVENT`) instead of a
   `500`, and a NUL character no longer fails the batch. Routes, auth, rate limits, parsing rules and audit rows are unchanged.
-- Not built: reads (XQL search, detection rules, the IOC matcher, the retention job, and the counts on the collectors,
-  storage and capacity pages) still use SQL directly. Moving them needs a query form that is not SQL, because XQL compiles to
-  PostgreSQL SQL today; that is the next part, and it is what the ClickHouse adapter needs before `querySQL` / `queryAggregated`
-  can work there. Also not built: parsers as separate workers, a ClickHouse table created on deploy (run `ensureSchema()`), and
+- **XQL search runs on any engine.** XQL is parsed once into a *query plan* (`src/search/xql-plan.js`: stages, a small
+  expression tree, no SQL). `getEventStore().search(tenantId, plan)` runs it: Postgres and ClickHouse each translate the
+  plan to their own SQL (`xql-postgres.js`, `xql-clickhouse.js`), the in-memory adapter evaluates it directly
+  (`xql-eval.js`). `POST /v1/search/xql` now goes through the store; its request and response are unchanged. The plan is
+  validated before any engine sees it (field names, sizes, limits), values are always bound parameters, and a hand-built
+  plan cannot inject SQL. One conformance suite (`tests/event-search-conformance.js`) holds all engines to the same results:
+  a frozen set of 116 query/window cases checked against real PostgreSQL, plus hand-written checks of each rule of the
+  language. The old compiler's SQL is reproduced exactly (`tests/xql-golden.test.js`, 170 query cases), so BIOC rules and
+  everything that still calls `xql.compile` are unchanged.
+- Known differences between engines (listed in `docs/event-store.md`): regex dialect (PostgreSQL ARE vs RE2 on ClickHouse),
+  text of a whole object or array value, numbers as exact decimals vs Float64, text sort order.
+- Not built: the other reads (detection rules, the IOC matcher, the retention job, the counts on the collectors, storage and
+  capacity pages, `/v1/search/fields`) still use SQL directly; that is the next part (`docs/parallel-work.md`, "What to build
+  next"). Also not built: parsers as separate workers, a ClickHouse table created on deploy (run `ensureSchema()`), and
   any per-tenant choice of adapter (one adapter per process).
 
 ### Broker VM and collector heartbeat (what exists)
