@@ -175,6 +175,106 @@ function runConformance(label, setup) {
       });
     });
 
+    describe('groupCounts, timeRange and fieldStats', () => {
+      // all in tenant A, in a window (minutes 5000..6500) that no other test uses
+      const WIN = { since: iso(5000), until: iso(6501) };
+      const day = (m) => iso(m).slice(0, 10);
+      before(async () => {
+        await store.insertBatch(A, [
+          ev(5000, { source_type: 'x-gc1', collector_id: 'gc-a' }), ev(5001, { source_type: 'x-gc1', collector_id: 'gc-a' }), ev(5059, { source_type: 'x-gc1', collector_id: 'gc-a' }),
+          ev(5010, { source_type: 'x-gc1', collector_id: 'gc-b' }), ev(5010, { source_type: 'x-gc1', collector_id: 'gc-b' }),   // two with the same time
+          ev(5020, { source_type: 'x-gc2', collector_id: null }),                                                                // no collector
+          ev(5030, { source_type: 'x-gc2', collector_id: 'gc-a' }),
+          ev(6500, { source_type: 'x-gc3', collector_id: 'gc-c' }),                                                              // the next day
+        ]);
+      });
+      const shape = (rows) => rows.map((r) => [r.key, r.events, instant(r.first_seen), instant(r.last_seen)]);
+
+      it('counts per collector, with first and last time; events without a collector are not a group', async () => {
+        assert.deepStrictEqual(shape(await store.groupCounts(A, { by: 'collector_id', ...WIN })), [
+          ['gc-a', 4, instant(iso(5000)), instant(iso(5059))], ['gc-b', 2, instant(iso(5010)), instant(iso(5010))], ['gc-c', 1, instant(iso(6500)), instant(iso(6500))]]);
+      });
+
+      it('counts per source type, most events first', async () => {
+        assert.deepStrictEqual(shape(await store.groupCounts(A, { by: 'source_type', ...WIN })), [
+          ['x-gc1', 5, instant(iso(5000)), instant(iso(5059))], ['x-gc2', 2, instant(iso(5020)), instant(iso(5030))], ['x-gc3', 1, instant(iso(6500)), instant(iso(6500))]]);
+      });
+
+      it('counts per UTC day, oldest day first', async () => {
+        const rows = await store.groupCounts(A, { by: 'day', ...WIN });
+        assert.deepStrictEqual(rows.map((r) => [r.key, r.events]), [[day(5000), 7], [day(6500), 1]]);
+        assert.notStrictEqual(day(5000), day(6500), 'the fixture spans two days');
+      });
+
+      it('since is inclusive and until is exclusive', async () => {
+        const rows = await store.groupCounts(A, { by: 'collector_id', since: iso(5010), until: iso(5059) });
+        assert.deepStrictEqual(rows.map((r) => [r.key, r.events]), [['gc-b', 2], ['gc-a', 1]]);   // 5000 and 5001 are before since, 5059 is not before until
+        assert.deepStrictEqual(await store.groupCounts(A, { by: 'source_type', since: iso(9000), until: iso(9001) }), []);
+      });
+
+      it('only counts this tenant', async () => {
+        assert.deepStrictEqual(await store.groupCounts(B, { by: 'collector_id', ...WIN }), []);
+      });
+
+      it('validates its arguments', async () => {
+        for (const bad of [{}, { by: 'host' }, { by: 5 }, { by: 'day', since: 'soon' }, null]) {
+          await assert.rejects(store.groupCounts(A, bad), (e) => e.code === 'INVALID_QUERY', JSON.stringify(bad));
+        }
+      });
+
+      it('timeRange: the oldest and newest event, or nulls for a tenant with none', async () => {
+        const r = await store.timeRange(A);
+        assert.ok(instant(r.oldest) <= instant(iso(5000)) && instant(r.newest) >= instant(iso(6500)));
+        assert.match(r.oldest, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+        assert.deepStrictEqual(await store.timeRange(uuid()), { oldest: null, newest: null });
+      });
+
+      describe('fieldStats', () => {
+        // the newest events of tenant A (far in the future, so nothing else is newer), plus one in tenant B
+        const parsed = [
+          { host: 'h1', app_name: 'sshd', xdm: { source: { ipv4: '1.1.1.1' }, event: { type: 'authentication' } } },
+          { host: 'h2', app_name: 'sshd', xdm: { source: { ipv4: '2.2.2.2' } } },
+          { host: 'h3', n: 5 },
+          { host: 'h4', tags: ['a', 'b'], xdm: { tags: ['x'], nothing: {} } },     // an array is a leaf, an empty object has none
+          { host: 'h5', xdm: 'not an object' },                                      // counts as a field, gives no xdm paths
+        ];
+        before(async () => {
+          await store.insertBatch(A, parsed.map((p, i) => ev(900001 + i, { source_type: 'x-fs', parsed: p })));
+          await store.insertBatch(B, [ev(900010, { source_type: 'x-fs', parsed: { only_in_b: 1, xdm: { b: { secret: 1 } } } })]);
+        });
+        const pairs = (rows) => rows.map((r) => [r.name, r.events]);
+
+        it('counts top-level keys and xdm leaf paths, most events first, ties by name', async () => {
+          const r = await store.fieldStats(A, { sample: 5, xdmSample: 3 });   // 3: my three events with an xdm object (older tests left others)
+          assert.deepStrictEqual(pairs(r.fields), [['host', 5], ['xdm', 4], ['app_name', 2], ['n', 1], ['tags', 1]]);
+          assert.deepStrictEqual(pairs(r.xdm), [['xdm.source.ipv4', 2], ['xdm.event.type', 1], ['xdm.tags', 1]]);
+        });
+
+        it('`sample` takes the newest events; `xdmSample` the newest ones that have an xdm object', async () => {
+          const r = await store.fieldStats(A, { sample: 3, xdmSample: 2 });
+          assert.deepStrictEqual(pairs(r.fields), [['host', 3], ['xdm', 2], ['n', 1], ['tags', 1]]);        // events 3, 4 and 5 only
+          assert.deepStrictEqual(pairs(r.xdm), [['xdm.source.ipv4', 1], ['xdm.tags', 1]]);                  // events 4 and 2 (5 has xdm but not an object)
+        });
+
+        it('never shows another tenant\'s fields', async () => {
+          const r = await store.fieldStats(A, { sample: 10, xdmSample: 10 });
+          assert.ok(!r.fields.some((f) => f.name === 'only_in_b') && !r.xdm.some((f) => f.name.startsWith('xdm.b')));
+          const b = await store.fieldStats(B, { sample: 1, xdmSample: 1 });
+          assert.deepStrictEqual(pairs(b.fields), [['only_in_b', 1], ['xdm', 1]]);
+          assert.deepStrictEqual(pairs(b.xdm), [['xdm.b.secret', 1]]);
+        });
+
+        it('has defaults and validates its arguments', async () => {
+          const d = await store.fieldStats(A);
+          assert.ok(Array.isArray(d.fields) && Array.isArray(d.xdm));
+          assert.deepStrictEqual(await store.fieldStats(uuid()), { fields: [], xdm: [] });
+          for (const bad of [{ sample: 0 }, { sample: '5' }, { sample: 1.5 }, { sample: 10001 }, { xdmSample: -1 }, { xdmSample: 5001 }, null]) {
+            await assert.rejects(store.fieldStats(A, bad), (e) => e.code === 'INVALID_QUERY', JSON.stringify(bad));
+          }
+        });
+      });
+    });
+
     it('deletes only events older than the cutoff', async () => {
       const mk = (m) => ev(m, { source_type: 'x-del' });
       const [e1, e2, e3] = [mk(40), mk(41), mk(42)];
