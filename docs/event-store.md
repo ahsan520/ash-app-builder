@@ -43,6 +43,9 @@ await store.insertBatch(tenantId, [{ source_type: 'syslog', raw: '...', parsed: 
 | `sourceTypes(tenantId, { since? })` | Distinct source types, sorted, at most 100. |
 | `deleteBefore(tenantId, cutoff)` | `{ deleted }`: events with `received_at` before the cutoff. |
 | `search(tenantId, plan, opts?)` | `{ rows, truncated, mode, columns }`. Runs an XQL query plan (`xql.parse(text, { from, to, limit })`, see "XQL search" below) on this adapter, for this tenant only. Works on every adapter. |
+| `groupCounts(tenantId, { by, since?, until? })` | `[{ key, events, first_seen, last_seen }]`. Counts per `collector_id`, `source_type` or UTC `day` (key `YYYY-MM-DD`) of `received_at`, with the earliest and latest time of each group. `since` inclusive, `until` exclusive. Events with no collector are not a `collector_id` group. At most 1,000 groups; most events first (ties by key), days oldest first. Works on every adapter. |
+| `timeRange(tenantId)` | `{ oldest, newest }`: earliest and latest `received_at` as ISO times, or nulls when the tenant has no events. |
+| `fieldStats(tenantId, { sample?, xdmSample? })` | `{ fields, xdm }`, each `[{ name, events }]`. `fields`: top-level keys of `parsed` over the newest `sample` events (default 2,000, max 10,000). `xdm`: leaf paths under `parsed.xdm` (as `xdm.a.b`; arrays are leaves, empty objects have none) over the newest `xdmSample` events (default 500, max 5,000) whose `parsed.xdm` is an object. Most events first, ties by name, at most 200 and 500 names. Newest means `(received_at, id)` descending. |
 | `querySQL(tenantId, sql, params, opts?)` | `{ rows, fields }`. Runs XQL-compiled PostgreSQL SQL. **Postgres adapter only.** It adds no tenant filter of its own: the SQL from `xql.compile` must carry it. |
 | `queryAggregated(tenantId, spec)` | Group-by counts for detection rules and the IOC matcher. **Postgres adapter only** (`spec.group_expr` is a trusted PostgreSQL fragment from the rule definition, never user input). |
 
@@ -158,11 +161,23 @@ because of it. Trade-off: the id tie-break no longer follows the table's sort ke
 - NUL characters no longer fail a batch. A `parsed` object over 1 MiB is refused (400).
 - Everything else is unchanged: same routes, auth, rate limits, parsing rules, data model pass and audit rows.
 
+## Page counts behind the store (done)
+The collectors list, `/v1/search/fields`, the storage page's range and 14-day chart, the retention page's source list and
+capacity's ingest rate now read through `groupCounts`, `timeRange`, `fieldStats`, `sourceTypes` and `count`. They are
+store methods, not plans, because they are about *arrival* time (`received_at`), and a plan's time bounds use the event
+time. `tests/event-store-conformance.js` holds every adapter to the same answers (run on in-memory, PostgreSQL and
+ClickHouse 24.8), and `tests/read-counts-db.test.js` checks the routes against the SQL they replaced on real PostgreSQL.
+Small, deliberate differences from the old SQL: the sample for field names breaks ties by id (the old query left ties
+undefined); names tied on count sort by byte order; `xdm` paths are capped at 500 names; an `xdm` value that is not an
+object (a string, say) no longer contributes odd paths; a collector list over 1,000 senders is cut at 1,000.
+Engine-specific housekeeping stays where it is (table sizes, partitions, `pg_database_size` on the storage and capacity pages).
+
 ## What is left (next in Phase 2)
 - Reads that still use SQL directly: detection rules (`rule-query.js`, `rule-runner.js`: a rule holds a trusted PostgreSQL
-  fragment, `group_expr`), the IOC matcher, the retention job (partition drops), the counts in the collectors, storage and
-  capacity routes, and `/v1/search/fields`. Express each as a plan where the plan can say it (most are `comp count() by ...`),
-  and add a store method only for engine-specific housekeeping. Then remove `querySQL`, `queryAggregated` and the
+  fragment, `group_expr`), the IOC matcher, the retention job (`preview`, partition drops, the all-tenant row count), the
+  dashboard and event-list reads in `routes/core.js` (events list, per-source totals, 24 hour totals, top lists) and the
+  sample events in `routes/alerts.js` (`getByIds` already does this). Express each as a plan where the plan can say it
+  (most are `comp count() by ...`), and add a store method only for engine-specific housekeeping. Then remove `querySQL`, `queryAggregated` and the
   `xql.compile` / `compileCondition` wrappers. Order and starting points: `docs/parallel-work.md`, "What to build next".
 - Parsers as separate workers.
 - The syslog listener and the in-cluster collector reach the store through the HTTP lane, so they are covered.

@@ -64,7 +64,8 @@ Update the Status column in the same change that does the work, so the next sess
 |---|---|---|
 | Event envelope + event-store interface + Postgres adapter + conformance suite | done (see `docs/event-store.md`) | `src/events/*` (new), `tests/event-store-conformance.js`, `tests/event-envelope.test.js`, `tests/event-store-memory.test.js`, `tests/event-store-postgres.test.js`, `tests/event-ingest-db.test.js`; ingest writes switched in `src/ingest/http-ingest.js` and `src/gateway/routes/core.js`; no schema change |
 | XQL query plan + `store.search()` (the query form that is not SQL), search route moved behind the store | done | `src/search/xql-plan.js` (plan shape, validator), `src/search/xql.js` (now parse only), `src/search/xql-postgres.js`, `src/search/xql-clickhouse.js`, `src/search/xql-eval.js` (in memory), `search()` in `src/events/{event-store,postgres-store,clickhouse-store,memory-store}.js`, `src/gateway/routes/search.js`, `tests/xql-golden.test.js`, `tests/event-search-{conformance,memory,postgres,clickhouse}`, `tests/search-route.test.js`, fixtures in `tests/fixtures/` |
-| Move the other reads behind the store: detection rules, IOC matcher, retention, collector/storage/capacity counts, `/v1/search/fields` | not started (search is done; these need aggregates beyond what a plan expresses today, see `docs/event-store.md` "What is left") | `src/detection/{rule-query,rule-runner,ioc-matcher}.js`, `src/storage/retention.js`, `src/gateway/routes/{collectors,storage}.js`, `src/capacity/capacity.js`, `src/gateway/routes/search.js` (`/v1/search/fields`) |
+| Move the counts on the collectors, storage and capacity pages and `/v1/search/fields` behind the store | done | `groupCounts`, `timeRange`, `fieldStats` in `src/events/{event-store,postgres-store,clickhouse-store,memory-store}.js`; callers `src/gateway/routes/{collectors,search,storage}.js`, `src/storage/retention.js` (`summary`), `src/capacity/capacity.js`; `tests/event-store-conformance.js` (new block), `tests/read-counts.test.js`, `tests/read-counts-db.test.js`. Run on real PostgreSQL 16 and ClickHouse 24.8.14.39 |
+| Move the other reads behind the store: detection rules, IOC matcher, retention job, dashboard and event list in `routes/core.js`, alert sample events | not started (see `docs/event-store.md` "What is left") | `src/detection/{rule-query,rule-runner,ioc-matcher}.js`, `src/storage/retention.js` (`preview`, partition housekeeping), `src/gateway/routes/core.js`, `src/gateway/routes/alerts.js` |
 | ClickHouse adapter (same conformance suite) | done (verified against a real ClickHouse 24.8; an earlier version claimed this but never ran: it used an npm client that was not in `package.json`, lost milliseconds and miscounted inserts) | `src/events/clickhouse-store.js` (fetch, no new dependency), registered in `src/events/index.js`, `tests/event-store-clickhouse.test.js`, CI job `clickhouse` in `.github/workflows/ci.yml`; gated behind `ASIX_TEST_DB=1`. `querySQL` / `queryAggregated` not implemented there (see `docs/event-store.md`); `search()` is implemented and passes `tests/event-search-conformance.js` on real ClickHouse 24.8 |
 | Parsers as separate workers | not started | `src/ingestion/*`, `src/ingest/http-ingest.js` |
 
@@ -77,7 +78,7 @@ Update the Status column in the same change that does the work, so the next sess
    `12-schema-init.yaml`) wherever the feature allows it.
 4. Run the in-repo tests before declaring a feature done: `node tests/modules.test.js`,
    `tests/alert-triage.test.js`, `tests/alert-dedupe.test.js`, `tests/bioc-rules.test.js`, `tests/data-model-rules.test.js`,
-   `tests/parsing-rules.test.js`, `tests/regex-safety.test.js`, `tests/packs.test.js`, `tests/heartbeat.test.js`, `tests/event-envelope.test.js`, `tests/event-store-memory.test.js`, `tests/xql-golden.test.js`, `tests/event-search-memory.test.js`, `tests/search-route.test.js` (they need `npm ci` first; `modules.test.js` uses `jose`). CI (`.github/workflows/ci.yml`) now runs `npm run lint` (ESLint `no-undef`) and `npm test` (every `tests/*.test.js`, on Node 20 and 22) on each push; run both locally before packaging. New tests must be named `*.test.js` to be picked up. Tests that need Postgres stay gated behind `ASIX_TEST_DB=1` and do not run in CI yet; the ClickHouse conformance test is the exception and runs in the separate `clickhouse` CI job (`tests/packs-db.test.js`, `tests/heartbeat-db.test.js`, `tests/alert-dedupe-db.test.js`, `tests/event-store-postgres.test.js` and `tests/event-ingest-db.test.js` are the pattern: they skip themselves without that variable). A task is not "done" because a gated test exists: run it once against the real server before writing "done" in this table. Broker config changes: also run `vector test deploy/broker/vector.yaml deploy/broker/vector-tests.yaml` (needs the Vector binary; not in CI).
+   `tests/parsing-rules.test.js`, `tests/regex-safety.test.js`, `tests/packs.test.js`, `tests/heartbeat.test.js`, `tests/event-envelope.test.js`, `tests/event-store-memory.test.js`, `tests/xql-golden.test.js`, `tests/event-search-memory.test.js`, `tests/search-route.test.js`, `tests/read-counts.test.js` (they need `npm ci` first; `modules.test.js` uses `jose`). CI (`.github/workflows/ci.yml`) now runs `npm run lint` (ESLint `no-undef`) and `npm test` (every `tests/*.test.js`, on Node 20 and 22) on each push; run both locally before packaging. New tests must be named `*.test.js` to be picked up. Tests that need Postgres stay gated behind `ASIX_TEST_DB=1` and do not run in CI yet; the ClickHouse conformance test is the exception and runs in the separate `clickhouse` CI job (`tests/packs-db.test.js`, `tests/heartbeat-db.test.js`, `tests/alert-dedupe-db.test.js`, `tests/event-store-postgres.test.js`, `tests/read-counts-db.test.js` and `tests/event-ingest-db.test.js` are the pattern: they skip themselves without that variable). A task is not "done" because a gated test exists: run it once against the real server before writing "done" in this table. Broker config changes: also run `vector test deploy/broker/vector.yaml deploy/broker/vector-tests.yaml` (needs the Vector binary; not in CI).
 5. Route files must `require` everything they use. The route split once dropped the imports in
    `data-model.js` and `search.js`, which caused 500s in production. Before packaging, check for
    undefined names, for example `npx eslint --no-config-lookup --rule '{"no-undef":"error"}' src`
@@ -90,20 +91,20 @@ Update the Status column in the same change that does the work, so the next sess
    script re-run, or the portal page will show a 403.
 
 ## What to build next (Phase 2, in this order)
-Start from `docs/event-store.md` ("XQL search" and "What is left"). The remaining reads, easiest first:
-1. **Counts on the collectors, storage and capacity pages** and **`/v1/search/fields`**. Most are
-   `comp count() by collector_id`-shaped: express them as plans and call `store.search()`. Add a method to the
-   store only where a plan cannot say it (for example table size or partition listing, which is engine-specific
-   housekeeping, not a query).
-2. **IOC matcher** (`src/detection/ioc-matcher.js`) and **detection rules** (`rule-query.js`, `rule-runner.js`). Rules
+Start from `docs/event-store.md` ("XQL search", "Page counts behind the store" and "What is left"). Done so far: XQL search, and the
+counts on the collectors, storage, retention-page and capacity pages plus `/v1/search/fields` (`groupCounts`, `timeRange`, `fieldStats`).
+1. **IOC matcher** (`src/detection/ioc-matcher.js`) and **detection rules** (`rule-query.js`, `rule-runner.js`). Rules
    hold a trusted PostgreSQL fragment (`group_expr`) today. Replace it with a field name (it is always an event field)
    so a rule becomes a plan: filter + `comp count() by <field>` + `min(_time)`/`max(_time)`-style first/last seen
-   (extend `comp` with min/max over the time columns if the plan cannot express it yet) + a way to fetch sample event
-   ids. BIOC conditions already parse to a plan (`xql.parseCondition`); only their SQL emission (`compileCondition`) is
-   Postgres-specific. Prove each move with the golden-style approach: the same rules over the same events give the same
-   alerts before and after, on Postgres.
+   (extend `comp` with min/max over the time columns if the plan cannot express it yet; note that plan time bounds use
+   the event time while rules use `received_at`) + a way to fetch sample event ids. BIOC conditions already parse to a
+   plan (`xql.parseCondition`); only their SQL emission (`compileCondition`) is Postgres-specific. Prove each move with
+   the golden-style approach: the same rules over the same events give the same alerts before and after, on Postgres.
+2. **Reads in `routes/core.js`** (events list, per-source totals, 24 hour totals, top lists; these were not on the old
+   list) and the sample events in `routes/alerts.js` (use `getByIds`).
 3. **Retention** (`src/storage/retention.js`): `deleteBefore` exists on every adapter. The partition-drop optimisation is
-   Postgres housekeeping and stays there; on ClickHouse retention should become table TTL or `DROP PARTITION`.
+   Postgres housekeeping and stays there; on ClickHouse retention should become table TTL or `DROP PARTITION`. `preview`
+   counts events past their retention per source: a per-source `groupCounts` with an age cut-off per source.
 4. When no caller is left, delete `querySQL`, `queryAggregated` and `xql.compile` / `compileCondition`.
 5. Then the other Phase 2 items in `docs/product-plan.md`: parsers as separate workers, a ClickHouse table created on deploy.
 Smaller, independent items that were open before and still are: license-limit enforcement (`tenants`, `retention_days_max`),

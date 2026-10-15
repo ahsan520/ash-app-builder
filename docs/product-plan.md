@@ -51,7 +51,8 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) has started: see 
 | Event envelope | Done (see below) |
 | Event-store interface, Postgres adapter, conformance suite | Done (see below); ingest writes go through it |
 | XQL search moved behind the store (query plan + `store.search()`) | Done (see below) |
-| Detections, IOC matcher, retention and the page counts moved behind the store | Not started (next) |
+| Page counts moved behind the store (collectors, storage, capacity, search fields) | Done (see `docs/event-store.md`, "Page counts behind the store") |
+| Detections, IOC matcher, retention job, dashboard reads moved behind the store | Not started (next) |
 | ClickHouse adapter (same conformance suite) | Done — `src/events/clickhouse-store.js`; passes the conformance suite against a real ClickHouse 24.8 and runs in its own CI job. Reads that use `querySQL` / `queryAggregated` are not available on it yet; XQL `search()` is |
 | Parsers as separate workers | Not started |
 
@@ -82,8 +83,10 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) has started: see 
   everything that still calls `xql.compile` are unchanged.
 - Known differences between engines (listed in `docs/event-store.md`): regex dialect (PostgreSQL ARE vs RE2 on ClickHouse),
   text of a whole object or array value, numbers as exact decimals vs Float64, text sort order.
-- Not built: the other reads (detection rules, the IOC matcher, the retention job, the counts on the collectors, storage and
-  capacity pages, `/v1/search/fields`) still use SQL directly; that is the next part (`docs/parallel-work.md`, "What to build
+- Counts on the collectors, storage and capacity pages and `/v1/search/fields` now read through the store (`groupCounts`,
+  `timeRange`, `fieldStats`), checked on in-memory, PostgreSQL and ClickHouse 24.8 and against the SQL they replaced.
+- Not built: the other reads (detection rules, the IOC matcher, the retention job, the dashboard and event list in
+  `routes/core.js`) still use SQL directly; that is the next part (`docs/parallel-work.md`, "What to build
   next"). Also not built: parsers as separate workers, a ClickHouse table created on deploy (run `ensureSchema()`), and
   any per-tenant choice of adapter (one adapter per process).
 
