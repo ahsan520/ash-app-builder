@@ -49,29 +49,16 @@ router.post('/v1/search/xql', ...guarded('search:events:read'), async (req, res)
   }
 });
 
-// Fields and datasets seen recently (feeds the Fields panel and the Schema tab).
-const flattenObj = (o, p = '') => Object.entries(o || {}).flatMap(([k, v]) => (v && typeof v === 'object' && !Array.isArray(v) ? flattenObj(v, p + k + '.') : [[p + k, v]]));
+// Fields and datasets seen recently (feeds the Fields panel and the Schema tab). Read through the event store.
 router.get('/v1/search/fields', ...guarded('search:events:read'), async (req, res) => {
   try {
-    const out = await db.withTenant(req.tenant_id, async (client) => {
-      await client.query("SET LOCAL statement_timeout = '10s'");
-      const fields = await client.query(
-        `SELECT k AS name, COUNT(*)::int AS events FROM (
-           SELECT jsonb_object_keys(parsed) AS k FROM (
-             SELECT parsed FROM events WHERE tenant_id = $1 ORDER BY received_at DESC LIMIT 2000) s
-         ) t GROUP BY k ORDER BY events DESC, k LIMIT 200`, [req.tenant_id]);
-      const datasets = await client.query(
-        `SELECT source_type AS name, COUNT(*)::int AS events, MAX(received_at) AS last_seen FROM events
-         WHERE tenant_id = $1 AND received_at > localtimestamp - interval '7 days' GROUP BY 1 ORDER BY 2 DESC`, [req.tenant_id]);
-      // Data model fields live nested under parsed.xdm; list them as xdm.a.b so the Search page can offer them.
-      const xs = await client.query(
-        `SELECT parsed->'xdm' AS x FROM events WHERE tenant_id = $1 AND parsed ? 'xdm' ORDER BY received_at DESC LIMIT 500`, [req.tenant_id]);
-      const xc = {};
-      for (const row of xs.rows) for (const [k] of flattenObj(row.x, 'xdm.')) xc[k] = (xc[k] || 0) + 1;
-      const xdmFields = Object.entries(xc).map(([name, events]) => ({ name, events })).sort((a, b) => b.events - a.events || a.name.localeCompare(b.name));
-      return { fields: fields.rows.concat(xdmFields), datasets: datasets.rows };
-    });
-    res.status(200).json({ success: true, ...out, sampled_events: 2000 });
+    const store = getEventStore();
+    const [stats, datasets] = await Promise.all([
+      store.fieldStats(req.tenant_id, { sample: 2000, xdmSample: 500 }),
+      store.groupCounts(req.tenant_id, { by: 'source_type', since: new Date(Date.now() - 7 * 86400000).toISOString() })]);
+    // Data model fields live nested under parsed.xdm; they are listed as xdm.a.b so the Search page can offer them.
+    res.status(200).json({ success: true, fields: stats.fields.concat(stats.xdm),
+      datasets: datasets.map((g) => ({ name: g.key, events: g.events, last_seen: g.last_seen })), sampled_events: 2000 });
   } catch (error) {
     console.error('Field listing failed:', error.message);
     apiError(res, 500, 'FIELDS_ERROR', 'Failed to list fields');

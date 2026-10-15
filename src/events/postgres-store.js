@@ -114,6 +114,56 @@ class PostgresEventStore extends EventStore {
     });
   }
 
+  // Counts per collector / source type / UTC day, in one scan. The grouping expression is chosen from a fixed list
+  // (the base class already checked `by`), never built from input.
+  async _groupCounts(tenant, { by, since, until, limit }) {
+    const { params, where } = this._where(tenant, { since, until });
+    const key = { collector_id: 'collector_id', source_type: 'source_type', day: "to_char(received_at, 'YYYY-MM-DD')" }[by];
+    if (by === 'collector_id') where.push('collector_id IS NOT NULL');
+    params.push(limit);
+    const order = by === 'day' ? '1 ASC' : `n DESC, ${key} COLLATE "C" ASC`;       // byte order, like the other engines
+    return this._run(tenant, null, async (client) => {
+      await client.query("SET LOCAL statement_timeout = '20s'");
+      const r = await client.query(
+        `SELECT ${key} AS key, COUNT(*)::bigint AS n, MIN(received_at)::text AS first_txt, MAX(received_at)::text AS last_txt
+         FROM events WHERE ${where.join(' AND ')} GROUP BY 1 ORDER BY ${order} LIMIT $${params.length}`, params);
+      return r.rows.map((x) => ({ key: x.key, events: Number(x.n), first_seen: toIso(x.first_txt), last_seen: toIso(x.last_txt) }));
+    });
+  }
+
+  async _timeRange(tenant) {
+    return this._run(tenant, null, async (client) => {
+      const r = (await client.query('SELECT MIN(received_at)::text AS lo, MAX(received_at)::text AS hi FROM events WHERE tenant_id = $1', [tenant])).rows[0];
+      return { oldest: toIso(r.lo), newest: toIso(r.hi) };
+    });
+  }
+
+  // Top-level keys of `parsed` over the newest events, counted in the database so the documents are not shipped.
+  async _fieldKeys(tenant, { limit }) {
+    return this._run(tenant, null, async (client) => {
+      await client.query("SET LOCAL statement_timeout = '10s'");
+      const r = await client.query(
+        `SELECT k AS name, COUNT(*)::int AS events FROM (
+           SELECT jsonb_object_keys(parsed) AS k FROM (
+             SELECT parsed FROM events WHERE tenant_id = $1 ORDER BY received_at DESC, id DESC LIMIT $2) s
+           WHERE jsonb_typeof(parsed) = 'object') t
+         GROUP BY k ORDER BY events DESC, k COLLATE "C" LIMIT 200`, [tenant, limit]);
+      return r.rows;
+    });
+  }
+
+  async _xdmSamples(tenant, { limit }) {
+    return this._run(tenant, null, async (client) => {
+      await client.query("SET LOCAL statement_timeout = '10s'");
+      // `parsed ? 'xdm'` first: it is what the GIN index on parsed can answer
+      const r = await client.query(
+        `SELECT parsed->'xdm' AS x FROM events
+         WHERE tenant_id = $1 AND parsed ? 'xdm' AND jsonb_typeof(parsed->'xdm') = 'object'
+         ORDER BY received_at DESC, id DESC LIMIT $2`, [tenant, limit]);
+      return r.rows.map((x) => x.x);
+    });
+  }
+
   // A plain row delete. Dropping whole daily partitions (what src/storage/retention.js does for
   // large tables) stays in the retention job until it is moved behind this interface.
   async _deleteBefore(tenant, cutoff) {

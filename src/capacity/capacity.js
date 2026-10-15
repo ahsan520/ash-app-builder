@@ -7,6 +7,7 @@ const db = require('../db');
 const hostMetrics = require('./host-metrics');
 const kube = require('./kube');
 const storage = require('../storage/retention');
+const { getEventStore } = require('../events');
 const { evaluate } = require('./recommendations');
 
 const LOCK_KEY = 7412005;
@@ -39,7 +40,7 @@ async function eventsInfo(tenantId) {
 async function ingestPerMin() {
   let n = 0;
   for (const t of (await db.query("SELECT id FROM tenants WHERE status = 'active'")).rows) {
-    n += Number((await db.query("SELECT COUNT(*)::bigint AS n FROM events WHERE tenant_id = $1 AND received_at > localtimestamp - interval '5 minutes'", [t.id])).rows[0].n);
+    n += await getEventStore().count(t.id, { since: new Date(Date.now() - 5 * 60000).toISOString() });
   }
   return Math.round((n / 5) * 10) / 10;
 }

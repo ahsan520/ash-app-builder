@@ -62,6 +62,47 @@ class MemoryEventStore extends EventStore {
     return [...new Set(this._filter(tenant, { since }).map((e) => e.source_type))].sort().slice(0, limit);
   }
 
+  async _groupCounts(tenant, { by, since, until, limit }) {
+    const keyOf = (e) => (by === 'day' ? e.received_at.slice(0, 10) : e[by]);
+    const groups = new Map();
+    for (const e of this._filter(tenant, { since, until })) {
+      const key = keyOf(e);
+      if (key === null || key === undefined) continue;                        // no collector: not a group
+      const g = groups.get(key) || { key, events: 0, first_seen: e.received_at, last_seen: e.received_at };
+      g.events++;
+      if (e.received_at < g.first_seen) g.first_seen = e.received_at;
+      if (e.received_at > g.last_seen) g.last_seen = e.received_at;
+      groups.set(key, g);
+    }
+    const rows = [...groups.values()];
+    rows.sort(by === 'day' ? (a, b) => cmp(a.key, b.key) : (a, b) => (b.events - a.events) || cmp(a.key, b.key));
+    return rows.slice(0, limit);
+  }
+
+  async _timeRange(tenant) {
+    let oldest = null; let newest = null;
+    for (const e of this._rows(tenant)) {
+      if (oldest === null || e.received_at < oldest) oldest = e.received_at;
+      if (newest === null || e.received_at > newest) newest = e.received_at;
+    }
+    return { oldest, newest };
+  }
+
+  _newest(tenant, limit, keep = () => true) {
+    return this._rows(tenant).filter(keep).sort((a, b) => cmp(b.received_at, a.received_at) || cmp(b.id, a.id)).slice(0, limit);
+  }
+
+  async _fieldKeys(tenant, { limit }) {
+    const counts = new Map();
+    for (const e of this._newest(tenant, limit)) for (const k of Object.keys(e.parsed || {})) counts.set(k, (counts.get(k) || 0) + 1);
+    return [...counts].map(([name, events]) => ({ name, events }));
+  }
+
+  async _xdmSamples(tenant, { limit }) {
+    const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+    return this._newest(tenant, limit, (e) => isObj(e.parsed && e.parsed.xdm)).map((e) => clone(e.parsed.xdm));
+  }
+
   async _deleteBefore(tenant, cutoff) {
     const rows = this._rows(tenant);
     const keep = rows.filter((e) => e.received_at >= cutoff);

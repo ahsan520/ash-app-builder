@@ -12,6 +12,7 @@
 //  * Everything runs under one advisory lock, so API replicas never purge concurrently.
 
 const db = require('../db');
+const { getEventStore } = require('../events');
 
 const LOCK_KEY = 7412004;
 const DEFAULT_DAYS = Math.min(Math.max(parseInt(process.env.RETENTION_DEFAULT_DAYS, 10) || 90, 1), 3650);
@@ -218,12 +219,21 @@ async function runScheduled() {
   });
 }
 
+// Events per UTC day for the last `days` days, today last, zero for a day with none (the storage page chart).
+async function dailyCounts(tenantId, days) {
+  const now = new Date();
+  const start = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - (days - 1));
+  const rows = await getEventStore().groupCounts(tenantId, { by: 'day', since: new Date(start).toISOString() });
+  const byDay = new Map(rows.map((r) => [r.key, r.events]));
+  return Array.from({ length: days }, (_, i) => { const day = new Date(start + i * 86400000).toISOString().slice(0, 10); return { day, n: byDay.get(day) || 0 }; });
+}
+
 // ---------------------------------------------------------------- storage summary (read-only)
 async function summary(tenantId) {
   const kind = await eventsKind(db);
   const partitions = kind === 'p' ? await listPartitions(db) : [];
   const out = { partitioned: kind === 'p', database_bytes: Number((await db.query('SELECT pg_database_size(current_database()) AS b')).rows[0].b) };
-  const range = (await db.query('SELECT MIN(received_at) AS oldest, MAX(received_at) AS newest FROM events WHERE tenant_id = $1', [tenantId])).rows[0];
+  const range = await getEventStore().timeRange(tenantId);
   out.oldest = range.oldest; out.newest = range.newest;
   const rows = [];
   for (const p of partitions) {                                     // estimates are -1/0 until autovacuum has analysed a new partition
@@ -238,12 +248,7 @@ async function summary(tenantId) {
     out.events_bytes = Number((await db.query("SELECT pg_total_relation_size('public.events') AS b")).rows[0].b);
     out.events_rows = Number((await db.query('SELECT COUNT(*)::bigint AS n FROM events')).rows[0].n);
   } else out.events_rows = rows.reduce((a, p) => a + p.rows, 0);
-  out.daily = (await db.query(
-    `SELECT to_char(d.day, 'YYYY-MM-DD') AS day, COALESCE(c.n, 0)::int AS n
-     FROM (SELECT CURRENT_DATE - g AS day FROM generate_series(13, 0, -1) g) d
-     LEFT JOIN (SELECT received_at::date AS day, COUNT(*) AS n FROM events
-                WHERE tenant_id = $1 AND received_at >= CURRENT_DATE - 13 GROUP BY 1) c ON c.day = d.day
-     ORDER BY d.day`, [tenantId])).rows;
+  out.daily = await dailyCounts(tenantId, 14);
   out.tables = (await db.query(
     `SELECT CASE WHEN c.relispartition THEN 'events (all partitions)' ELSE c.relname END AS name, SUM(pg_total_relation_size(c.oid))::bigint AS bytes
      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace

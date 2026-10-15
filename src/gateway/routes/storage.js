@@ -7,6 +7,7 @@ const {
 
 // ---- Storage & retention ---------------------------------------------------------------------
 const storage = require('../../storage/retention');
+const { getEventStore } = require('../../events');
 const SRC_RE = /^[A-Za-z0-9._-]{1,100}$/;
 
 router.get('/v1/storage/summary', ...guarded('storage:read'), async (req, res) => {
@@ -22,8 +23,7 @@ router.get('/v1/storage/safety', ...guarded('storage:read'), async (req, res) =>
 router.get('/v1/storage/retention', ...guarded('storage:read'), async (req, res) => {
   try {
     const pol = await storage.loadPolicy(db, req.tenant_id);
-    const sources = (await db.query(
-      `SELECT DISTINCT source_type FROM events WHERE tenant_id = $1 AND received_at > localtimestamp - interval '30 days' ORDER BY 1 LIMIT 100`, [req.tenant_id])).rows.map((r) => r.source_type);
+    const sources = await getEventStore().sourceTypes(req.tenant_id, { since: new Date(Date.now() - 30 * 86400000).toISOString() });
     const runs = (await db.query(
       `SELECT id, tenant_id, trigger, status, started_at, finished_at, partitions_dropped, rows_deleted::bigint AS rows_deleted, error
        FROM retention_runs WHERE tenant_id = $1 OR tenant_id IS NULL ORDER BY started_at DESC LIMIT 20`, [req.tenant_id])).rows

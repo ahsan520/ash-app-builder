@@ -7,6 +7,7 @@ const {
 
 // ---- Collectors + ingestion keys (installers) ---------------------------------------------
 const { generateKey, hashKey, PLATFORMS: KEY_PLATFORMS } = require('../../ingest/http-ingest');
+const { getEventStore } = require('../../events');
 const CONNECTED_WITHIN_MIN = 15;
 // `timestamp` columns arrive as Date objects (or strings); NaN on anything unreadable, which compares false.
 const tsMs = (v) => (v instanceof Date ? v.getTime() : new Date(String(v).endsWith('Z') ? v : v + 'Z').getTime());
@@ -17,41 +18,37 @@ router.get('/v1/collectors', ...guarded('collectors:read'), async (req, res) => 
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
   const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
   try {
-    const all = await db.withTenant(req.tenant_id, async (client) => {
-      const reg = await client.query(
-        `SELECT c.id, c.name, c.alias, c.platform, c.os, c.version, c.last_ip, c.first_seen, c.last_seen,
-                c.events_total::bigint AS events_total, k.name AS installer,
-                CASE WHEN c.key_id IS NULL THEN 'built-in' ELSE 'registered' END AS origin
-         FROM collectors c LEFT JOIN ingestion_keys k ON k.id = c.key_id WHERE c.tenant_id = $1`, [req.tenant_id]);
-      const built = await client.query(
-        `SELECT NULL::uuid AS id, e.collector_id AS name, NULL AS alias, 'syslog' AS platform, NULL AS os, NULL AS version,
-                NULL AS last_ip, MIN(e.received_at) AS first_seen, MAX(e.received_at) AS last_seen,
-                COUNT(*)::bigint AS events_total, NULL AS installer, 'built-in' AS origin
-         FROM events e
-         WHERE e.tenant_id = $1 AND e.collector_id IS NOT NULL AND e.received_at > localtimestamp - interval '7 days'
-           AND e.collector_id NOT IN (SELECT name FROM collectors WHERE tenant_id = $1 AND key_id IS NOT NULL)
-         GROUP BY e.collector_id`, [req.tenant_id]);
-      const day = await client.query(
-        `SELECT collector_id, COUNT(*)::int AS n FROM events
-         WHERE tenant_id = $1 AND collector_id IS NOT NULL AND received_at > localtimestamp - interval '24 hours'
-         GROUP BY collector_id`, [req.tenant_id]);
-      const d = new Map(day.rows.map((r) => [r.collector_id, r.n]));
-      const cutoff = Date.now() - CONNECTED_WITHIN_MIN * 60000;
-      // A built-in source (key-less row, kept alive by its heartbeat) also has event-derived stats:
-      // merge them so an idle one stays Connected and still shows its event counts.
-      const evByName = new Map(built.rows.map((r) => [r.name, r]));
-      const merged = reg.rows.map((c) => {
-        const e = c.origin === 'built-in' ? evByName.get(c.name) : null;
-        if (!e) return c;
-        evByName.delete(c.name);
-        return { ...c, events_total: e.events_total, first_seen: tsMs(e.first_seen) < tsMs(c.first_seen) ? e.first_seen : c.first_seen,
-          last_seen: tsMs(e.last_seen) > tsMs(c.last_seen) ? e.last_seen : c.last_seen };
-      });
-      return merged.concat([...evByName.values()]).map((c) => ({
-        ...c, events_total: Number(c.events_total), events_24h: d.get(c.name) || 0,
-        status: tsMs(c.last_seen) >= cutoff ? 'connected' : 'disconnected',
-      }));
+    const reg = await db.withTenant(req.tenant_id, (client) => client.query(
+      `SELECT c.id, c.name, c.alias, c.platform, c.os, c.version, c.last_ip, c.first_seen, c.last_seen,
+              c.events_total::bigint AS events_total, k.name AS installer,
+              CASE WHEN c.key_id IS NULL THEN 'built-in' ELSE 'registered' END AS origin
+       FROM collectors c LEFT JOIN ingestion_keys k ON k.id = c.key_id WHERE c.tenant_id = $1`, [req.tenant_id]));
+    // Event counts come from the event store (one pass each): the last 7 days per collector, and the last 24 hours.
+    const store = getEventStore();
+    const [week, dayCounts] = await Promise.all([
+      store.groupCounts(req.tenant_id, { by: 'collector_id', since: new Date(Date.now() - 7 * 86400000).toISOString() }),
+      store.groupCounts(req.tenant_id, { by: 'collector_id', since: new Date(Date.now() - 86400000).toISOString() })]);
+    // Senders that only appear in events (no key-less or keyed row of their own): the in-cluster syslog collector, for one.
+    const keyed = new Set(reg.rows.filter((r) => r.origin === 'registered').map((r) => r.name));
+    const built = week.filter((g) => !keyed.has(g.key)).map((g) => ({
+      id: null, name: g.key, alias: null, platform: 'syslog', os: null, version: null, last_ip: null,
+      first_seen: g.first_seen, last_seen: g.last_seen, events_total: g.events, installer: null, origin: 'built-in' }));
+    const d = new Map(dayCounts.map((g) => [g.key, g.events]));
+    const cutoff = Date.now() - CONNECTED_WITHIN_MIN * 60000;
+    // A built-in source (key-less row, kept alive by its heartbeat) also has event-derived stats:
+    // merge them so an idle one stays Connected and still shows its event counts.
+    const evByName = new Map(built.map((r) => [r.name, r]));
+    const merged = reg.rows.map((c) => {
+      const e = c.origin === 'built-in' ? evByName.get(c.name) : null;
+      if (!e) return c;
+      evByName.delete(c.name);
+      return { ...c, events_total: e.events_total, first_seen: tsMs(e.first_seen) < tsMs(c.first_seen) ? e.first_seen : c.first_seen,
+        last_seen: tsMs(e.last_seen) > tsMs(c.last_seen) ? e.last_seen : c.last_seen };
     });
+    const all = merged.concat([...evByName.values()]).map((c) => ({
+      ...c, events_total: Number(c.events_total), events_24h: d.get(c.name) || 0,
+      status: tsMs(c.last_seen) >= cutoff ? 'connected' : 'disconnected',
+    }));
     const q = String(req.query.q || '').toLowerCase();
     const rows = all
       .filter((c) => (!req.query.status || c.status === req.query.status)

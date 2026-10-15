@@ -18,6 +18,9 @@
 //   search(tenantId, plan, opts?)         -> { rows, truncated, mode, columns }  (an XQL query plan, see src/search/xql-plan.js)
 //   querySQL(tenantId, sql, params, opts?) -> { rows, fields }      (XQL-compiled SQL, controlled escape hatch)
 //   queryAggregated(tenantId, spec)        -> object[]              (group-by for rule/IOC matchers)
+//   groupCounts(tenantId, { by, since?, until? }) -> [{ key, events, first_seen, last_seen }]   (counts per collector, source or day)
+//   timeRange(tenantId)                   -> { oldest, newest }    (ISO times of the oldest / newest event, or null)
+//   fieldStats(tenantId, { sample?, xdmSample? }) -> { fields, xdm }   (field names seen in the newest events, with counts)
 //   querySQL and queryAggregated take PostgreSQL SQL / a PostgreSQL group expression, so only the Postgres
 //   adapter implements them today; other adapters throw NOT_IMPLEMENTED (see docs/event-store.md).
 //
@@ -33,6 +36,13 @@ const MAX_SCAN = 1000;
 const DEFAULT_SCAN = 100;
 const MAX_IDS = 1000;
 const MAX_SOURCE_TYPES = 100;
+const GROUP_BY = ['collector_id', 'source_type', 'day'];
+const MAX_GROUPS = 1000;
+const FIELD_SAMPLE = { def: 2000, max: 10000 };
+const XDM_SAMPLE = { def: 500, max: 5000 };
+const MAX_FIELD_NAMES = 200;
+const MAX_XDM_NAMES = 500;
+const MAX_XDM_DEPTH = 20;
 
 class EventStoreError extends Error {
   constructor(code, message) {
@@ -76,6 +86,24 @@ function normalizeFilter(f = {}) {
     source_type: optString(f.source_type, 'source_type'),
     collector_id: optString(f.collector_id, 'collector_id'),
   };
+}
+
+const byCountThenName = (a, b) => (b.events - a.events) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+
+function intArg(v, { def, max }, field) {
+  if (v === undefined || v === null) return def;
+  if (!Number.isInteger(v) || v < 1 || v > max) throw new EventStoreError('INVALID_QUERY', `${field} must be a whole number from 1 to ${max}`);
+  return v;
+}
+
+// Leaf paths of a nested object: objects are walked, arrays and scalars are leaves (an empty object has none).
+function leafPaths(o, prefix, depth = 0, out = []) {
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return out;
+  for (const [k, v] of Object.entries(o)) {
+    if (v && typeof v === 'object' && !Array.isArray(v) && depth < MAX_XDM_DEPTH) leafPaths(v, `${prefix}${k}.`, depth + 1, out);
+    else out.push(prefix + k);
+  }
+  return out;
 }
 
 class EventStore {
@@ -191,6 +219,43 @@ class EventStore {
     return this._queryAggregated(tenant, { ...f, limit, group_expr: spec.group_expr || null, sample_ids: !!spec.sample_ids });
   }
 
+  // Event counts per collector, per source type, or per UTC day of received_at, in one pass. `by` is one of
+  // 'collector_id' | 'source_type' | 'day'; since (inclusive) and until (exclusive) are optional bounds on received_at.
+  // Returns [{ key, events, first_seen, last_seen }] (first_seen / last_seen are the earliest and latest received_at
+  // as ISO times), at most 1000 groups. Events with no collector are left out of the collector_id groups. Order: by
+  // day ascending (key is 'YYYY-MM-DD'); otherwise most events first, ties by key. Feeds the collectors page, the
+  // dataset list of the search page and the storage page's per-day chart.
+  async groupCounts(tenantId, opts = {}) {
+    const tenant = assertTenant(tenantId);
+    if (opts === null || typeof opts !== 'object') throw new EventStoreError('INVALID_QUERY', 'options must be an object');
+    if (!GROUP_BY.includes(opts.by)) throw new EventStoreError('INVALID_QUERY', `by must be one of ${GROUP_BY.join(', ')}`);
+    const rows = await this._groupCounts(tenant, { by: opts.by, since: timeArg(opts.since, 'since'), until: timeArg(opts.until, 'until'), limit: MAX_GROUPS });
+    return rows.map((r) => ({ key: r.key, events: Number(r.events), first_seen: r.first_seen, last_seen: r.last_seen }));
+  }
+
+  // { oldest, newest }: the earliest and latest received_at of this tenant's events as ISO times, or nulls when it has none.
+  async timeRange(tenantId) {
+    const r = await this._timeRange(assertTenant(tenantId));
+    return { oldest: r.oldest || null, newest: r.newest || null };
+  }
+
+  // Which fields do events have? Counts the top-level keys of `parsed` over the newest `sample` events (default 2000),
+  // and the leaf paths under parsed.xdm (as 'xdm.a.b') over the newest `xdmSample` events (default 500) that have an
+  // xdm object. Returns { fields: [{ name, events }], xdm: [{ name, events }] }, most events first, ties by name, at
+  // most 200 and 500 names. Feeds the Fields panel of the search page.
+  async fieldStats(tenantId, opts = {}) {
+    const tenant = assertTenant(tenantId);
+    if (opts === null || typeof opts !== 'object') throw new EventStoreError('INVALID_QUERY', 'options must be an object');
+    const sample = intArg(opts.sample, FIELD_SAMPLE, 'sample');
+    const xdmSample = intArg(opts.xdmSample, XDM_SAMPLE, 'xdmSample');
+    const [keys, xdms] = await Promise.all([this._fieldKeys(tenant, { limit: sample }), this._xdmSamples(tenant, { limit: xdmSample })]);
+    const fields = keys.map((k) => ({ name: k.name, events: Number(k.events) })).sort(byCountThenName).slice(0, MAX_FIELD_NAMES);
+    const counts = new Map();
+    for (const x of xdms) for (const path of leafPaths(x, 'xdm.')) counts.set(path, (counts.get(path) || 0) + 1);
+    const xdm = [...counts].map(([name, events]) => ({ name, events })).sort(byCountThenName).slice(0, MAX_XDM_NAMES);
+    return { fields, xdm };
+  }
+
   async close() { /* adapters that own connections override this */ }
 
   // ---- adapter hooks (input is already validated and normalised) -----------------------------
@@ -204,6 +269,10 @@ class EventStore {
   // _search(tenant, plan, opts) -> object[]      at most plan.limit + 1 rows, already ordered; plan is validated
   // _querySQL(tenant, sql, params, opts) -> { rows, fields }      (XQL-compiled query, tenant-scoped)
   // _queryAggregated(tenant, { since, until, source_type, collector_id, limit, group_expr, sample_ids }) -> object[]
+  // _groupCounts(tenant, { by, since, until, limit }) -> [{ key, events, first_seen, last_seen }]   in the order documented on groupCounts()
+  // _timeRange(tenant) -> { oldest, newest }       ISO times or null
+  // _fieldKeys(tenant, { limit }) -> [{ name, events }]   top-level keys of `parsed` over the newest `limit` events, ordered (received_at, id) descending
+  // _xdmSamples(tenant, { limit }) -> object[]     the xdm object of the newest `limit` events whose parsed.xdm is an object (same order)
   async _insert(tenant, envelopes, opts) { throw new EventStoreError('NOT_IMPLEMENTED', 'insertBatch'); }
   async _getByIds(tenant, ids) { throw new EventStoreError('NOT_IMPLEMENTED', 'getByIds'); }
   async _scan(tenant, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'scan'); }
@@ -213,6 +282,10 @@ class EventStore {
   async _search(tenant, plan, opts) { throw new EventStoreError('NOT_IMPLEMENTED', 'search'); }
   async _querySQL(tenant, sql, params, opts) { throw new EventStoreError('NOT_IMPLEMENTED', 'querySQL'); }
   async _queryAggregated(tenant, spec) { throw new EventStoreError('NOT_IMPLEMENTED', 'queryAggregated'); }
+  async _groupCounts(tenant, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'groupCounts'); }
+  async _timeRange(tenant) { throw new EventStoreError('NOT_IMPLEMENTED', 'timeRange'); }
+  async _fieldKeys(tenant, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'fieldStats'); }
+  async _xdmSamples(tenant, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'fieldStats'); }
 }
 
-module.exports = { EventStore, EventStoreError, MAX_BATCH, MAX_SCAN, DEFAULT_SCAN, MAX_IDS, MAX_SOURCE_TYPES, encodeCursor, decodeCursor };
+module.exports = { EventStore, EventStoreError, MAX_BATCH, MAX_SCAN, DEFAULT_SCAN, MAX_IDS, MAX_SOURCE_TYPES, MAX_GROUPS, GROUP_BY, encodeCursor, decodeCursor };

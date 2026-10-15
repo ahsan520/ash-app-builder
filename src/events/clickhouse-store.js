@@ -255,6 +255,53 @@ class ClickHouseEventStore extends EventStore {
     return { deleted };
   }
 
+  // Counts per collector / source type / UTC day. The key expression comes from a fixed list; the column is a
+  // DateTime64 in UTC, so toDate() is the UTC day. Aliases (k, n, lo, hi) are chosen not to shadow a column.
+  async _groupCounts(tenant, { by, since, until, limit }) {
+    const { params, where } = this._where(tenant, { since, until });
+    const key = { collector_id: 'collector_id', source_type: 'source_type', day: 'toString(toDate(received_at))' }[by];
+    if (by === 'collector_id') where.push('collector_id IS NOT NULL');
+    const n = Number(limit);
+    if (!Number.isInteger(n) || n < 1) throw new EventStoreError('INVALID_QUERY', 'limit must be a whole number of at least 1');
+    const order = by === 'day' ? 'k ASC' : 'n DESC, k ASC';
+    const rows = await this._rows(
+      `SELECT ${key} AS k, count() AS n, min(received_at) AS lo, max(received_at) AS hi
+       FROM ${this._table} FINAL WHERE ${where.join(' AND ')} GROUP BY k ORDER BY ${order} LIMIT ${n}`, { params });
+    return rows.map((r) => ({ key: r.k, events: Number(r.n), first_seen: isoTime(r.lo), last_seen: isoTime(r.hi) }));
+  }
+
+  // minOrNull / maxOrNull: plain min() and max() of an empty set are 1970-01-01, not null.
+  async _timeRange(tenant) {
+    const rows = await this._rows(
+      `SELECT minOrNull(received_at) AS lo, maxOrNull(received_at) AS hi FROM ${this._table} WHERE tenant_id = {t:UUID}`, { params: { t: tenant } });
+    const r = rows[0] || {};
+    return { oldest: isoTime(r.lo), newest: isoTime(r.hi) };
+  }
+
+  // Ties on received_at are ordered by the id as text, like scan() (see "Paging order on ClickHouse" in docs/event-store.md).
+  async _fieldKeys(tenant, { limit }) {
+    const n = Number(limit);
+    if (!Number.isInteger(n) || n < 1) throw new EventStoreError('INVALID_QUERY', 'limit must be a whole number of at least 1');
+    const rows = await this._rows(
+      `SELECT k, count() AS n FROM (
+         SELECT arrayJoin(JSONExtractKeys(parsed)) AS k FROM (
+           SELECT parsed FROM ${this._table} FINAL WHERE tenant_id = {t:UUID} ORDER BY received_at DESC, toString(id) DESC LIMIT ${n}))
+       GROUP BY k ORDER BY n DESC, k ASC LIMIT 200`, { params: { t: tenant } });
+    return rows.map((r) => ({ name: r.k, events: Number(r.n) }));
+  }
+
+  async _xdmSamples(tenant, { limit }) {
+    const n = Number(limit);
+    if (!Number.isInteger(n) || n < 1) throw new EventStoreError('INVALID_QUERY', 'limit must be a whole number of at least 1');
+    const rows = await this._rows(
+      `SELECT JSONExtractRaw(parsed, 'xdm') AS x FROM ${this._table} FINAL
+       WHERE tenant_id = {t:UUID} AND JSONType(parsed, 'xdm') = 'Object'
+       ORDER BY received_at DESC, toString(id) DESC LIMIT ${n}`, { params: { t: tenant } });
+    const out = [];
+    for (const r of rows) { try { const o = JSON.parse(r.x); if (o && typeof o === 'object' && !Array.isArray(o)) out.push(o); } catch (_) { /* skip an unreadable document */ } }
+    return out;
+  }
+
   // XQL compiles to PostgreSQL SQL and detection rules pass a PostgreSQL group expression, so neither
   // runs here yet. They fail loudly (NOT_IMPLEMENTED from the base class) instead of returning wrong data.
 
