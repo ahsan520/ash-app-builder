@@ -93,9 +93,13 @@ test('registry: default is postgres, memory is blocked in production, unknown na
     setEventStore(null);
     delete process.env.ASIX_EVENT_STORE; process.env.NODE_ENV = 'test';
     assert.strictEqual(getEventStore().name, 'postgres');
-    assert.deepStrictEqual(Object.keys(FACTORIES), ['postgres', 'memory']);
+    assert.deepStrictEqual(Object.keys(FACTORIES), ['postgres', 'clickhouse', 'memory']);
+    process.env.ASIX_EVENT_STORE = 'clickhouse'; process.env.ASIX_CLICKHOUSE_URL = 'http://default@127.0.0.1:8123/asix';
+    setEventStore(null);
+    assert.strictEqual(getEventStore().name, 'clickhouse', 'ASIX_EVENT_STORE=clickhouse selects the ClickHouse adapter');
   } finally {
     setEventStore(null);
+    delete process.env.ASIX_CLICKHOUSE_URL;
     if (saved.s === undefined) delete process.env.ASIX_EVENT_STORE; else process.env.ASIX_EVENT_STORE = saved.s;
     if (saved.n === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = saved.n;
   }

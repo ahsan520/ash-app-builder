@@ -85,11 +85,6 @@ describe('clickhouse adapter specifics', () => {
     await assert.rejects(down.count(A), (err) => err.code === 'BACKEND_UNAVAILABLE' && !/secret/.test(err.message));
   });
 
-  it('refuses queries it cannot run yet instead of returning wrong data', async () => {
-    await assert.rejects(store.querySQL(A, 'SELECT 1', []), (err) => err.code === 'NOT_IMPLEMENTED');
-    await assert.rejects(store.queryAggregated(A, {}), (err) => err.code === 'NOT_IMPLEMENTED');
-  });
-
   it('rejects an unsafe table name', () => {
     assert.throws(() => new ClickHouseEventStore({ table: 'events; DROP TABLE x' }), /table name/);
   });

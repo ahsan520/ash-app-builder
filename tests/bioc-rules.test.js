@@ -1,15 +1,20 @@
 'use strict';
-// BIOC conditions: validation, SQL building (parameters only) and the default XDM rules.
+// BIOC conditions: validation, the rule match spec (data only) and the default XDM rules.
 const assert = require('assert');
-const { normalizeDefinition, buildMatch } = require('../src/detection/rule-query');
+const { normalizeDefinition, buildRuleMatch } = require('../src/detection/rule-query');
+const { matchToSql } = require('../src/search/xql-postgres');
 const { compileCondition } = require('../src/search/xql');
 const { BUILTIN_RULES } = require('../src/detection/rule-runner');
 
-// valid condition: constants resolve, everything user-typed is a bound parameter
+// valid condition: constants resolve, everything user-typed is a bound parameter in the SQL a store makes from the spec
 const ok = normalizeDefinition({ xql: 'xdm.event.outcome = XDM_CONST.OUTCOME_FAILED and xdm.source.port > 1024', group_by: 'field:xdm.source.ipv4' });
 assert.ok(ok.def && ok.def.xql);
-const q = buildMatch('tenant-1', ok.def);
-assert.ok(!/FAILED|1024|tenant-1/.test(q.text), 'values must not be inlined into SQL');
+const spec = buildRuleMatch(ok.def, { now: new Date('2026-10-01T01:00:00Z') });
+assert.strictEqual(spec.after, '2026-10-01T00:55:00.000Z');
+assert.deepStrictEqual(spec.group, { by: 'field', field: '@xdm.source.ipv4' });
+assert.strictEqual(JSON.parse(JSON.stringify(spec)).filter.t, 'and', 'a spec is plain data');
+const q = matchToSql(spec, 'tenant-1');
+assert.ok(!/FAILED|1024|tenant-1|xdm/.test(q.sql), 'values and field names must not be inlined into SQL');
 assert.ok(q.values.includes('FAILED') && q.values.includes(1024));
 
 // "dataset = x | filter ..." form and bare form both work; other stages and bad input are rejected

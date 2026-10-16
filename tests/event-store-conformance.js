@@ -275,6 +275,20 @@ function runConformance(label, setup) {
       });
     });
 
+    it('scan returns a checkpoint cursor that resumes exactly after the last event, however many arrive meanwhile', async () => {
+      const mk = (m) => ev(m, { source_type: 'x-ckpt' });
+      await store.insertBatch(A, [mk(600), mk(601), mk(602), mk(603)]);
+      const first = await store.scan(A, { source_type: 'x-ckpt', limit: 2 });
+      assert.strictEqual(first.events.length, 2);
+      assert.ok(first.cursor, 'a page with events has a checkpoint');
+      await store.insertBatch(A, [mk(604)]);
+      const rest = await store.scan(A, { source_type: 'x-ckpt', after: first.cursor, limit: 100 });
+      assert.deepStrictEqual(rest.events.map((e) => e.raw), ['line at 602', 'line at 603', 'line at 604'], 'nothing twice, nothing missed');
+      assert.strictEqual(rest.cursor && typeof rest.cursor, 'string');
+      const empty = await store.scan(A, { source_type: 'x-ckpt', after: rest.cursor });
+      assert.deepStrictEqual([empty.events.length, empty.next, empty.cursor], [0, null, null]);
+    });
+
     it('deletes only events older than the cutoff', async () => {
       const mk = (m) => ev(m, { source_type: 'x-del' });
       const [e1, e2, e3] = [mk(40), mk(41), mk(42)];
