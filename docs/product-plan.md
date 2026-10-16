@@ -53,7 +53,8 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) has started: see 
 | XQL search moved behind the store (query plan + `store.search()`) | Done (see below) |
 | Page counts moved behind the store (collectors, storage, capacity, search fields) | Done (see `docs/event-store.md`, "Page counts behind the store") |
 | Detections, IOC matcher and alert sample events moved behind the store | Done (see below and `docs/event-store.md`, "Detection rules") |
-| Retention job and dashboard / event-list reads in `routes/core.js` moved behind the store | Not started (next) |
+| Events list, data sources and Command Center reads in `routes/core.js` moved behind the store | Done (see `docs/event-store.md`) |
+| Retention job moved behind the store | Not started (next) |
 | ClickHouse adapter (same conformance suite) | Done — `src/events/clickhouse-store.js`; passes the conformance suites (store, search, rule match) against a real ClickHouse 24.8 and runs in its own CI job. XQL `search()` and detection rules run on it |
 | Parsers as separate workers | Not started |
 
@@ -93,7 +94,9 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) has started: see 
   Checked by running the old SQL builder and the new path side by side on real PostgreSQL over 1,914 rule definitions (identical
   results), by a rule-match conformance suite on all three engines, and end to end (`tests/detection-store-db.test.js`). A rule is
   now validated as a whole when it is saved. `querySQL` and `queryAggregated` are removed.
-- Not built: the retention job and the dashboard and event-list reads in `routes/core.js` still use SQL directly; that is the
+- The events list (`/v1/search/events`), data sources and Command Center now read through `listEvents`, `dataSources` and
+  `ingestionStats`, checked on in-memory, PostgreSQL and ClickHouse 24.8 and against the SQL they replaced.
+- Not built: the retention job still uses SQL directly; that is the
   next part (`docs/parallel-work.md`, "What to build next"). Also not built: parsers as separate workers, a ClickHouse table
   created on deploy (run `ensureSchema()`), and any per-tenant choice of adapter (one adapter per process).
 

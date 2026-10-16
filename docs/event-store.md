@@ -45,6 +45,9 @@ await store.insertBatch(tenantId, [{ source_type: 'syslog', raw: '...', parsed: 
 | `search(tenantId, plan, opts?)` | `{ rows, truncated, mode, columns }`. Runs an XQL query plan (`xql.parse(text, { from, to, limit })`, see "XQL search" below) on this adapter, for this tenant only. Works on every adapter. |
 | `groupCounts(tenantId, { by, since?, until? })` | `[{ key, events, first_seen, last_seen }]`. Counts per `collector_id`, `source_type` or UTC `day` (key `YYYY-MM-DD`) of `received_at`, with the earliest and latest time of each group. `since` inclusive, `until` exclusive. Events with no collector are not a `collector_id` group. At most 1,000 groups; most events first (ties by key), days oldest first. Works on every adapter. |
 | `timeRange(tenantId)` | `{ oldest, newest }`: earliest and latest `received_at` as ISO times, or nulls when the tenant has no events. |
+| `listEvents(tenantId, { source_type?, collector_id?, from?, to?, q?, limit?, offset? })` | Envelopes, newest first by event time (received time when there is none), ties by id descending. Filters are ANDed: `source_type` and `collector_id` exact, `from` / `to` inclusive on the event time, `q` a case-insensitive substring of `raw` taken literally (`%` and `_` are ordinary characters). `limit` 1 to 500 (default 50), `offset` 0 to 100,000. |
+| `dataSources(tenantId, { recentSince? })` | `[{ source_type, collector_id, events_total, events_recent, last_received }]`: one row per source type and collector over ALL the tenant's events; `events_recent` counts those with an event time (else received time) after `recentSince` (default 24 hours ago). Most recently received first, ties by source type then collector (none last); at most 1,000 rows. |
+| `ingestionStats(tenantId, { by?, now?, groups? })` | The Command Center numbers: `{ totals, hourly, groups }`. `totals` `{ events, bytes, events_1h, source_types, collectors, last_received }` cover the 24 hours before `now` by event time (received time when none; no upper bound; strictly after the start), `bytes` is the UTF-8 size of `raw`, `events_1h` those also received in the last hour. `hourly` is 24 `{ hour, n }`, whole UTC hours ending with the current one, zero-filled, oldest first. `groups` is the window grouped by `by` (`source_type`, or `collector_id` with `(none)` for no collector), most events first, ties by key, at most `groups` (default 12, max 100). |
 | `fieldStats(tenantId, { sample?, xdmSample? })` | `{ fields, xdm }`, each `[{ name, events }]`. `fields`: top-level keys of `parsed` over the newest `sample` events (default 2,000, max 10,000). `xdm`: leaf paths under `parsed.xdm` (as `xdm.a.b`; arrays are leaves, empty objects have none) over the newest `xdmSample` events (default 500, max 5,000) whose `parsed.xdm` is an object. Most events first, ties by name, at most 200 and 500 names. Newest means `(received_at, id)` descending. |
 | `matchGroups(tenantId, spec, opts?)` | `[{ key, n, first_at, last_at, sample_ids, sample_raw }]`. What a detection rule asks: which groups of events inside a time frame match a filter, and how many in each (see "Detection rules" below). Works on every adapter. |
 
@@ -215,11 +218,28 @@ undefined); names tied on count sort by byte order; `xdm` paths are capped at 50
 object (a string, say) no longer contributes odd paths; a collector list over 1,000 senders is cut at 1,000.
 Engine-specific housekeeping stays where it is (table sizes, partitions, `pg_database_size` on the storage and capacity pages).
 
+## The events list, data sources and Command Center behind the store (done)
+`GET /v1/search/events`, `GET /v1/data-sources` and `GET /v1/dashboard/ingestion` (in `routes/core.js`) read through
+`listEvents`, `dataSources` and `ingestionStats`. They are store methods rather than plans because a plan cannot say what they
+need: the console list returns both `received_at` and `event_time` and pages by offset, the Command Center sums the size of
+`raw` and buckets by hour, and the data sources page groups by two columns over all time. Each has one conformance block
+(`tests/event-store-conformance.js`, run on in-memory, PostgreSQL and ClickHouse 24.8), `tests/core-reads.test.js` runs the
+routes on the in-memory store, and `tests/core-reads-db.test.js` holds them to the old SQL, written out in the test, on real
+PostgreSQL. Deliberate differences from the old SQL:
+- `q` on the events list is a plain substring. Before, `%` and `_` in it were ILIKE wildcards (`100%` matched anything
+  containing `100`); now they match themselves, as in the Search page's `contains`.
+- Ties on the event time are ordered by id (before: undefined), so paging by `offset` is stable.
+- `from` / `to` are read as UTC times ("2026-10-01", "2026-10-01 10:00:00" and ISO all work); anything that is not a time, or
+  a repeated parameter, is now a 400 `INVALID_QUERY` instead of a 500. `offset` above 100,000 is a 400. A fractional
+  `limit` or `offset` is truncated.
+- `bytes_24h` and the group byte counts are numbers (PostgreSQL returned them as strings). The data sources page reads at most
+  1,000 (source type, collector) rows.
+- Windows are measured on the application's clock, not the database's.
+
 ## What is left (next in Phase 2)
-- Reads that still use SQL directly: the retention job (`preview`, partition drops, the all-tenant row count) and the
-  dashboard and event-list reads in `routes/core.js` (events list, per-source totals, 24 hour totals, top lists). Express each
-  as a plan where the plan can say it (most are `comp count() by ...`), and add a store method only for engine-specific
-  housekeeping. Then remove the `xql.compile` / `compileCondition` wrappers (nothing but `tests/xql-golden.test.js` calls them now;
+- Reads that still use SQL directly: the retention job (`preview`, partition drops, the all-tenant row count). Express it
+  as a plan where the plan can say it (`preview` is a per-source `groupCounts` with an age cut-off per source), and add a
+  store method only for engine-specific housekeeping. Then remove the `xql.compile` / `compileCondition` wrappers (nothing but `tests/xql-golden.test.js` calls them now;
   that test pins the old compiler's SQL and has to be reworked or retired with them). Order and starting points:
   `docs/parallel-work.md`, "What to build next".
 - Parsers as separate workers.
