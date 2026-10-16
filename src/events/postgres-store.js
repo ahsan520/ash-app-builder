@@ -164,6 +164,64 @@ class PostgresEventStore extends EventStore {
     });
   }
 
+  // The newest events first (event time, else received time). `q` is a literal substring: % and _ are escaped.
+  async _listEvents(tenant, q) {
+    const params = [tenant];
+    const where = ['tenant_id = $1'];
+    const add = (sql, v) => { params.push(v); where.push(sql.replace('?', '$' + params.length)); };
+    if (q.source_type) add('source_type = ?', q.source_type);
+    if (q.collector_id) add('collector_id = ?', q.collector_id);
+    if (q.from) add('COALESCE(event_time, received_at) >= ?::timestamp', q.from);
+    if (q.to) add('COALESCE(event_time, received_at) <= ?::timestamp', q.to);
+    if (q.q) add('raw ILIKE ?', '%' + q.q.replace(/[\\%_]/g, '\\$&') + '%');
+    params.push(q.limit, q.offset);
+    return this._run(tenant, null, async (client) => {
+      await client.query("SET LOCAL statement_timeout = '20s'");
+      const r = await client.query(
+        `SELECT ${COLUMNS} FROM events WHERE ${where.join(' AND ')}
+         ORDER BY COALESCE(event_time, received_at) DESC, id DESC LIMIT $${params.length - 1} OFFSET $${params.length}`, params);
+      return r.rows.map(rowToEnvelope);
+    });
+  }
+
+  async _dataSources(tenant, { recentSince, limit }) {
+    return this._run(tenant, null, async (client) => {
+      await client.query("SET LOCAL statement_timeout = '20s'");
+      const r = await client.query(
+        `SELECT source_type, collector_id, COUNT(*)::bigint AS events_total,
+                COUNT(*) FILTER (WHERE COALESCE(event_time, received_at) > $2::timestamp)::bigint AS events_recent,
+                MAX(received_at)::text AS last_txt
+         FROM events WHERE tenant_id = $1 GROUP BY source_type, collector_id
+         ORDER BY MAX(received_at) DESC, source_type COLLATE "C" ASC, collector_id COLLATE "C" ASC NULLS LAST LIMIT $3`, [tenant, recentSince, limit]);
+      return r.rows.map((x) => ({ source_type: x.source_type, collector_id: x.collector_id, events_total: Number(x.events_total), events_recent: Number(x.events_recent), last_received: toIso(x.last_txt) }));
+    });
+  }
+
+  async _ingestionStats(tenant, { by, groups, since, recent, hourFrom }) {
+    const key = by === 'collector_id' ? "COALESCE(collector_id, '(none)')" : 'source_type';       // from a fixed list, never from input
+    const ts = 'COALESCE(event_time, received_at)';
+    return this._run(tenant, null, async (client) => {
+      await client.query("SET LOCAL statement_timeout = '20s'");
+      const t = (await client.query(
+        `SELECT COUNT(*)::bigint AS events, COALESCE(SUM(octet_length(raw)), 0)::bigint AS bytes,
+                COUNT(*) FILTER (WHERE received_at > $3::timestamp)::bigint AS events_1h,
+                COUNT(DISTINCT source_type)::bigint AS source_types, COUNT(DISTINCT collector_id)::bigint AS collectors,
+                MAX(received_at)::text AS last_txt
+         FROM events WHERE tenant_id = $1 AND ${ts} > $2::timestamp`, [tenant, since, recent])).rows[0];
+      const h = await client.query(
+        `SELECT to_char(date_trunc('hour', ${ts}), 'YYYY-MM-DD"T"HH24:MI:SS.000"Z"') AS hour, COUNT(*)::bigint AS n
+         FROM events WHERE tenant_id = $1 AND ${ts} >= $2::timestamp GROUP BY 1`, [tenant, hourFrom]);
+      const g = await client.query(
+        `SELECT ${key} AS key, COUNT(*)::bigint AS events, COALESCE(SUM(octet_length(raw)), 0)::bigint AS bytes
+         FROM events WHERE tenant_id = $1 AND ${ts} > $2::timestamp GROUP BY 1 ORDER BY 2 DESC, ${key} COLLATE "C" ASC LIMIT $3`, [tenant, since, groups]);
+      return {
+        totals: { events: t.events, bytes: t.bytes, events_1h: t.events_1h, source_types: t.source_types, collectors: t.collectors, last_received: toIso(t.last_txt) },
+        hours: h.rows.map((x) => ({ hour: x.hour, n: Number(x.n) })),
+        groups: g.rows,
+      };
+    });
+  }
+
   // A plain row delete. Dropping whole daily partitions (what src/storage/retention.js does for
   // large tables) stays in the retention job until it is moved behind this interface.
   async _deleteBefore(tenant, cutoff) {

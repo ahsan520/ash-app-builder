@@ -239,6 +239,59 @@ class ClickHouseEventStore extends EventStore {
     return rows.map((r) => r.source_type);
   }
 
+  // The newest events first (event time, else received time). `q` is a literal substring: % and _ are escaped.
+  async _listEvents(tenant, q) {
+    const params = { t: tenant };
+    const where = ['tenant_id = {t:UUID}'];
+    if (q.source_type) { params.st = q.source_type; where.push('source_type = {st:String}'); }
+    if (q.collector_id) { params.cid = q.collector_id; where.push('collector_id = {cid:String}'); }
+    if (q.from) { params.from = chTime(q.from); where.push("coalesce(event_time, received_at) >= {from:DateTime64(3, 'UTC')}"); }
+    if (q.to) { params.to = chTime(q.to); where.push("coalesce(event_time, received_at) <= {to:DateTime64(3, 'UTC')}"); }
+    if (q.q) { params.q = '%' + q.q.replace(/[\\%_]/g, '\\$&') + '%'; where.push('ifNull(ilike(raw, {q:String}), 0)'); }
+    const limit = Number(q.limit); const offset = Number(q.offset);
+    if (!Number.isInteger(limit) || limit < 1 || !Number.isInteger(offset) || offset < 0) throw new EventStoreError('INVALID_QUERY', 'limit and offset must be whole numbers');
+    const rows = await this._rows(
+      `SELECT ${COLUMNS} FROM ${this._table} FINAL WHERE ${where.join(' AND ')}
+       ORDER BY coalesce(event_time, received_at) DESC, toString(id) DESC LIMIT ${limit} OFFSET ${offset}`, { params });
+    return rows.map(rowToEnvelope);
+  }
+
+  async _dataSources(tenant, { recentSince, limit }) {
+    const n = Number(limit);
+    if (!Number.isInteger(n) || n < 1) throw new EventStoreError('INVALID_QUERY', 'limit must be a whole number of at least 1');
+    const rows = await this._rows(
+      `SELECT toString(source_type) AS st, collector_id AS cid, count() AS total,
+              countIf(coalesce(event_time, received_at) > {since:DateTime64(3, 'UTC')}) AS recent, max(received_at) AS hi
+       FROM ${this._table} FINAL WHERE tenant_id = {t:UUID} GROUP BY st, cid
+       ORDER BY hi DESC, st ASC, cid ASC NULLS LAST LIMIT ${n}`, { params: { t: tenant, since: chTime(recentSince) } });
+    return rows.map((r) => ({ source_type: r.st, collector_id: r.cid === undefined ? null : r.cid, events_total: Number(r.total), events_recent: Number(r.recent), last_received: isoTime(r.hi) }));
+  }
+
+  // length(raw) on a ClickHouse String is its size in bytes (the same as PostgreSQL's octet_length); uniqExact skips NULLs.
+  async _ingestionStats(tenant, { by, groups, since, recent, hourFrom }) {
+    const key = by === 'collector_id' ? "ifNull(toString(collector_id), '(none)')" : 'toString(source_type)';   // fixed list, never input
+    const n = Number(groups);
+    if (!Number.isInteger(n) || n < 1) throw new EventStoreError('INVALID_QUERY', 'groups must be a whole number of at least 1');
+    const ts = 'coalesce(event_time, received_at)';
+    const params = { t: tenant, since: chTime(since), recent: chTime(recent), hf: chTime(hourFrom) };
+    const [t] = await this._rows(
+      `SELECT count() AS events, sum(length(raw)) AS bytes, countIf(received_at > {recent:DateTime64(3, 'UTC')}) AS events_1h,
+              uniqExact(source_type) AS source_types, uniqExact(collector_id) AS collectors, maxOrNull(received_at) AS last
+       FROM ${this._table} FINAL WHERE tenant_id = {t:UUID} AND ${ts} > {since:DateTime64(3, 'UTC')}`, { params });
+    const hours = await this._rows(
+      `SELECT toString(toStartOfHour(${ts})) AS h, count() AS n FROM ${this._table} FINAL
+       WHERE tenant_id = {t:UUID} AND ${ts} >= {hf:DateTime64(3, 'UTC')} GROUP BY h`, { params });
+    const g = await this._rows(
+      `SELECT ${key} AS k, count() AS n, sum(length(raw)) AS b FROM ${this._table} FINAL
+       WHERE tenant_id = {t:UUID} AND ${ts} > {since:DateTime64(3, 'UTC')} GROUP BY k ORDER BY n DESC, k ASC LIMIT ${n}`, { params });
+    return {
+      totals: { events: t.events, bytes: t.bytes, events_1h: t.events_1h, source_types: t.source_types, collectors: t.collectors, last_received: isoTime(t.last) },
+      hours: hours.map((x) => ({ hour: isoTime(x.h), n: Number(x.n) })),
+      groups: g.map((x) => ({ key: x.k, events: Number(x.n), bytes: Number(x.b) })),
+    };
+  }
+
+
   // Counts, then deletes with a lightweight DELETE that completes before it returns
   // (lightweight_deletes_sync=2), so a count taken right afterwards is already correct. Dropping
   // whole daily partitions is still the retention job's cheaper path for large tables.

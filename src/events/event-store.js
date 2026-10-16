@@ -20,6 +20,9 @@
 //   groupCounts(tenantId, { by, since?, until? }) -> [{ key, events, first_seen, last_seen }]   (counts per collector, source or day)
 //   timeRange(tenantId)                   -> { oldest, newest }    (ISO times of the oldest / newest event, or null)
 //   fieldStats(tenantId, { sample?, xdmSample? }) -> { fields, xdm }   (field names seen in the newest events, with counts)
+//   listEvents(tenantId, { source_type?, collector_id?, from?, to?, q?, limit?, offset? }) -> envelope[]   (newest event time first, offset paging)
+//   dataSources(tenantId, { recentSince? }) -> [{ source_type, collector_id, events_total, events_recent, last_received }]
+//   ingestionStats(tenantId, { by?, now?, groups? }) -> { totals, hourly, groups }   (the Command Center numbers)
 //
 // Order is always (received_at, id). `since` is inclusive, `until` exclusive, both on received_at.
 // Cursors (`next` / `after`) are opaque and only valid with the adapter that produced them.
@@ -36,6 +39,11 @@ const MAX_IDS = 1000;
 const MAX_SOURCE_TYPES = 100;
 const GROUP_BY = ['collector_id', 'source_type', 'day'];
 const MAX_GROUPS = 1000;
+const LIST = { def: 50, max: 500 };
+const MAX_OFFSET = 100000;
+const MAX_QUERY_TEXT = 500;
+const INGEST_BY = ['source_type', 'collector_id'];
+const HOUR_MS = 3600000;
 const FIELD_SAMPLE = { def: 2000, max: 10000 };
 const XDM_SAMPLE = { def: 500, max: 5000 };
 const MAX_FIELD_NAMES = 200;
@@ -241,6 +249,68 @@ class EventStore {
     return { fields, xdm };
   }
 
+  // The newest events first, for a console list: event time (else received time) descending, ties by id descending.
+  // Optional filters, all ANDed: source_type and collector_id (exact), from (inclusive) and to (inclusive) on the event
+  // time, and q, a case-insensitive substring of the raw text (taken literally: % and _ are ordinary characters). `limit`
+  // is 1 to 500 (default 50) and `offset` 0 to 100,000. Returns envelopes. Feeds GET /v1/search/events.
+  async listEvents(tenantId, opts = {}) {
+    const tenant = assertTenant(tenantId);
+    if (opts === null || typeof opts !== 'object') throw new EventStoreError('INVALID_QUERY', 'options must be an object');
+    const q = opts.q === undefined || opts.q === null || opts.q === '' ? null : opts.q;
+    if (q !== null && (typeof q !== 'string' || q.length > MAX_QUERY_TEXT || q.includes('\0'))) throw new EventStoreError('INVALID_QUERY', `q must be text of at most ${MAX_QUERY_TEXT} characters`);
+    const offset = opts.offset === undefined || opts.offset === null ? 0 : opts.offset;
+    if (!Number.isInteger(offset) || offset < 0 || offset > MAX_OFFSET) throw new EventStoreError('INVALID_QUERY', `offset must be a whole number from 0 to ${MAX_OFFSET}`);
+    const rows = await this._listEvents(tenant, {
+      source_type: optString(opts.source_type, 'source_type'), collector_id: optString(opts.collector_id, 'collector_id'),
+      from: timeArg(opts.from, 'from'), to: timeArg(opts.to, 'to'), q, offset, limit: intArg(opts.limit, LIST, 'limit'),
+    });
+    return rows.map((e) => ({ ...e, parsed: e.parsed || {} }));
+  }
+
+  // One row per (source type, collector) over ALL of the tenant's events: how many in total, how many have an event time
+  // (else received time) after `recentSince` (an ISO time, default 24 hours ago), and the latest received_at. Most
+  // recently received first, ties by source type then collector (a missing collector last); at most 1,000 rows.
+  // Feeds GET /v1/data-sources.
+  async dataSources(tenantId, opts = {}) {
+    const tenant = assertTenant(tenantId);
+    if (opts === null || typeof opts !== 'object') throw new EventStoreError('INVALID_QUERY', 'options must be an object');
+    const recentSince = timeArg(opts.recentSince, 'recentSince') || new Date(Date.now() - 24 * HOUR_MS).toISOString();
+    const rows = await this._dataSources(tenant, { recentSince, limit: MAX_GROUPS });
+    return rows.map((r) => ({ source_type: r.source_type, collector_id: r.collector_id === undefined ? null : r.collector_id,
+      events_total: Number(r.events_total), events_recent: Number(r.events_recent), last_received: r.last_received }));
+  }
+
+  // The Command Center numbers. `now` (an ISO time, default the current time) fixes three windows: the last 24 hours and the
+  // last hour (events are in the 24 hour window by event time, else received time) and 24 whole UTC hours ending with the
+  // current hour. Returns
+  //   totals  { events, bytes, events_1h, source_types, collectors, last_received }   events in the 24 hour window; bytes is the
+  //           size of their raw text in UTF-8 bytes; events_1h those also received in the last hour; source_types / collectors
+  //           the distinct counts (events with no collector do not count); last_received the latest received_at (or null)
+  //   hourly  24 x { hour, n }   oldest first, hour an ISO time on the hour, 0 for an hour with no events (event time)
+  //   groups  [{ key, events, bytes }]   the 24 hour window grouped by `by` ('source_type' by default, or 'collector_id', where
+  //           a missing collector is '(none)'), most events first, ties by key, at most `groups` (default 12, max 100)
+  async ingestionStats(tenantId, opts = {}) {
+    const tenant = assertTenant(tenantId);
+    if (opts === null || typeof opts !== 'object') throw new EventStoreError('INVALID_QUERY', 'options must be an object');
+    const by = opts.by === undefined || opts.by === null ? 'source_type' : opts.by;
+    if (!INGEST_BY.includes(by)) throw new EventStoreError('INVALID_QUERY', `by must be one of ${INGEST_BY.join(', ')}`);
+    const now = Date.parse(timeArg(opts.now, 'now') || new Date().toISOString());
+    const groups = intArg(opts.groups, { def: 12, max: 100 }, 'groups');
+    const hourEnd = Math.floor(now / HOUR_MS) * HOUR_MS;
+    const hourStart = hourEnd - 23 * HOUR_MS;
+    const r = await this._ingestionStats(tenant, {
+      by, groups, since: new Date(now - 24 * HOUR_MS).toISOString(), recent: new Date(now - HOUR_MS).toISOString(), hourFrom: new Date(hourStart).toISOString(),
+    });
+    const perHour = new Map(r.hours.map((h) => [h.hour, Number(h.n)]));
+    const hourly = Array.from({ length: 24 }, (_, i) => { const hour = new Date(hourStart + i * HOUR_MS).toISOString(); return { hour, n: perHour.get(hour) || 0 }; });
+    const t = r.totals;
+    return {
+      totals: { events: Number(t.events), bytes: Number(t.bytes), events_1h: Number(t.events_1h), source_types: Number(t.source_types), collectors: Number(t.collectors), last_received: t.last_received || null },
+      hourly,
+      groups: r.groups.map((g) => ({ key: g.key, events: Number(g.events), bytes: Number(g.bytes) })),
+    };
+  }
+
   async close() { /* adapters that own connections override this */ }
 
   // ---- adapter hooks (input is already validated and normalised) -----------------------------
@@ -253,6 +323,9 @@ class EventStore {
   // _deleteBefore(tenant, isoCutoff) -> { deleted }
   // _search(tenant, plan, opts) -> object[]      at most plan.limit + 1 rows, already ordered; plan is validated
   // _matchGroups(tenant, spec, opts) -> [{ key, n, first_at, last_at, sample_ids, sample_raw }]   spec is validated and normalised
+  // _listEvents(tenant, { source_type, collector_id, from, to, q, offset, limit }) -> envelope[]   in the order documented on listEvents()
+  // _dataSources(tenant, { recentSince, limit }) -> [{ source_type, collector_id, events_total, events_recent, last_received }]
+  // _ingestionStats(tenant, { by, groups, since, recent, hourFrom }) -> { totals, hours: [{ hour, n }] (hours with events only, ISO on the hour, none before hourFrom), groups }
   // _groupCounts(tenant, { by, since, until, limit }) -> [{ key, events, first_seen, last_seen }]   in the order documented on groupCounts()
   // _timeRange(tenant) -> { oldest, newest }       ISO times or null
   // _fieldKeys(tenant, { limit }) -> [{ name, events }]   top-level keys of `parsed` over the newest `limit` events, ordered (received_at, id) descending
@@ -265,6 +338,9 @@ class EventStore {
   async _deleteBefore(tenant, cutoff) { throw new EventStoreError('NOT_IMPLEMENTED', 'deleteBefore'); }
   async _search(tenant, plan, opts) { throw new EventStoreError('NOT_IMPLEMENTED', 'search'); }
   async _matchGroups(tenant, spec, opts) { throw new EventStoreError('NOT_IMPLEMENTED', 'matchGroups'); }
+  async _listEvents(tenant, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'listEvents'); }
+  async _dataSources(tenant, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'dataSources'); }
+  async _ingestionStats(tenant, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'ingestionStats'); }
   async _groupCounts(tenant, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'groupCounts'); }
   async _timeRange(tenant) { throw new EventStoreError('NOT_IMPLEMENTED', 'timeRange'); }
   async _fieldKeys(tenant, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'fieldStats'); }

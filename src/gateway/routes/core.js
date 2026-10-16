@@ -195,68 +195,37 @@ router.get(
   auditMiddleware,
   async (req, res) => {
     try {
-      const limit = Math.min(Number(req.query.limit) || 50, 500);
-      const offset = Math.max(Number(req.query.offset) || 0, 0);
-
-      const conditions = ['tenant_id = $1'];
-      const params = [req.tenant_id];
-
-      if (req.query.source_type) {
-        params.push(req.query.source_type);
-        conditions.push(`source_type = $${params.length}`);
-      }
-
-      if (req.query.collector_id) {
-        params.push(req.query.collector_id);
-        conditions.push(`collector_id = $${params.length}`);
-      }
-
-      if (req.query.from) {
-        params.push(req.query.from);
-        conditions.push(`COALESCE(event_time, received_at) >= $${params.length}`);
-      }
-
-      if (req.query.to) {
-        params.push(req.query.to);
-        conditions.push(`COALESCE(event_time, received_at) <= $${params.length}`);
-      }
-
-      // Free-text: ILIKE over the raw line — a sequential scan, not an
-      // indexed search (the parsed JSONB's GIN index only supports
-      // containment queries, not substring matching). Fine at today's
-      // volume; real full-text search needs a tsvector column or a move
-      // to OpenSearch per data-architecture.md's phased plan.
-      if (req.query.q) {
-        params.push(`%${req.query.q}%`);
-        conditions.push(`raw ILIKE $${params.length}`);
-      }
-
-      params.push(limit);
-      const limitParam = params.length;
-      params.push(offset);
-      const offsetParam = params.length;
-
-      const result = await db.withTenant(req.tenant_id, (client) =>
-        client.query(
-          `
-          SELECT id, source_type, collector_id, received_at, event_time, raw, parsed
-          FROM events
-          WHERE ${conditions.join(' AND ')}
-          ORDER BY COALESCE(event_time, received_at) DESC
-          LIMIT $${limitParam} OFFSET $${offsetParam}
-          `,
-          params
-        )
-      );
+      const limit = Math.min(Math.trunc(Number(req.query.limit)) || 50, 500);
+      const offset = Math.max(Math.trunc(Number(req.query.offset)) || 0, 0);
+      // from / to: any time the database used to accept ("2026-10-01", "2026-10-01 10:00:00", ISO), read as UTC
+      const time = (v, name) => {
+        if (v === undefined || v === '') return undefined;
+        const ms = typeof v === 'string' ? Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(v) ? v : `${v.replace(' ', 'T')}Z`) : NaN;
+        if (Number.isNaN(ms)) throw Object.assign(new Error(`${name} must be a date or time`), { code: 'INVALID_QUERY' });
+        return new Date(ms).toISOString();
+      };
+      const text = (v) => (typeof v === 'string' ? v : undefined);
+      // The newest events first (event time, else received time). q is a plain substring, case-insensitive: the raw
+      // line is a sequential scan, not an indexed search (see docs/event-store.md for what comes with a search engine).
+      const events = await getEventStore().listEvents(req.tenant_id, {
+        source_type: text(req.query.source_type), collector_id: text(req.query.collector_id),
+        from: time(req.query.from, 'from'), to: time(req.query.to, 'to'), q: text(req.query.q), limit, offset,
+      });
 
       res.status(200).json({
         success: true,
-        count: result.rows.length,
+        count: events.length,
         limit,
         offset,
-        events: result.rows,
+        events: events.map((e) => ({
+          id: e.id, source_type: e.source_type, collector_id: e.collector_id, received_at: e.received_at,
+          event_time: e.event_time, raw: e.raw, parsed: e.parsed,
+        })),
       });
     } catch (error) {
+      if (error && error.code === 'INVALID_QUERY') {
+        return res.status(400).json({ success: false, error: { code: 'INVALID_QUERY', message: error.message } });
+      }
       console.error('Event search failed:', error.message);
       res.status(500).json({
         success: false,
@@ -280,25 +249,14 @@ router.get(
   auditMiddleware,
   async (req, res) => {
     try {
-      const result = await db.withTenant(req.tenant_id, (client) =>
-        client.query(
-          `
-          SELECT source_type,
-                 collector_id,
-                 COUNT(*)::int AS events_total,
-                 COUNT(*) FILTER (
-                   WHERE COALESCE(event_time, received_at) > now() - interval '24 hours'
-                 )::int AS events_24h,
-                 MAX(received_at) AS last_received
-          FROM events
-          WHERE tenant_id = $1
-          GROUP BY source_type, collector_id
-          ORDER BY MAX(received_at) DESC
-          `,
-          [req.tenant_id]
-        )
-      );
-      res.status(200).json({ success: true, sources: result.rows });
+      const rows = await getEventStore().dataSources(req.tenant_id);
+      res.status(200).json({
+        success: true,
+        sources: rows.map((r) => ({
+          source_type: r.source_type, collector_id: r.collector_id, events_total: r.events_total,
+          events_24h: r.events_recent, last_received: r.last_received,
+        })),
+      });
     } catch (error) {
       console.error('Data source listing failed:', error.message);
       res.status(500).json({
@@ -367,59 +325,18 @@ router.get(
   rbacMiddleware,
   auditMiddleware,
   async (req, res) => {
-    // Column comes from a whitelist, never from user input.
+    // The column comes from a fixed list, never from user input.
     const col = req.query.by === 'collector' ? 'collector_id' : 'source_type';
     try {
-      const out = await db.withTenant(req.tenant_id, async (client) => {
-        const totals = await client.query(
-          `
-          SELECT COUNT(*)::int AS events_24h,
-                 COALESCE(SUM(octet_length(raw)), 0)::bigint AS bytes_24h,
-                 COUNT(*) FILTER (WHERE received_at > localtimestamp - interval '1 hour')::int AS events_1h,
-                 COUNT(DISTINCT source_type)::int AS source_types,
-                 COUNT(DISTINCT collector_id)::int AS collectors,
-                 MAX(received_at) AS last_received
-          FROM events
-          WHERE tenant_id = $1
-            AND COALESCE(event_time, received_at) > localtimestamp - interval '24 hours'
-          `,
-          [req.tenant_id]
-        );
-        const hourly = await client.query(
-          `
-          SELECT g.h AS hour, COALESCE(c.n, 0)::int AS n
-          FROM generate_series(
-                 date_trunc('hour', localtimestamp) - interval '23 hours',
-                 date_trunc('hour', localtimestamp),
-                 interval '1 hour') AS g(h)
-          LEFT JOIN (
-            SELECT date_trunc('hour', COALESCE(event_time, received_at)) AS h, COUNT(*) AS n
-            FROM events
-            WHERE tenant_id = $1
-              AND COALESCE(event_time, received_at) >= date_trunc('hour', localtimestamp) - interval '23 hours'
-            GROUP BY 1
-          ) c ON c.h = g.h
-          ORDER BY g.h
-          `,
-          [req.tenant_id]
-        );
-        const groups = await client.query(
-          `
-          SELECT COALESCE(${col}, '(none)') AS key,
-                 COUNT(*)::int AS events_24h,
-                 COALESCE(SUM(octet_length(raw)), 0)::bigint AS bytes_24h
-          FROM events
-          WHERE tenant_id = $1
-            AND COALESCE(event_time, received_at) > localtimestamp - interval '24 hours'
-          GROUP BY 1
-          ORDER BY 2 DESC
-          LIMIT 12
-          `,
-          [req.tenant_id]
-        );
-        return { totals: totals.rows[0], hourly: hourly.rows, groups: groups.rows };
+      const st = await getEventStore().ingestionStats(req.tenant_id, { by: col });
+      const t = st.totals;
+      res.status(200).json({
+        success: true,
+        by: col,
+        totals: { events_24h: t.events, bytes_24h: t.bytes, events_1h: t.events_1h, source_types: t.source_types, collectors: t.collectors, last_received: t.last_received },
+        hourly: st.hourly,
+        groups: st.groups.map((g) => ({ key: g.key, events_24h: g.events, bytes_24h: g.bytes })),
       });
-      res.status(200).json({ success: true, by: col, ...out });
     } catch (error) {
       console.error('Ingestion summary failed:', error.message);
       res.status(500).json({
