@@ -17,7 +17,7 @@ deployment profiles, and entitlements — never a fork.
 1. **Home edition, solid** — data safety (this build), module/profile skeleton, broker VM on
    Vector, content packs (residential), alert triage, regex-safety fix, CI.
 2. **Foundation for scale** — event envelope, event-store interface (Postgres adapter + ClickHouse
-   adapter, one conformance suite), search/detections/IOC/retention moved behind it, parsers as
+   adapter, one conformance suite), search/detections/IOC moved behind it (done), retention and the dashboard reads (next), parsers as
    separate workers.
 3. **Enterprise data plane** — Kafka between broker and parser, ClickHouse cluster, S3 archive, HA
    control-plane DB, multi-node capacity dashboard.
@@ -52,8 +52,9 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) has started: see 
 | Event-store interface, Postgres adapter, conformance suite | Done (see below); ingest writes go through it |
 | XQL search moved behind the store (query plan + `store.search()`) | Done (see below) |
 | Page counts moved behind the store (collectors, storage, capacity, search fields) | Done (see `docs/event-store.md`, "Page counts behind the store") |
-| Detections, IOC matcher, retention job, dashboard reads moved behind the store | Not started (next) |
-| ClickHouse adapter (same conformance suite) | Done — `src/events/clickhouse-store.js`; passes the conformance suite against a real ClickHouse 24.8 and runs in its own CI job. Reads that use `querySQL` / `queryAggregated` are not available on it yet; XQL `search()` is |
+| Detections, IOC matcher and alert sample events moved behind the store | Done (see below and `docs/event-store.md`, "Detection rules") |
+| Retention job and dashboard / event-list reads in `routes/core.js` moved behind the store | Not started (next) |
+| ClickHouse adapter (same conformance suite) | Done — `src/events/clickhouse-store.js`; passes the conformance suites (store, search, rule match) against a real ClickHouse 24.8 and runs in its own CI job. XQL `search()` and detection rules run on it |
 | Parsers as separate workers | Not started |
 
 ### Event envelope and event store (what exists)
@@ -85,10 +86,16 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) has started: see 
   text of a whole object or array value, numbers as exact decimals vs Float64, text sort order.
 - Counts on the collectors, storage and capacity pages and `/v1/search/fields` now read through the store (`groupCounts`,
   `timeRange`, `fieldStats`), checked on in-memory, PostgreSQL and ClickHouse 24.8 and against the SQL they replaced.
-- Not built: the other reads (detection rules, the IOC matcher, the retention job, the dashboard and event list in
-  `routes/core.js`) still use SQL directly; that is the next part (`docs/parallel-work.md`, "What to build
-  next"). Also not built: parsers as separate workers, a ClickHouse table created on deploy (run `ensureSchema()`), and
-  any per-tenant choice of adapter (one adapter per process).
+- **Detection rules, the IOC matcher and the alert sample events now read through the store.** A rule becomes a match spec
+  (filter as a plan expression, a group, a threshold; no SQL) and `getEventStore().matchGroups()` runs it on PostgreSQL,
+  ClickHouse or in memory. The IOC matcher keeps its place as a store cursor and reads in pages. Plan fields can now be written
+  `@path` (always a path into `parsed`), which keeps rule fields called `dataset` or `_time`, or with hyphens, exactly as they were.
+  Checked by running the old SQL builder and the new path side by side on real PostgreSQL over 1,914 rule definitions (identical
+  results), by a rule-match conformance suite on all three engines, and end to end (`tests/detection-store-db.test.js`). A rule is
+  now validated as a whole when it is saved. `querySQL` and `queryAggregated` are removed.
+- Not built: the retention job and the dashboard and event-list reads in `routes/core.js` still use SQL directly; that is the
+  next part (`docs/parallel-work.md`, "What to build next"). Also not built: parsers as separate workers, a ClickHouse table
+  created on deploy (run `ensureSchema()`), and any per-tenant choice of adapter (one adapter per process).
 
 ### Broker VM and collector heartbeat (what exists)
 - A broker VM runs Vector: syslog in on UDP and TCP, forwarded over HTTPS to the existing HTTP ingest lane with a

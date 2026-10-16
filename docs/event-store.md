@@ -38,7 +38,7 @@ await store.insertBatch(tenantId, [{ source_type: 'syslog', raw: '...', parsed: 
 |---|---|
 | `insertBatch(tenantId, events, opts?)` | `{ inserted, skipped, ids }`. All or nothing: one bad event rejects the batch (the error says which). Up to 5,000 events. `ids` are in input order. |
 | `getByIds(tenantId, ids)` | Envelopes in the order asked; ids that do not exist are left out. Up to 1,000 ids. |
-| `scan(tenantId, { since, until, source_type, collector_id, order, limit, after })` | `{ events, next }`. Ordered by `(received_at, id)`, so events with the same time still page exactly once. `since` is inclusive, `until` exclusive. `limit` 1 to 1,000 (default 100). `next` is `null` on the last page; pass it back as `after`. Cursors are opaque and only valid with the adapter that made them. |
+| `scan(tenantId, { since, until, source_type, collector_id, order, limit, after })` | `{ events, next, cursor }`. Ordered by `(received_at, id)`, so events with the same time still page exactly once. `since` is inclusive, `until` exclusive. `limit` 1 to 1,000 (default 100). `next` is `null` on the last page; pass it back as `after`. `cursor` is a checkpoint just after the last event returned (`null` for an empty page): keep it and pass it back as `after` to resume exactly there, however many events arrive meanwhile (the IOC matcher does this). Cursors are opaque and only valid with the adapter that made them. |
 | `count(tenantId, filter?)` | Number of matching events (same filters as `scan`). |
 | `sourceTypes(tenantId, { since? })` | Distinct source types, sorted, at most 100. |
 | `deleteBefore(tenantId, cutoff)` | `{ deleted }`: events with `received_at` before the cutoff. |
@@ -46,8 +46,7 @@ await store.insertBatch(tenantId, [{ source_type: 'syslog', raw: '...', parsed: 
 | `groupCounts(tenantId, { by, since?, until? })` | `[{ key, events, first_seen, last_seen }]`. Counts per `collector_id`, `source_type` or UTC `day` (key `YYYY-MM-DD`) of `received_at`, with the earliest and latest time of each group. `since` inclusive, `until` exclusive. Events with no collector are not a `collector_id` group. At most 1,000 groups; most events first (ties by key), days oldest first. Works on every adapter. |
 | `timeRange(tenantId)` | `{ oldest, newest }`: earliest and latest `received_at` as ISO times, or nulls when the tenant has no events. |
 | `fieldStats(tenantId, { sample?, xdmSample? })` | `{ fields, xdm }`, each `[{ name, events }]`. `fields`: top-level keys of `parsed` over the newest `sample` events (default 2,000, max 10,000). `xdm`: leaf paths under `parsed.xdm` (as `xdm.a.b`; arrays are leaves, empty objects have none) over the newest `xdmSample` events (default 500, max 5,000) whose `parsed.xdm` is an object. Most events first, ties by name, at most 200 and 500 names. Newest means `(received_at, id)` descending. |
-| `querySQL(tenantId, sql, params, opts?)` | `{ rows, fields }`. Runs XQL-compiled PostgreSQL SQL. **Postgres adapter only.** It adds no tenant filter of its own: the SQL from `xql.compile` must carry it. |
-| `queryAggregated(tenantId, spec)` | Group-by counts for detection rules and the IOC matcher. **Postgres adapter only** (`spec.group_expr` is a trusted PostgreSQL fragment from the rule definition, never user input). |
+| `matchGroups(tenantId, spec, opts?)` | `[{ key, n, first_at, last_at, sample_ids, sample_raw }]`. What a detection rule asks: which groups of events inside a time frame match a filter, and how many in each (see "Detection rules" below). Works on every adapter. |
 
 Every method needs a tenant id and only ever sees that tenant's events. Errors: `EventStoreError` with `code`
 `INVALID_TENANT`, `INVALID_BATCH`, `BATCH_TOO_LARGE`, `INVALID_QUERY`, `INVALID_CURSOR` or `NOT_IMPLEMENTED` (adapter lacks the method); the ClickHouse adapter also raises `BACKEND_ERROR` / `BACKEND_UNAVAILABLE`.
@@ -100,7 +99,7 @@ const { rows, truncated, mode, columns } = await getEventStore().search(tenantId
   refuses to write unless the in-memory engine agrees. Regenerate it only when the language's meaning is changed on purpose.
   `tests/xql-golden.test.js` pins the SQL and the error messages of the old compiler. `tests/search-route.test.js` goes through
   the real route (memory in CI, Postgres when gated).
-- Adding an adapter now also means implementing `_search` and running `runSearchConformance` unchanged.
+- Adding an adapter now also means implementing `_search` and running `runSearchConformance` unchanged (and `_matchGroups` with `runMatchConformance`).
 
 ### Memory adapter
 For tests and local experiments only (`ASIX_EVENT_STORE=memory`; refused when `NODE_ENV=production`). It lets
@@ -131,13 +130,11 @@ Node's built-in `fetch`, so there is **no extra npm dependency**.
   partitions is still the cheaper way for the retention job to expire large tables.
 - **Known limits.** One `INSERT` that spans several days writes several parts and is not atomic across them (validation
   happens first, so a failure after that point means a backend outage; re-sending the batch is safe because inserts are
-  idempotent). `querySQL` and `queryAggregated` are **not implemented**: XQL compiles to PostgreSQL SQL and rules pass a
-  PostgreSQL group expression, so they throw `NOT_IMPLEMENTED` rather than return wrong data. Moving reads behind the store
-  with a non-SQL query form is what unblocks them. One adapter per process.
+  idempotent). Detection rules run here too (`matchGroups`). One adapter per process.
 - **Tests.** `tests/event-store-clickhouse.test.js` runs the conformance suite plus ClickHouse-specific cases (millisecond
   paging, re-sent events with no merge, hostile filter strings, unicode, error codes) against a real server, in a throwaway
   `events_test_<random>` table it drops itself. Run it with
-  `ASIX_TEST_DB=1 ASIX_CLICKHOUSE_URL=http://default:pass@127.0.0.1:8123/asix node tests/event-store-clickhouse.test.js`.
+  `ASIX_TEST_DB=1 ASIX_CLICKHOUSE_URL=http://default:pass@127.0.0.1:8123/asix node tests/event-store-clickhouse.test.js` (and `event-search-clickhouse`, `event-match-clickhouse`).
   CI runs it in the `clickhouse` job (a ClickHouse 24.8 service container); the normal `test` job skips it. It has been
   run against ClickHouse 24.8.14.39.
 
@@ -145,6 +142,52 @@ Node's built-in `fetch`, so there is **no extra npm dependency**.
 (`toString(id)`), not as ClickHouse's UUID type: ClickHouse sorts UUIDs differently from the hex-string order the contract and the
 other adapters use, and an earlier version of the adapter failed the "pages through everything" test about three runs in four
 because of it. Trade-off: the id tie-break no longer follows the table's sort key (the `received_at` prefix still does).
+
+## Detection rules and the IOC matcher behind the store (done)
+**Rules.** `rule-query.js` turns a rule definition into a *match spec* (`src/search/match-spec.js`), and
+`getEventStore().matchGroups(tenantId, spec)` runs it. The spec holds no SQL:
+
+| Field | Meaning |
+|---|---|
+| `after` | ISO time. Only events with event time (received time when there is none) **strictly after** it count. |
+| `filter` | A plan expression (`src/search/xql-plan.js`) or `null`. The rule's regex, source type, field filters and BIOC condition are all AND-ed into one. |
+| `group` | `{ by: 'none' }` (one group, key `all`), `{ by: 'field', field }` (the text of a field; a missing value is the group `unknown`) or `{ by: 'capture', pattern }` (the first capture group of an unanchored, case-sensitive match on `raw`; no match or an empty capture is `unknown`). |
+| `threshold`, `limit` | Keep groups with at least `threshold` events (default 1); at most `limit` groups (default and maximum 1,000). |
+
+Rows come back biggest group first (ties by key) with the earliest and latest event time of the group, up to five sample
+event ids (newest first) and the raw text of the newest event. `validateMatchSpec()` runs first on every adapter, so even a
+hand-built spec cannot inject anything; a bad spec is `INVALID_QUERY`.
+
+**`@path` fields.** In a plan, `@xdm.source.ipv4` or `@user-agent` is always a path into `parsed`, never a column, and may
+contain hyphens or start with a digit. XQL text cannot produce it. Rules use it for every field that is not `raw`,
+`source_type` or `collector_id`, so a rule field called `dataset` or `_time` stays the parsed field the author meant.
+
+**What the engines do.** Postgres: one grouped query (`xql-postgres.js` `matchToSql`, every value a bound parameter).
+ClickHouse: one grouped query (`xql-clickhouse.js` `matchToClickHouse`); the five newest ids come from sorting one small
+(time, id) pair per matching event of the group, which is fine for rule time frames and is the thing to revisit if a single
+group can reach many millions. Memory: `xql-eval.js` `runMatch`.
+
+**Checked against the old code.** The old SQL builder and the new path were run side by side on real PostgreSQL over 1,914
+rule definitions (regex, source type, every filter operator, `xql` with `or` and `not`, every group-by, thresholds and
+windows) on 400 events: identical groups, counts, first/last times, sample ids and raw lines. `tests/event-match-conformance.js`
+holds every adapter to the same answers (in-memory in CI; Postgres and ClickHouse when gated).
+
+**Small, deliberate differences.**
+- The time frame's start is computed by the API server's clock (it was the database's `localtimestamp`).
+- A rule is checked as a whole when it is saved (`Rule is not valid: ...`), so a rule with too many or too long conditions
+  is refused then instead of failing on every run.
+- A `group_by` of `constructor` (or another name every JavaScript object has) used to pass the check and break the rule; it is refused now.
+- Rows with equal counts are ordered by group key (they had no defined order).
+- An `or` in a rule's `xql` is now AND-ed correctly with the rule's other conditions on every engine (each part is a paren node).
+
+**IOC matcher.** It reads the indicators and its saved place from Postgres, reads the next events through `scan()` (pages of
+1,000, up to 5,000 per cycle), then raises alerts and moves the place forward in one Postgres transaction. The place is a
+store cursor over `(received_at, id)` kept in `ioc_scan_state`, and it only moves when the alerts are saved, so a crash
+re-reads the same events and nothing is skipped. If the event store cannot be read the cycle fails for that tenant and the place does not move.
+**Alert detail** (`routes/alerts.js`) loads the sample events with `getByIds()`.
+
+`tests/detection-store-db.test.js` (`ASIX_TEST_DB=1`) runs the rule runner, the rule test endpoint, the alert detail route and the
+IOC matcher end to end on real PostgreSQL, including more events than one page and an unreadable store.
 
 ## Adding an adapter
 1. Create `src/events/<name>-store.js`: `class X extends EventStore`, implement the underscore hooks listed at
@@ -173,11 +216,11 @@ object (a string, say) no longer contributes odd paths; a collector list over 1,
 Engine-specific housekeeping stays where it is (table sizes, partitions, `pg_database_size` on the storage and capacity pages).
 
 ## What is left (next in Phase 2)
-- Reads that still use SQL directly: detection rules (`rule-query.js`, `rule-runner.js`: a rule holds a trusted PostgreSQL
-  fragment, `group_expr`), the IOC matcher, the retention job (`preview`, partition drops, the all-tenant row count), the
-  dashboard and event-list reads in `routes/core.js` (events list, per-source totals, 24 hour totals, top lists) and the
-  sample events in `routes/alerts.js` (`getByIds` already does this). Express each as a plan where the plan can say it
-  (most are `comp count() by ...`), and add a store method only for engine-specific housekeeping. Then remove `querySQL`, `queryAggregated` and the
-  `xql.compile` / `compileCondition` wrappers. Order and starting points: `docs/parallel-work.md`, "What to build next".
+- Reads that still use SQL directly: the retention job (`preview`, partition drops, the all-tenant row count) and the
+  dashboard and event-list reads in `routes/core.js` (events list, per-source totals, 24 hour totals, top lists). Express each
+  as a plan where the plan can say it (most are `comp count() by ...`), and add a store method only for engine-specific
+  housekeeping. Then remove the `xql.compile` / `compileCondition` wrappers (nothing but `tests/xql-golden.test.js` calls them now;
+  that test pins the old compiler's SQL and has to be reworked or retired with them). Order and starting points:
+  `docs/parallel-work.md`, "What to build next".
 - Parsers as separate workers.
 - The syslog listener and the in-cluster collector reach the store through the HTTP lane, so they are covered.
