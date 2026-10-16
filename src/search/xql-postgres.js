@@ -14,6 +14,7 @@ class Emitter {
   constructor(values) { this.values = values; }
   bind(v) { this.values.push(v); return '$' + this.values.length; }
   field(name) {
+    if (name[0] === '@') return `(parsed #>> ${this.bind(name.slice(1).split('.'))}::text[])`;   // explicit parsed path
     if (Object.prototype.hasOwnProperty.call(COLUMNS, name)) return COLUMNS[name];
     return `(parsed #>> ${this.bind(name.split('.'))}::text[])`;
   }
@@ -102,4 +103,23 @@ function conditionToSql(stages, values) {
   return out;
 }
 
-module.exports = { toSql, conditionToSql, TS, COLUMNS };
+// Rule match spec (src/search/match-spec.js) -> SQL. $1 is the tenant, $2 the lower bound, then the filter's values.
+// Groups on the event time, like the search does; first/last come back as text so no precision is lost.
+function matchToSql(spec, tenantId) {
+  const E = new Emitter([tenantId]);
+  const where = ['tenant_id = $1', `${TS} > ${E.bind(spec.after)}`];
+  if (spec.filter) where.push(`(${E.expr(spec.filter)})`);
+  let g;
+  if (spec.group.by === 'none') g = "'all'";
+  else if (spec.group.by === 'field') g = `COALESCE(${E.textField(spec.group.field)}, 'unknown')`;
+  else g = `COALESCE(substring(raw from ${E.bind(spec.group.pattern)}::text), 'unknown')`;
+  const thr = E.bind(spec.threshold);
+  const sql = `SELECT ${g} AS gkey, COUNT(*)::int AS n, MIN(ts)::text AS first_at, MAX(ts)::text AS last_at,
+           (array_agg(id::text ORDER BY ts DESC, id DESC))[1:5] AS sample_ids,
+           (array_agg(raw ORDER BY ts DESC, id DESC))[1] AS sample_raw
+    FROM (SELECT *, ${TS} AS ts FROM events WHERE ${where.join(' AND ')}) e
+    GROUP BY 1 HAVING COUNT(*) >= ${thr}::int ORDER BY n DESC, gkey ASC LIMIT ${spec.limit | 0}`;
+  return { sql, values: E.values };
+}
+
+module.exports = { toSql, conditionToSql, matchToSql, TS, COLUMNS };

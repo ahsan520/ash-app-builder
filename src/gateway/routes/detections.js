@@ -9,7 +9,8 @@ const {
 // Detections and alerts
 // ---------------------------------------------------------------------------
 const { ensureBuiltinRules, BUILTIN_RULES } = require('../../detection/rule-runner');
-const { normalizeDefinition, buildMatch } = require('../../detection/rule-query');
+const { normalizeDefinition, buildRuleMatch } = require('../../detection/rule-query');
+const { getEventStore } = require('../../events');
 const xql = require('../../search/xql');
 
 router.get('/v1/detections/rules', ...guarded('detections:rules:read'), async (req, res) => {
@@ -65,11 +66,7 @@ router.post('/v1/detections/rules/test', ...guarded('detections:rules:write'), a
   const norm = normalizeDefinition((req.body || {}).definition);
   if (norm.error) return apiError(res, 400, 'INVALID_DEFINITION', norm.error);
   try {
-    const rows = await db.withTenant(req.tenant_id, async (client) => {
-      await client.query("SET LOCAL statement_timeout = '10s'");
-      const q = buildMatch(req.tenant_id, norm.def, { limit: 20 });
-      return (await client.query(q.text, q.values)).rows;
-    });
+    const rows = (await getEventStore().matchGroups(req.tenant_id, buildRuleMatch(norm.def, { limit: 20 }))).map((r) => ({ ...r, gkey: r.key }));
     res.status(200).json({
       success: true,
       window_minutes: norm.def.window_minutes,

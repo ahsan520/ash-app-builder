@@ -22,7 +22,7 @@
 
 const { EventStore, EventStoreError } = require('./event-store');
 const { ENVELOPE_VERSION, UUID_RE } = require('./envelope');
-const { toClickHouse } = require('../search/xql-clickhouse');
+const { toClickHouse, matchToClickHouse } = require('../search/xql-clickhouse');
 
 // Plain column names on purpose: an alias such as `toString(id) AS id` would shadow the column inside
 // WHERE and ORDER BY (comparing text with UUIDs, sorting times as text). JSONEachRow already renders
@@ -302,9 +302,6 @@ class ClickHouseEventStore extends EventStore {
     return out;
   }
 
-  // XQL compiles to PostgreSQL SQL and detection rules pass a PostgreSQL group expression, so neither
-  // runs here yet. They fail loudly (NOT_IMPLEMENTED from the base class) instead of returning wrong data.
-
   // An XQL plan becomes ClickHouse SQL (src/search/xql-clickhouse.js); every value is a query parameter.
   async _search(tenant, plan) {
     const q = toClickHouse(plan, tenant, this._table);
@@ -317,6 +314,13 @@ class ClickHouseEventStore extends EventStore {
       }
       return out;
     });
+  }
+
+  // A rule match spec becomes ClickHouse SQL (src/search/xql-clickhouse.js matchToClickHouse).
+  async _matchGroups(tenant, spec) {
+    const q = matchToClickHouse(spec, tenant, this._table);
+    const rows = await this._rows(q.sql, { params: q.params });
+    return rows.map((r) => ({ key: r.c0, n: Number(r.c1), first_at: isoTime(r.c2), last_at: isoTime(r.c3), sample_ids: r.c4 || [], sample_raw: r.c5 }));
   }
 
   async close() { this._conn = null; }

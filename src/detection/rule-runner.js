@@ -4,11 +4,12 @@
 //
 // - Runs inside asix-api on an interval. With several API replicas, a Postgres
 //   advisory lock makes sure only one of them runs a cycle at a time.
-// - Rule definitions are data (detection_rules.definition). Group-by columns come
-//   from the fixed GROUP_EXPR whitelist below, never from user input.
+// - Rule definitions are data (detection_rules.definition). Each one becomes a match spec (rule-query.js)
+//   that the event store runs (getEventStore().matchGroups), so rules work on any storage engine.
 
 const db = require('../db');
-const { buildMatch } = require('./rule-query');
+const { buildRuleMatch } = require('./rule-query');
+const { getEventStore } = require('../events');
 
 const LOCK_KEY = 7412001; // arbitrary app-wide advisory lock id
 
@@ -321,8 +322,8 @@ async function ensureBuiltinRules(client, tenantId) {
 
 async function evaluateRule(client, tenantId, rule) {
   const d = rule.definition;
-  const q = buildMatch(tenantId, d);
-  const hits = await client.query(q.text, q.values);
+  // events are read through the event store (its own connection, its own time limit); alerts are written in `client`
+  const hits = { rows: (await getEventStore().matchGroups(tenantId, buildRuleMatch(d))).map((r) => ({ ...r, gkey: r.key })) };
   const supp = d.suppression && d.suppression.enabled ? d.suppression.minutes : 0;
 
   let created = 0;
@@ -468,4 +469,4 @@ function start() {
   console.log(`[detection] rule runner started (every ${every / 1000}s)`);
 }
 
-module.exports = { start, runOnce, ensureBuiltinRules, BUILTIN_RULES };
+module.exports = { start, runOnce, runTenant, ensureBuiltinRules, BUILTIN_RULES };

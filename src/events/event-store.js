@@ -11,18 +11,15 @@
 // Public API (all async; tenantId is always the first argument and is always enforced):
 //   insertBatch(tenantId, events, opts?)  -> { inserted, skipped, ids }
 //   getByIds(tenantId, ids)               -> envelope[]            (requested order, missing ones omitted)
-//   scan(tenantId, query?)                -> { events, next }      (cursor paging, stable order)
+//   scan(tenantId, query?)                -> { events, next, cursor }  (cursor paging, stable order; `cursor` = checkpoint after the last event)
 //   count(tenantId, filter?)              -> number
 //   sourceTypes(tenantId, { since? })     -> string[]              (distinct, sorted, max 100)
 //   deleteBefore(tenantId, cutoff)        -> { deleted }           (received_at < cutoff)
 //   search(tenantId, plan, opts?)         -> { rows, truncated, mode, columns }  (an XQL query plan, see src/search/xql-plan.js)
-//   querySQL(tenantId, sql, params, opts?) -> { rows, fields }      (XQL-compiled SQL, controlled escape hatch)
-//   queryAggregated(tenantId, spec)        -> object[]              (group-by for rule/IOC matchers)
+//   matchGroups(tenantId, spec, opts?)    -> [{ key, n, first_at, last_at, sample_ids, sample_raw }]  (detection rules, see src/search/match-spec.js)
 //   groupCounts(tenantId, { by, since?, until? }) -> [{ key, events, first_seen, last_seen }]   (counts per collector, source or day)
 //   timeRange(tenantId)                   -> { oldest, newest }    (ISO times of the oldest / newest event, or null)
 //   fieldStats(tenantId, { sample?, xdmSample? }) -> { fields, xdm }   (field names seen in the newest events, with counts)
-//   querySQL and queryAggregated take PostgreSQL SQL / a PostgreSQL group expression, so only the Postgres
-//   adapter implements them today; other adapters throw NOT_IMPLEMENTED (see docs/event-store.md).
 //
 // Order is always (received_at, id). `since` is inclusive, `until` exclusive, both on received_at.
 // Cursors (`next` / `after`) are opaque and only valid with the adapter that produced them.
@@ -30,6 +27,7 @@
 const crypto = require('crypto');
 const { UUID_RE, EnvelopeError, makeEnvelope, normalizeTime } = require('./envelope');
 const { validatePlan, PlanError } = require('../search/xql-plan');
+const { validateMatchSpec } = require('../search/match-spec');
 
 const MAX_BATCH = 5000;
 const MAX_SCAN = 1000;
@@ -159,7 +157,10 @@ class EventStore {
     const page = rows.slice(0, limit);
     const last = page[page.length - 1];
     const next = rows.length > limit && last ? encodeCursor(last.cursorTs, last.event.id) : null;
-    return { events: page.map((r) => r.event), next };
+    // `cursor` is a checkpoint just after the last event returned (null for an empty page). Keep it and pass it back
+    // as `after` to carry on exactly where this page ended, however many events arrive meanwhile.
+    const cursor = last ? encodeCursor(last.cursorTs, last.event.id) : null;
+    return { events: page.map((r) => r.event), next, cursor };
   }
 
   async count(tenantId, filter = {}) {
@@ -192,31 +193,15 @@ class EventStore {
     return { rows: truncated ? rows.slice(0, plan.limit) : rows, truncated, mode: plan.mode, columns: plan.columns || null };
   }
 
-  // Run an XQL-compiled SQL query. The SQL and its params come from compile() in src/search/xql.js,
-  // which is safe by construction (parameters are bound; field names pass IDENT_RE) and which puts
-  // the tenant filter in the SQL itself. This method does NOT add a tenant filter: the only thing
-  // beyond XQL's own filter is row-level security via db.withTenant(), and that does not apply to a
-  // role that owns the table. Callers must pass SQL that already filters on this tenant.
-  // `opts.client` runs in an existing transaction (like insertBatch). Returns { rows, fields }.
-  async querySQL(tenantId, sql, params = [], opts = {}) {
+  // Detection rules: which groups of events inside a time frame match a filter, and how many in each. The spec is
+  // made of the plan's expression tree (no SQL), so every adapter runs the same rule the same way. Rows are
+  // { key, n, first_at, last_at, sample_ids, sample_raw }, biggest group first; see src/search/match-spec.js.
+  // validateMatchSpec() runs first, so even a hand-built spec cannot inject anything.
+  async matchGroups(tenantId, spec, opts = {}) {
     const tenant = assertTenant(tenantId);
-    if (typeof sql !== 'string' || !sql.trim()) throw new EventStoreError('INVALID_QUERY', 'sql must be a non-empty string');
-    if (!Array.isArray(params)) throw new EventStoreError('INVALID_QUERY', 'params must be an array');
-    return this._querySQL(tenant, sql, params, opts);
-  }
-
-  // Structured aggregation for detection rules and the IOC matcher: a group-by + count with
-  // optional since/source_type/collector_id filters, in a single scan. Adapters implement it
-  // natively; `spec` fields all come from validated rule definitions, never from user SQL.
-  // Returns objects { gkey, n, first_at, last_at } ordered by n desc.
-  async queryAggregated(tenantId, spec = {}) {
-    const tenant = assertTenant(tenantId);
-    if (spec === null || typeof spec !== 'object') throw new EventStoreError('INVALID_QUERY', 'spec must be an object');
-    const f = normalizeFilter(spec);
-    let limit = spec.limit === undefined ? 1000 : spec.limit;
-    if (!Number.isInteger(limit) || limit < 1) throw new EventStoreError('INVALID_QUERY', 'limit must be a whole number of at least 1');
-    limit = Math.min(limit, MAX_SCAN);
-    return this._queryAggregated(tenant, { ...f, limit, group_expr: spec.group_expr || null, sample_ids: !!spec.sample_ids });
+    let norm;
+    try { norm = validateMatchSpec(spec); } catch (e) { if (e instanceof PlanError) throw new EventStoreError('INVALID_QUERY', e.message); throw e; }
+    return this._matchGroups(tenant, norm, opts || {});
   }
 
   // Event counts per collector, per source type, or per UTC day of received_at, in one pass. `by` is one of
@@ -267,8 +252,7 @@ class EventStore {
   // _sourceTypes(tenant, { since, limit }) -> string[]
   // _deleteBefore(tenant, isoCutoff) -> { deleted }
   // _search(tenant, plan, opts) -> object[]      at most plan.limit + 1 rows, already ordered; plan is validated
-  // _querySQL(tenant, sql, params, opts) -> { rows, fields }      (XQL-compiled query, tenant-scoped)
-  // _queryAggregated(tenant, { since, until, source_type, collector_id, limit, group_expr, sample_ids }) -> object[]
+  // _matchGroups(tenant, spec, opts) -> [{ key, n, first_at, last_at, sample_ids, sample_raw }]   spec is validated and normalised
   // _groupCounts(tenant, { by, since, until, limit }) -> [{ key, events, first_seen, last_seen }]   in the order documented on groupCounts()
   // _timeRange(tenant) -> { oldest, newest }       ISO times or null
   // _fieldKeys(tenant, { limit }) -> [{ name, events }]   top-level keys of `parsed` over the newest `limit` events, ordered (received_at, id) descending
@@ -280,8 +264,7 @@ class EventStore {
   async _sourceTypes(tenant, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'sourceTypes'); }
   async _deleteBefore(tenant, cutoff) { throw new EventStoreError('NOT_IMPLEMENTED', 'deleteBefore'); }
   async _search(tenant, plan, opts) { throw new EventStoreError('NOT_IMPLEMENTED', 'search'); }
-  async _querySQL(tenant, sql, params, opts) { throw new EventStoreError('NOT_IMPLEMENTED', 'querySQL'); }
-  async _queryAggregated(tenant, spec) { throw new EventStoreError('NOT_IMPLEMENTED', 'queryAggregated'); }
+  async _matchGroups(tenant, spec, opts) { throw new EventStoreError('NOT_IMPLEMENTED', 'matchGroups'); }
   async _groupCounts(tenant, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'groupCounts'); }
   async _timeRange(tenant) { throw new EventStoreError('NOT_IMPLEMENTED', 'timeRange'); }
   async _fieldKeys(tenant, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'fieldStats'); }

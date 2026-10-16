@@ -4,6 +4,7 @@ const {
   db, authMiddleware, tenantMiddleware, rbacMiddleware, auditMiddleware, brokerAuthMiddleware,
   guarded, UUID_RE, SEVERITIES, ALERT_STATUSES, apiError,
 } = require('../shared');
+const { getEventStore } = require('../../events');
 
 router.get('/v1/alerts/summary', ...guarded('alerts:read'), async (req, res) => {
   try {
@@ -73,15 +74,12 @@ router.get('/v1/alerts/:id', ...guarded('alerts:read'), async (req, res) => {
     const out = await db.withTenant(req.tenant_id, async (client) => {
       const a = await client.query('SELECT * FROM alerts WHERE id = $1 AND tenant_id = $2', [id, req.tenant_id]);
       if (!a.rows.length) return null;
-      const ids = (a.rows[0].details && a.rows[0].details.sample_event_ids) || [];
-      const ev = ids.length
-        ? await client.query(
-            `SELECT id, source_type, collector_id, received_at, event_time, raw
-             FROM events WHERE tenant_id = $1 AND id = ANY($2::uuid[])
-             ORDER BY COALESCE(event_time, received_at) DESC`,
-            [req.tenant_id, ids]
-          )
-        : { rows: [] };
+      const ids = ((a.rows[0].details && a.rows[0].details.sample_event_ids) || []).filter((i) => typeof i === 'string' && UUID_RE.test(i));
+      // sample events are read through the event store, newest first
+      const ev = { rows: ids.length ? await getEventStore().getByIds(req.tenant_id, ids) : [] };
+      ev.rows = ev.rows
+        .map(({ id, source_type, collector_id, received_at, event_time, raw }) => ({ id, source_type, collector_id, received_at, event_time, raw }))
+        .sort((x, y) => Date.parse(y.event_time || y.received_at) - Date.parse(x.event_time || x.received_at));
       return { alert: a.rows[0], events: ev.rows };
     });
     if (!out) return apiError(res, 404, 'NOT_FOUND', 'Alert not found');

@@ -67,6 +67,7 @@ class Emitter {
   }
 
   field(name) {          // non-text form where it matters (the time columns)
+    if (name[0] === '@') return this.pathText(name.slice(1));   // explicit parsed path
     switch (name) {
       case '_raw': case 'raw': return 'raw';
       case 'source_type': case 'dataset': return 'toString(source_type)';
@@ -157,4 +158,25 @@ function toClickHouse(plan, tenant, table) {
   return { sql, params: E.params, columns, mode: plan.mode, limit: plan.limit };
 }
 
-module.exports = { toClickHouse };
+// Rule match spec (src/search/match-spec.js) -> ClickHouse SQL. Output columns are c0..c5 (see toClickHouse for why).
+// The five newest ids come from sorting (time, id) pairs of the group; that holds one small tuple per matching
+// event, which is fine for rule time frames but is the thing to revisit if a single group can reach many millions.
+function matchToClickHouse(spec, tenant, table) {
+  const E = new Emitter(tenant);
+  const dt = (iso) => E.bind("DateTime64(3, 'UTC')", iso.replace('T', ' ').replace(/Z$/, ''));
+  const where = [`tenant_id = ${E.bind('UUID', tenant)}`, `${TS} > ${dt(spec.after)}`];
+  if (spec.filter) where.push(`(${E.expr(spec.filter)})`);
+  let g;
+  if (spec.group.by === 'none') g = "'all'";
+  else if (spec.group.by === 'field') g = `ifNull(${E.textField(spec.group.field)}, 'unknown')`;
+  else g = `ifNull(nullIf(extract(raw, ${E.str(spec.group.pattern)}), ''), 'unknown')`;
+  const thr = E.bind('UInt32', String(spec.threshold));
+  const key = `(${TS}, toString(id))`;
+  const sql = `SELECT ${g} AS c0, count() AS c1, toString(min(${TS})) AS c2, toString(max(${TS})) AS c3,
+           arrayMap(x -> x.2, arraySlice(arrayReverseSort(groupArray(${key})), 1, 5)) AS c4, argMax(raw, ${key}) AS c5
+    FROM ${table} FINAL WHERE ${where.join(' AND ')}
+    GROUP BY 1 HAVING count() >= ${thr} ORDER BY c1 DESC, c0 ASC LIMIT ${spec.limit | 0}`;
+  return { sql, params: E.params };
+}
+
+module.exports = { toClickHouse, matchToClickHouse };

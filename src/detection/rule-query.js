@@ -1,19 +1,23 @@
 'use strict';
-// Shared by the rule runner and the "Test" endpoint: validates a rule definition and turns it
-// into one parameterised SQL query. Nothing user-supplied is ever concatenated into SQL:
-// field names and values are bound parameters; group-by columns come from a fixed whitelist.
+// Shared by the rule runner and the "Test" endpoint: validates a rule definition and turns it into a rule
+// match spec (src/search/match-spec.js) that any event store runs: getEventStore().matchGroups(tenantId, spec).
+// No SQL is built here. The filter is the query plan's expression tree, so field names and values are data,
+// and the group-by is one of a few fixed forms.
 
-const SOURCE_IP_SQL =
-  "substring(raw from '(?:from|rhost=|src=)\\s*([0-9]{1,3}(?:\\.[0-9]{1,3}){3})')";
-const GROUP_EXPR = {
-  none: "'all'",
-  host: "COALESCE(parsed->>'host', 'unknown')",
-  source_ip: `COALESCE(${SOURCE_IP_SQL}, 'unknown')`,
+const SOURCE_IP_PATTERN = '(?:from|rhost=|src=)\\s*([0-9]{1,3}(?:\\.[0-9]{1,3}){3})';
+// group_by choices that are not "field:<path>"
+const GROUPS = {
+  none: { by: 'none' },
+  host: { by: 'field', field: '@host' },
+  source_ip: { by: 'capture', pattern: SOURCE_IP_PATTERN },
 };
+const isNamedGroup = (g) => Object.prototype.hasOwnProperty.call(GROUPS, g);
 const COLUMN_FIELDS = new Set(['raw', 'source_type', 'collector_id']);
 const FIELD_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 const OPS = ['contains', 'equals', 'not_equals', 'regex'];
-const { compileCondition, XqlError } = require('../search/xql');
+const { parseCondition, XqlError } = require('../search/xql');
+const { validateMatchSpec } = require('../search/match-spec');
+const { PlanError } = require('../search/xql-plan');
 const { assertSafeRegex } = require('../security/regex-safety');
 const ID_RE = /^[a-z_]{1,30}$/;
 const BUILDER_OPS = ['=', '!=', 'contains', 'not contains', '~=', 'in', 'not in', '>', '<', 'is set', 'is empty'];
@@ -48,7 +52,7 @@ function normalizeDefinition(input) {
   if (out.filters.length > 10) return { error: 'At most 10 filters' };
   out.xql = typeof d.xql === 'string' ? d.xql.trim() : '';
   if (out.xql) {
-    try { compileCondition(out.xql, [null]); } catch (e) { if (e instanceof XqlError) return { error: 'XQL condition: ' + e.message }; throw e; }
+    try { parseCondition(out.xql); } catch (e) { if (e instanceof XqlError) return { error: 'XQL condition: ' + e.message }; throw e; }
   }
   if (d.event_type && EVENT_TYPES.includes(d.event_type)) out.event_type = d.event_type;
   // The portal's BIOC builders keep their inputs so a rule can be reopened in the same builder:
@@ -74,7 +78,7 @@ function normalizeDefinition(input) {
   if (!out.regex && !out.source_type && !out.filters.length && !out.xql) return { error: 'Add a condition, match text, a source type or at least one filter' };
 
   const gb = typeof d.group_by === 'string' ? d.group_by : 'none';
-  if (GROUP_EXPR[gb] || (gb.startsWith('field:') && FIELD_RE.test(gb.slice(6)))) out.group_by = gb;
+  if (isNamedGroup(gb) || (gb.startsWith('field:') && FIELD_RE.test(gb.slice(6)))) out.group_by = gb;
   else return { error: 'Invalid group by' };
 
   out.threshold = int(d.threshold, 1, 1, 100000);
@@ -90,42 +94,45 @@ function normalizeDefinition(input) {
   const sm = int(s.minutes, 60, 1, 10080);
   if (sm === null) return { error: 'Suppression duration must be 1 minute to 7 days' };
   out.suppression = { enabled: !!s.enabled, minutes: sm };
+  // the whole rule must be something the event store can run (limits on conditions, patterns and names)
+  try { buildRuleMatch(out); } catch (e) { if (e instanceof PlanError) return { error: 'Rule is not valid: ' + e.message }; throw e; }
   return { def: out };
 }
 
-// One grouped query over the events inside the rule's time frame.
-function buildMatch(tenantId, d, opts = {}) {
-  const values = [tenantId, d.window_minutes];
-  const bind = (v) => { values.push(v); return '$' + values.length; };
-  const where = [
-    'tenant_id = $1',
-    'COALESCE(event_time, received_at) > localtimestamp - make_interval(mins => $2::int)',
-  ];
-  const fieldExpr = (f) => (COLUMN_FIELDS.has(f) ? f : `(parsed #>> ${bind(f.split('.'))}::text[])`);
-  if (d.regex) where.push(`raw ~* ${bind(d.regex)}`);
-  if (d.source_type) where.push(`source_type = ${bind(d.source_type)}`);
-  if (d.xql) where.push(...compileCondition(d.xql, values));   // BIOC condition on parsed / xdm.* fields
-  for (const f of d.filters || []) {
-    const e = fieldExpr(f.field);
-    if (f.op === 'equals') where.push(`${e} = ${bind(f.value)}`);
-    else if (f.op === 'not_equals') where.push(`${e} IS DISTINCT FROM ${bind(f.value)}`);
-    else if (f.op === 'regex') where.push(`${e} ~* ${bind(f.value)}`);
-    else where.push(`${e} ILIKE ${bind('%' + f.value.replace(/[\\%_]/g, '\\$&') + '%')}`);
+// A rule's conditions as one plan expression (all of them must hold), or null when it has none.
+// Rule fields use "@path" for anything that is not raw / source_type / collector_id, so a rule field named
+// "dataset" or "_time" is still the parsed field the author meant.
+function ruleFilter(d) {
+  const parts = [];
+  if (d.regex) parts.push({ t: 'regex', field: 'raw', pattern: d.regex });
+  if (d.source_type) parts.push({ t: 'eq', field: 'source_type', value: d.source_type });
+  if (d.xql) {   // BIOC condition on parsed / xdm.* fields (XQL names keep their XQL meaning)
+    for (const s of parseCondition(d.xql)) parts.push(s.op === 'dataset' ? { t: 'eq', field: 'source_type', value: String(s.names[0]) } : s.expr);
   }
-  const gb = d.group_by || 'none';
-  const groupExpr = GROUP_EXPR[gb] || `COALESCE(parsed #>> ${bind(gb.slice(6).split('.'))}::text[], 'unknown')`;
-  const thr = bind(d.threshold);
-  const limit = opts.limit ? `ORDER BY n DESC LIMIT ${Number(opts.limit) | 0}` : '';
-  const text = `
-    SELECT ${groupExpr} AS gkey, COUNT(*)::int AS n, MIN(ts) AS first_at, MAX(ts) AS last_at,
-           (array_agg(id ORDER BY ts DESC))[1:5] AS sample_ids,
-           (array_agg(raw ORDER BY ts DESC))[1] AS sample_raw
-    FROM (
-      SELECT id, raw, parsed, source_type, collector_id, COALESCE(event_time, received_at) AS ts
-      FROM events WHERE ${where.join(' AND ')}
-    ) e
-    GROUP BY 1 HAVING COUNT(*) >= ${thr}::int ${limit}`;
-  return { text, values };
+  for (const f of d.filters || []) {
+    const field = COLUMN_FIELDS.has(f.field) ? f.field : '@' + f.field;
+    if (f.op === 'equals') parts.push({ t: 'eq', field, value: f.value });
+    else if (f.op === 'not_equals') parts.push({ t: 'ne', field, value: f.value });
+    else if (f.op === 'regex') parts.push({ t: 'regex', field, pattern: f.value });
+    else parts.push({ t: 'contains', field, value: f.value, neg: false });
+  }
+  // each part is wrapped in a paren node: an XQL condition may be an `or`, and the emitters only add
+  // parentheses where the XQL parser put them
+  return parts.length === 0 ? null : parts.length === 1 ? parts[0] : { t: 'and', args: parts.map((e) => ({ t: 'paren', e })) };
 }
 
-module.exports = { normalizeDefinition, buildMatch, GROUP_EXPR, RUN_EVERY, OPS };
+// The match spec for one rule: events inside its time frame that meet its conditions, grouped, with a
+// threshold. `now` (a Date, default: now) and `limit` are for the caller. Throws PlanError if the rule
+// cannot be expressed (too many or too long conditions).
+function buildRuleMatch(d, { now = new Date(), limit } = {}) {
+  const gb = d.group_by || 'none';
+  const group = isNamedGroup(gb) ? GROUPS[gb] : { by: 'field', field: '@' + gb.slice(6) };
+  const spec = {
+    after: new Date(now.getTime() - d.window_minutes * 60000).toISOString(),
+    filter: ruleFilter(d), group, threshold: d.threshold,
+  };
+  if (limit) spec.limit = limit;
+  return validateMatchSpec(spec);
+}
+
+module.exports = { normalizeDefinition, buildRuleMatch, ruleFilter, GROUPS, SOURCE_IP_PATTERN, RUN_EVERY, OPS };

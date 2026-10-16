@@ -29,6 +29,9 @@
 // Meaning that every engine must share (tests/xql-engines.test.js checks it):
 //   * a field is a column (_raw, raw, source_type, dataset, collector_id, _id, _insert_time, _time) or a
 //     path into parsed, split on dots (xdm.source.ipv4); a value is text, or missing (null)
+//   * "@path" (for example @xdm.source.ipv4 or @user-agent) is always a path into parsed, never a column, and
+//     may contain hyphens and start with a digit. XQL text cannot produce it; detection rules use it so a
+//     rule field called "dataset" or "_time" stays the parsed field the rule author meant
 //   * text comparison is exact; contains and ~= ignore case; ~= is an unanchored search
 //   * eq is null when the field is missing (so `not host = "a"` also drops events without host);
 //     ne, contains, in, regex and num never yield null (missing counts as no match)
@@ -38,6 +41,7 @@
 //   * sort puts missing values last; ties are in no defined order
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_.]{0,63}$/;
+const PARSED_PATH_RE = /^@[A-Za-z0-9_.-]{1,64}$/;
 const AGGS = ['count', 'count_distinct', 'sum', 'min', 'max', 'avg'];
 const MAX_LIMIT = 5000;
 const DEFAULT_LIMIT = 1000;
@@ -61,6 +65,7 @@ function validatePlan(plan) {
   if (!Number.isInteger(plan.limit) || plan.limit < 1 || plan.limit > MAX_LIMIT) bad(`plan.limit must be a whole number from 1 to ${MAX_LIMIT}`);
   if (!Array.isArray(plan.stages) || plan.stages.length > MAX_STAGES) bad(`plan.stages must be an array of at most ${MAX_STAGES}`);
   const ident = (v, what) => { if (typeof v !== 'string' || !IDENT_RE.test(v)) bad(`${what} is not a valid name`); };
+  const fieldId = (v) => { if (!(typeof v === 'string' && PARSED_PATH_RE.test(v))) ident(v, 'field'); };
   const text = (v, what) => { if (typeof v !== 'string' || v.length > MAX_TEXT || v.includes('\0')) bad(`${what} must be text of at most ${MAX_TEXT} characters`); };
   let nodes = 0;
   const expr = (e, depth) => {
@@ -71,21 +76,21 @@ function validatePlan(plan) {
         if (!Array.isArray(e.args) || !e.args.length) bad(`${e.t} needs arguments`);
         e.args.forEach((a) => expr(a, depth + 1)); break;
       case 'not': case 'paren': expr(e.e, depth + 1); break;
-      case 'eq': case 'ne': ident(e.field, 'field'); text(e.value, 'value'); break;
-      case 'isnull': ident(e.field, 'field'); break;
-      case 'contains': ident(e.field, 'field'); text(e.value, 'value'); break;
+      case 'eq': case 'ne': fieldId(e.field); text(e.value, 'value'); break;
+      case 'isnull': fieldId(e.field); break;
+      case 'contains': fieldId(e.field); text(e.value, 'value'); break;
       case 'in':
-        ident(e.field, 'field');
+        fieldId(e.field);
         if (!Array.isArray(e.values) || !e.values.length || e.values.length > 500) bad('in needs 1 to 500 values');
         e.values.forEach((v) => text(v, 'value')); break;
       case 'regex': {
-        ident(e.field, 'field'); text(e.pattern, 'pattern');
+        fieldId(e.field); text(e.pattern, 'pattern');
         const { assertSafeRegex } = require('../security/regex-safety');
         try { assertSafeRegex(e.pattern, { mode: 'pg' }); } catch (err) { bad(err.message); }
         break;
       }
       case 'num':
-        ident(e.field, 'field');
+        fieldId(e.field);
         if (!NUM_ARGS.includes(e.op)) bad('invalid number comparison');
         if (typeof e.value !== 'number' || !Number.isFinite(e.value)) bad('number expected');
         break;
@@ -146,6 +151,6 @@ function summarize(plan) {
   return out;
 }
 
-module.exports = {
+module.exports = { PARSED_PATH_RE, IDENT_RE,
   IDENT_RE, AGGS, MAX_LIMIT, DEFAULT_LIMIT, COLUMN_NAMES, PlanError, validatePlan, summarize,
 };

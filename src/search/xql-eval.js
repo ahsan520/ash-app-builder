@@ -52,7 +52,7 @@ function textOf(e, name) {
     case '_id': return e.id;
     case '_insert_time': return pgTimeText(e.received_at);
     case '_time': return pgTimeText(eventTime(e));
-    default: return pathText(e.parsed, name.split('.'));
+    default: return pathText(e.parsed, (name[0] === '@' ? name.slice(1) : name).split('.'));   // @path: explicit parsed path
   }
 }
 
@@ -152,4 +152,26 @@ function runPlan(plan, events) {
   return recs.slice(0, lim).map((r) => r.out);
 }
 
-module.exports = { runPlan, textOf, pgTimeText, pathText, COLUMN_NAMES };
+// Rule match spec (src/search/match-spec.js) over the envelopes of ONE tenant.
+function runMatch(spec, events) {
+  const cache = new Map(), after = Date.parse(spec.after);
+  const capture = spec.group.by === 'capture' ? new RegExp(spec.group.pattern, 's') : null;
+  const groups = new Map();
+  for (const e of events) {
+    if (!(Date.parse(eventTime(e)) > after)) continue;
+    if (spec.filter && evalExpr(spec.filter, e, cache) !== true) continue;
+    let key = 'all';
+    if (spec.group.by === 'field') key = textOf(e, spec.group.field);
+    else if (capture) { const m = capture.exec(clampSubject(e.raw)); key = m ? (m[1] !== undefined ? m[1] : m[0]) : null; if (key === '') key = null; }
+    if (key === null) key = 'unknown';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(e);
+  }
+  const newestFirst = (x, y) => Date.parse(eventTime(y)) - Date.parse(eventTime(x)) || (x.id < y.id ? 1 : x.id > y.id ? -1 : 0);
+  return [...groups].filter(([, evs]) => evs.length >= spec.threshold).map(([key, evs]) => {
+    const sorted = [...evs].sort(newestFirst), times = evs.map((e) => Date.parse(eventTime(e)));
+    return { key, n: evs.length, first_at: new Date(Math.min(...times)).toISOString(), last_at: new Date(Math.max(...times)).toISOString(), sample_ids: sorted.slice(0, 5).map((e) => e.id), sample_raw: sorted[0].raw };
+  }).sort((a, b) => b.n - a.n || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)).slice(0, spec.limit);
+}
+
+module.exports = { runPlan, runMatch, textOf, pgTimeText, pathText, COLUMN_NAMES };
