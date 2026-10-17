@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { db, guarded, apiError } = require('../shared');
+const { db, guarded, apiError, UUID_RE } = require('../shared');
+const { generateKey, hashKey, PLATFORMS: KEY_PLATFORMS } = require('../../ingest/http-ingest');
 const { getEventStore } = require('../../events');
 const view = require('../../brokers/broker-view');
 
@@ -25,6 +26,34 @@ router.get('/v1/brokers', ...guarded('collectors:read'), async (req, res) => {
   } catch (e) {
     console.error('Broker listing failed:', e.message);
     apiError(res, 500, 'BROKER_LIST_ERROR', 'Failed to list brokers');
+  }
+});
+
+// ---- Rotate a broker's installer key --------------------------------------------------------------
+// Makes a NEW installer key for this broker and returns it once, with the bootstrap command filled in. The old key is NOT
+// revoked here, so the broker keeps working until you re-run the bootstrap script with the new key; the heartbeat then
+// moves the broker to the new key (collectors.key_id), and the old key can be revoked on the Installers page (or by the
+// portal's "Revoke old key" button) with nothing left on it. Uses collectors:write; no schema or role change.
+router.post('/v1/brokers/:id/rotate-key', ...guarded('collectors:write'), async (req, res) => {
+  if (!UUID_RE.test(req.params.id)) return apiError(res, 400, 'INVALID_ID', 'Invalid broker id');
+  try {
+    const cur = (await db.withTenant(req.tenant_id, (client) => client.query(
+      `SELECT c.id, c.name, c.version, c.key_id, k.platform AS key_platform
+       FROM collectors c LEFT JOIN ingestion_keys k ON k.id = c.key_id WHERE c.id = $1 AND c.tenant_id = $2`, [req.params.id, req.tenant_id]))).rows[0];
+    if (!cur || !view.isBroker(cur)) return apiError(res, 404, 'NOT_FOUND', 'Broker not found');
+    const platform = KEY_PLATFORMS.includes(cur.key_platform) ? cur.key_platform : 'linux';
+    const name = view.rotatedName(cur.name);
+    const key = generateKey();
+    const r = await db.withTenant(req.tenant_id, (client) => client.query(
+      `INSERT INTO ingestion_keys (tenant_id, name, description, platform, key_prefix, key_hash, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, name, platform, key_prefix, created_at`,
+      [req.tenant_id, name, `Replacement key for broker ${cur.name}`.slice(0, 500), platform, key.slice(0, 12), hashKey(key), req.user_id || null]));
+    res.status(201).json({ success: true, key, installer: r.rows[0], broker: { id: cur.id, name: cur.name },
+      old_installer_id: cur.key_id || null, command: view.rotateCommand(cur.name, key) });
+  } catch (e) {
+    if (e.code === '23505') return apiError(res, 409, 'NAME_IN_USE', 'A key for this broker was just created; wait a minute and try again');
+    console.error('Broker key rotation failed:', e.message);
+    apiError(res, 500, 'BROKER_ROTATE_ERROR', 'Failed to create a new key');
   }
 });
 

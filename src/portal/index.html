@@ -1116,13 +1116,28 @@ async function pgParserPool() {
 }
 
 // ---- Brokers ---------------------------------------------------------------------------------
+// Rotate key: creates a new installer key for the broker (the old one keeps working), shows the key and the command once.
+// The old key is revoked only on the second button, after the broker has been re-bootstrapped with the new one.
+async function rotateBrokerKey(b) {
+  if (!confirm('Create a new installer key for ' + b.name + '?\nThe current key keeps working until you revoke it, so nothing is cut off yet.')) return;
+  let r; try { r = await api('/v1/brokers/' + b.id + '/rotate-key', { method: 'POST' }); } catch (e) { alert(e.message); return; }
+  const revoke = r.old_installer_id ? el('button', { className: 'btn', textContent: 'Revoke old key', onclick: async () => {
+    if (!confirm('Revoke the OLD key of ' + b.name + '?\nDo this only after you ran the command on the broker and it shows Connected again. A broker still on the old key is rejected immediately.')) return;
+    try { await api('/v1/ingestion-keys/' + r.old_installer_id + '/revoke', { method: 'POST' }); revoke.disabled = true; revoke.textContent = 'Old key revoked'; } catch (e) { alert(e.message); }
+  } }) : '';
+  const m = openModal(el('h2', { textContent: 'New key for ' + b.name }),
+    el('p', { className: 'warn', textContent: 'Copy the key or the command now: the key is shown only once. Run the command on the broker VM as root, in the same way as when it was installed. When the broker shows Connected again, revoke the old key.' }),
+    el('div', { className: 'mute', textContent: 'Ingestion key' }), el('div', { className: 'keybox', textContent: r.key }), el('div', { style: 'margin:8px 0 16px' }, copyBtn(() => r.key, 'Copy key')),
+    el('div', { className: 'mute', textContent: 'Command' }), el('pre', { style: 'white-space:pre-wrap', textContent: r.command }),
+    el('div', { className: 'actions' }, copyBtn(() => r.command, 'Copy command'), revoke, el('button', { className: 'btn pri', textContent: 'Done', onclick: () => { m.close(); route(); } })));
+}
 // Read-only: the broker VMs that report to this install (docs/broker-vm.md), and the command to add one.
 async function pgBrokers() {
   const r = await api('/v1/brokers'), s = r.summary;
   const ver = Object.entries(s.versions).map(([v, n]) => v + ' x' + n).join(', ');
   return [el('div', { style: 'display:flex;align-items:baseline;gap:12px;flex-wrap:wrap' }, el('h2', { textContent: 'Brokers' }), el('span', { className: 'mute', textContent: 'updated ' + when(r.generated_at) + ' UTC' }),
       el('button', { className: 'btn', style: 'margin-left:auto', textContent: 'Refresh', onclick: () => route() })),
-    el('p', { className: 'desc', textContent: 'Broker VMs that receive syslog and forward it to ASIX. A broker shows here once it has sent a heartbeat. Read-only: change a broker by re-running its bootstrap script. Turn on "Alert if down" for a broker on the Collectors page.' }),
+    el('p', { className: 'desc', textContent: 'Broker VMs that receive syslog and forward it to ASIX. A broker shows here once it has sent a heartbeat. Change a broker by re-running its bootstrap script; Rotate key makes a new key for one. Turn on "Alert if down" for a broker on the Collectors page.' }),
     el('div', { className: 'grid' },
       card('Brokers', el('div', { className: 'stat' }, String(s.total), el('small', { textContent: s.connected + ' connected, ' + s.disconnected + ' disconnected' }))),
       card('Events, last 24 hours', el('div', { className: 'stat' }, s.events_24h.toLocaleString(), el('small', { textContent: r.counts_error || 'through brokers' }))),
@@ -1135,6 +1150,7 @@ async function pgBrokers() {
       { h: 'Alert if down', f: (b) => pill(b.watch_disconnect ? 'On' : 'Off', b.watch_disconnect ? 'ok' : 'off') },
       { h: 'Installer', f: (b) => (b.installer ? b.installer.name + (b.installer.status === 'revoked' ? ' (revoked)' : '') : 'deleted') },
       { h: 'Needs attention', f: (b) => (b.problems.length ? el('span', { style: 'color:var(--bad,#c33)', textContent: b.problems.join(' ') }) : '') },
+      { h: '', f: (b) => el('button', { className: 'btn', textContent: 'Rotate key', onclick: () => rotateBrokerKey(b) }) },
     ], r.brokers, 'No brokers yet. Create an installer, then run the command below on the broker VM.')),
     el('h3', { style: 'margin-top:18px', textContent: 'Add a broker' }),
     card('', el('p', { className: 'desc', textContent: 'Create an installer first (Settings, Installers) and copy its key: it is shown once. Then on the new VM, as root:' }),

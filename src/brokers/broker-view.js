@@ -11,7 +11,7 @@ const isBroker = (row) => !!row && /^vector-/i.test(String(row.version || ''));
 function problemsOf(b, now = Date.now()) {
   const out = [];
   if (!b.installer) out.push('Its installer key was deleted. The broker cannot send until it has a new one.');
-  else if (b.installer.status === 'revoked') out.push('Its installer key is revoked, so ASIX rejects what it sends. Create a new installer and re-run the bootstrap script on the broker.');
+  else if (b.installer.status === 'revoked') out.push('Its installer key is revoked, so ASIX rejects what it sends. Press Rotate key for a new one and re-run the bootstrap script on the broker.');
   if (b.status === 'disconnected') {
     const ms = now - tsMs(b.last_seen);
     out.push(Number.isFinite(ms) ? `Not seen for ${Math.round(ms / 60000)} minutes (it counts as Connected within ${b.connected_within_min}). Check Vector on the broker: the heartbeat is not sent while Vector is unhealthy.` : 'Never seen.');
@@ -56,4 +56,19 @@ const installCommand = () => [
   '  --name <broker name>   # add --ca, or --tls-cert and --tls-key, as in docs/broker-vm.md',
 ].join('\n');
 
-module.exports = { BROKER_VERSION_SQL, isBroker, shape, summarize, problemsOf, installCommand };
+// Rotating a broker's key: a new installer key with a name that is unique per minute and says which broker it is for
+// (names must match the installers' rule: 1-100 chars of letters, digits, space . _ -).
+function rotatedName(brokerName, now = Date.now()) {
+  const stamp = new Date(now).toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');   // 20261017-2314
+  const base = String(brokerName || 'broker').replace(/[^A-Za-z0-9._-]/g, '-').replace(/^[^A-Za-z0-9]+/, '').slice(0, 70) || 'broker';
+  return `${base}-key-${stamp}`;
+}
+
+// The command for ONE broker with its new key filled in (the key is shown once, in the response that created it).
+const rotateCommand = (brokerName, key) => [
+  'sudo ./scripts/deploy/bootstrap-broker.sh \\',
+  `  --url https://<asix-host>/v1/ingest/http --key ${key} \\`,
+  `  --name ${brokerName}   # add --ca, or --tls-cert and --tls-key, exactly as when this broker was first installed`,
+].join('\n');
+
+module.exports = { BROKER_VERSION_SQL, isBroker, shape, summarize, problemsOf, installCommand, rotatedName, rotateCommand };

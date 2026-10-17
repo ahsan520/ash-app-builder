@@ -143,7 +143,13 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   version, events in the last 24 hours (from the event store; the page still loads if that fails), installer key state, and what needs attention (key revoked or deleted,
   not seen for N minutes). The top shows totals and whether Vector versions are mixed, and the page gives the `bootstrap-broker.sh` command for a new broker (key left as a
   placeholder). Checked on real PostgreSQL 16 (`tests/brokers-db.test.js`, CI `postgres` job) and in unit and route tests (`tests/brokers.test.js`); the page has not been seen in a browser.
-- Not built: changing a broker from the portal (config push, upgrades, capacity per broker), TLS on the in-cluster Node collector, certificate renewal,
+- **Rotate key (done):** the Brokers page has a **Rotate key** button per broker (`POST /v1/brokers/:id/rotate-key`, uses `collectors:write`, no schema or role change). It makes a
+  new installer key named `<broker>-key-<yyyymmdd-hhmm>` (platform copied from the old key, else linux) and returns it once with the bootstrap command filled in. **The old key is
+  not revoked**, so nothing is cut off: run the command on the broker, wait until its heartbeat arrives (it moves the broker's row to the new key by itself, which leaves the
+  old key with no collectors), then press **Revoke old key** in the dialog or revoke it on the Installers page. Only the key hash is stored. A broker whose key was revoked or
+  deleted can be rotated too. Checked on real PostgreSQL 16 (`tests/broker-rotate-key-db.test.js`, CI `postgres` job: both keys send a heartbeat, the broker moves to the new one,
+  the revoked old one is refused) and in unit and route tests (`tests/broker-rotate-key.test.js`). The button has not been seen in a browser; not tried on a real broker VM.
+- Not built: pushing the new key to the broker (re-running the bootstrap script is still by hand), changing a broker from the portal otherwise (config push, upgrades, capacity per broker), TLS on the in-cluster Node collector, certificate renewal,
   non-syslog sources on the broker, Kafka between broker and parser (Phase 3). The connected threshold is per collector now (see "Collector connected threshold" below), and
   a broker can raise an alert when it goes Disconnected (see "Collector disconnect alerts" below).
 
