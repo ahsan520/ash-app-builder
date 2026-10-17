@@ -57,9 +57,9 @@ Keycloak, nginx. Tight but it fits; do not also raise everything else.
    with the time from step 2: `... copy-events.js --from postgres --to clickhouse --since <that time>`. Events already there are skipped, so
    this is safe to repeat.
 5. **ClickHouse is backed up by the nightly job** (`docs/clickhouse-backup.md`): one encrypted file per day, incremental, test-restored about weekly,
-   restorable with `scripts/restore-backup.sh ch-restore`. Before relying on it, run `sudo scripts/restore-backup.sh ch-verify` once on the box (the
-   backup has not run there yet). PostgreSQL keeps its copy of the history (the copy tool deletes nothing), which is your fallback until you have seen
-   a ClickHouse backup and test restore succeed.
+   restorable with `scripts/restore-backup.sh ch-restore`. On the k3s box `ch-verify` and `ch-restore --as <table>` were run on 2026-10-17 and passed;
+   run `ch-verify` again after the first nightly job that follows a switch. PostgreSQL keeps its copy of the history (the copy tool deletes nothing),
+   which is your fallback until you have seen a ClickHouse backup and test restore succeed.
 6. Going back is the same one-line change, preceded by `copy-events.js --from clickhouse --to postgres` for what was written to ClickHouse in the meantime.
 - Everything that is not an event (rules, alerts, tenants, users, collectors, settings) stays in PostgreSQL and is unaffected by the switch.
   The IOC matcher keeps its place in PostgreSQL as an event time and id, so it carries on after a switch (from reading the code: events inside
@@ -102,7 +102,14 @@ Runs inside an API pod (they have both databases' settings; the tenant list come
 ## Checked on the k3s box: the copy tool (2026-10-17)
 - `copy-events.js --from postgres --to clickhouse --dry-run`: 1 tenant, read 2679, would copy 2679, already there 0.
 - The copy: read 2679, copied 2679, verified 2679 (each copy read back and compared). It printed a `--since` time to catch events written after the run.
-- `ASIX_EVENT_STORE` was still `postgres` afterwards. Not measured: speed and memory with large histories, and ClickHouse after a restart with events in it.
+- `ASIX_EVENT_STORE` was still `postgres` after this step (the switch is below). Not measured: speed and memory with large histories.
+
+## Switched on the k3s box (2026-10-17)
+- Catch-up copy before the switch (`--since` from the first copy): read 0. Setting changed to `"clickhouse"` in `k8s/30-asix-api.yaml`, deployed with `./sync-and-deploy.sh`: both API pods Running with 0 restarts, `printenv ASIX_EVENT_STORE` gave `clickhouse`, no `[events]` error in the log.
+- Catch-up copy after the switch: read 4, copied 4, verified 4 (events that reached PostgreSQL before the pods were replaced). Counts then matched: PostgreSQL 2683, ClickHouse 2683.
+- One syslog test line sent to the collector's NodePort (UDP 30514) appeared in ClickHouse (count 2684) and PostgreSQL stayed at 2683: new events go only to ClickHouse.
+- Restart test: `kubectl delete pod clickhouse-0`; the StatefulSet recreated it (`1/1 Running`, 0 restarts, a few seconds after the delete, so an immediate `kubectl wait` can say NotFound) and the count was still 2684.
+- Not checked: ClickHouse under real load, speed and memory with large histories, the first nightly backup after the switch.
 
 ## Not checked
 - Behaviour under real load: memory against the 2Gi limit while ingesting and searching, merges and disk growth.

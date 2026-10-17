@@ -220,6 +220,7 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
 | ClickHouse server in `k8s/` (StatefulSet, volume, password Secret) | Done, optional and not used until `ASIX_EVENT_STORE=clickhouse` (see below and `docs/clickhouse-server.md`) |
 | Copy existing events between PostgreSQL and ClickHouse | Done (see below and `docs/clickhouse-server.md`); run on the k3s box 2026-10-17 (2679 events, verified) |
 | ClickHouse backup and restore test | Done (see below and `docs/clickhouse-backup.md`); run on the k3s box 2026-10-17 (20 days backed up and verified, 2679 events restored into a new table) |
+| Live event store switched to ClickHouse on the k3s box | Done 2026-10-17 (`ASIX_EVENT_STORE=clickhouse`; catch-up copies, test event, restart of `clickhouse-0` with 2684 events intact); not yet seen under load |
 | Kafka between broker and parser; parser processes outside the API | Not started |
 | S3 archive, HA control-plane DB, multi-node capacity dashboard | Not started |
 
