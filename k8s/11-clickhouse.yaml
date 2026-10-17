@@ -1,0 +1,141 @@
+# ClickHouse server for the Enterprise data plane (Phase 3). OPTIONAL: deploy.sh applies this only when
+#   ASIX_DEPLOY_CLICKHOUSE=1 (or ./sync-and-deploy.sh --with-clickhouse) is given, and from then on on every deploy.
+#
+# Deploying it does NOT change where events go: the API keeps writing to PostgreSQL until ASIX_EVENT_STORE is set to
+# "clickhouse" in k8s/30-asix-api.yaml, and that switch does not copy existing events over (see docs/clickhouse-server.md).
+#
+#   * one pod, one volume, like PostgreSQL; reachable only inside the cluster as clickhouse:8123 (HTTP), no NodePort
+#   * database "asix" and user "asix" are created by the image from the variables below; the password is the secret
+#     clickhouse-secret, which deploy.sh creates once (hex, so it is safe inside ASIX_CLICKHOUSE_URL)
+#   * the API connects with ASIX_CLICKHOUSE_URL (k8s/30-asix-api.yaml) and creates its events table itself on start
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-config
+  namespace: asix-platform
+data:
+  asix.xml: |
+    <clickhouse>
+      <!-- Stay inside the pod's memory limit: ClickHouse reads the container limit and uses this share of it. -->
+      <max_server_memory_usage_to_ram_ratio>0.75</max_server_memory_usage_to_ram_ratio>
+      <mark_cache_size>268435456</mark_cache_size>
+      <uncompressed_cache_size>0</uncompressed_cache_size>
+      <!-- ClickHouse's own diagnostic tables can grow bigger than a Home VM's events. Keep the useful ones for 7 days, drop the rest. -->
+      <query_log>
+        <database>system</database><table>query_log</table>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+        <flush_interval_milliseconds>15000</flush_interval_milliseconds>
+      </query_log>
+      <part_log>
+        <database>system</database><table>part_log</table>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+        <flush_interval_milliseconds>15000</flush_interval_milliseconds>
+      </part_log>
+      <trace_log remove="1"/>
+      <text_log remove="1"/>
+      <metric_log remove="1"/>
+      <asynchronous_metric_log remove="1"/>
+      <query_thread_log remove="1"/>
+      <query_views_log remove="1"/>
+      <session_log remove="1"/>
+      <opentelemetry_span_log remove="1"/>
+      <processors_profile_log remove="1"/>
+      <asynchronous_insert_log remove="1"/>
+      <backup_log remove="1"/>
+      <blob_storage_log remove="1"/>
+      <s3queue_log remove="1"/>
+      <error_log remove="1"/>
+    </clickhouse>
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickhouse
+  namespace: asix-platform
+spec:
+  serviceName: clickhouse
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clickhouse
+  template:
+    metadata:
+      labels:
+        app: clickhouse
+    spec:
+      terminationGracePeriodSeconds: 60     # time to flush in-memory parts and stop cleanly
+      containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:24.8     # the version CI tests against (.github/workflows/ci.yml)
+          ports:
+            - containerPort: 8123
+              name: http
+          env:
+            - name: CLICKHOUSE_DB
+              value: "asix"
+            - name: CLICKHOUSE_USER
+              value: "asix"
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: clickhouse-secret
+                  key: CLICKHOUSE_PASSWORD
+            - name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT
+              value: "1"
+          volumeMounts:
+            - name: clickhouse-data
+              mountPath: /var/lib/clickhouse
+            - name: clickhouse-config
+              mountPath: /etc/clickhouse-server/config.d/asix.xml
+              subPath: asix.xml
+              readOnly: true
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          startupProbe:                      # first start creates the database and user; a restart replays parts
+            httpGet:
+              path: /ping
+              port: 8123
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 8123
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: 8123
+            periodSeconds: 20
+            failureThreshold: 6
+      volumes:
+        - name: clickhouse-config
+          configMap:
+            name: clickhouse-config
+  volumeClaimTemplates:
+    - metadata:
+        name: clickhouse-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  namespace: asix-platform
+spec:
+  selector:
+    app: clickhouse
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+  clusterIP: None

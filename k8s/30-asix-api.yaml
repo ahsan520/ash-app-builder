@@ -64,6 +64,19 @@ spec:
               value: "0"
             - name: ASIX_PARSER_TIMEOUT_MS
               value: "5000"
+            # Event store (src/events): "postgres" (default) or "clickhouse". Switching does NOT copy existing events, and the
+            # nightly backup covers PostgreSQL only: read docs/clickhouse-server.md before changing it. The ClickHouse server
+            # itself is k8s/11-clickhouse.yaml (deploy.sh --with-clickhouse); without it, "clickhouse" here stops the API at start.
+            - name: ASIX_EVENT_STORE
+              value: "postgres"
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: clickhouse-secret
+                  key: CLICKHOUSE_PASSWORD
+                  optional: true
+            - name: ASIX_CLICKHOUSE_URL
+              value: "http://asix:$(CLICKHOUSE_PASSWORD)@clickhouse:8123/asix"
           resources:
             requests:
               cpu: "250m"
