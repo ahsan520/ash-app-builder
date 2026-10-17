@@ -364,6 +364,31 @@ class ClickHouseEventStore extends EventStore {
     return { deleted, by_source, truncated };
   }
 
+  // One partition per UTC day (PARTITION BY toYYYYMMDD(received_at)), read from system.parts. Row counts include rows that
+  // lightweight deletes have hidden but a merge has not yet removed, so they can run a little high after a purge.
+  async _storageStats() {
+    const parts = await this._rows(
+      `SELECT partition AS p, sum(rows) AS rows, sum(bytes_on_disk) AS bytes FROM system.parts
+       WHERE database = {d:String} AND table = {tb:String} AND active GROUP BY partition ORDER BY partition DESC`,
+      { params: { d: this.conn.database, tb: this._table } });
+    const partitions = parts.filter((r) => /^\d{8}$/.test(String(r.p))).map((r) => {
+      const day = `${String(r.p).slice(0, 4)}-${String(r.p).slice(4, 6)}-${String(r.p).slice(6, 8)}`;
+      return { name: String(r.p), from: day, to: new Date(Date.parse(`${day}T00:00:00Z`) + 86400000).toISOString().slice(0, 10), rows: Number(r.rows), bytes: Number(r.bytes) };
+    });
+    return { partitioned: true, events_rows: partitions.reduce((n, p) => n + p.rows, 0), events_bytes: partitions.reduce((n, p) => n + p.bytes, 0), default_partition_rows: 0, partitions };
+  }
+
+  // ALTER TABLE ... DROP PARTITION ID per day, oldest first. ClickHouse refuses to drop a partition above its
+  // max_partition_size_to_drop (50 GB by default, a server setting); that one lands in `failed` and the next days still go.
+  async _dropPartitionsBefore(day) {
+    const dropped = []; const failed = [];
+    const { partitions } = await this._storageStats();
+    for (const p of partitions.filter((x) => x.to <= day).sort((a, b) => (a.from < b.from ? -1 : 1))) {
+      try { await this._exec(`ALTER TABLE ${this._table} DROP PARTITION ID '${p.name}'`); dropped.push(p.name); } catch (e) { failed.push({ name: p.name, error: e.message }); }
+    }
+    return { dropped, failed };
+  }
+
   // Counts per collector / source type / UTC day. The key expression comes from a fixed list; the column is a
   // DateTime64 in UTC, so toDate() is the UTC day. Aliases (k, n, lo, hi) are chosen not to shadow a column.
   async _groupCounts(tenant, { by, since, until, limit }) {

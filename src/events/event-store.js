@@ -25,6 +25,8 @@
 //   ingestionStats(tenantId, { by?, now?, groups? }) -> { totals, hourly, groups }   (the Command Center numbers)
 //   expiredCounts(tenantId, policy, { now? }) -> [{ source_type, events, oldest }]   (what a purge would delete, read-only)
 //   deleteExpired(tenantId, policy, { now?, deadline?, batch? }) -> { deleted, by_source, truncated }   (the retention purge)
+//   storageStats() -> { partitioned, events_rows, events_bytes, default_partition_rows, partitions }   (all tenants; the storage page)
+//   dropPartitionsBefore(day) -> { dropped, failed }   (all tenants; drops whole UTC days older than `day`: housekeeping, see below)
 //
 // Order is always (received_at, id). `since` is inclusive, `until` exclusive, both on received_at.
 // Cursors (`next` / `after`) are opaque and only valid with the adapter that produced them.
@@ -385,6 +387,31 @@ class EventStore {
     return { ...r, deleted: Number(r.deleted), by_source: r.by_source || {}, truncated: !!r.truncated };
   }
 
+  // How the events are laid out on disk, for all tenants together (the storage page): { partitioned, events_rows, events_bytes,
+  // default_partition_rows, partitions: [{ name, from, to, rows, bytes }] }. `partitions` are whole UTC days, newest first,
+  // `from` the day (YYYY-MM-DD) and `to` the next day (exclusive). `partitioned` is false for an engine or table that is not
+  // split by day (then `partitions` is empty). `default_partition_rows` counts events outside any daily partition (PostgreSQL's
+  // events_default). Row counts are estimates where the engine only keeps estimates (ClickHouse counts rows of data parts that
+  // lightweight deletes have not yet merged away; PostgreSQL uses statistics until a partition is analysed).
+  async storageStats() {
+    const r = await this._storageStats();
+    return { partitioned: !!r.partitioned, events_rows: Number(r.events_rows), events_bytes: Number(r.events_bytes),
+      default_partition_rows: Number(r.default_partition_rows || 0), partitions: r.partitions || [] };
+  }
+
+  // Drops every whole daily partition whose last day is before `day` (YYYY-MM-DD, UTC; a partition for day D goes when D < day),
+  // for ALL tenants at once, which is why the caller (src/storage/retention.js) only calls it once no tenant can still need those
+  // days. It is the cheap way to expire old data (no row is read or rewritten). Never touches events newer than `day` and never the
+  // catch-all partition. Returns { dropped: [partition names, oldest first], failed: [{ name, error }] }; a partition that cannot be dropped
+  // does not stop the others. Adapters may add `reason` (why nothing was dropped). Tenants' per-source rules still need deleteExpired().
+  async dropPartitionsBefore(day) {
+    if (typeof day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day) || new Date(`${day}T00:00:00Z`).toISOString().slice(0, 10) !== day) {
+      throw new EventStoreError('INVALID_QUERY', 'day must be a calendar date, YYYY-MM-DD');
+    }
+    const r = await this._dropPartitionsBefore(day);
+    return { ...r, dropped: r.dropped || [], failed: r.failed || [] };
+  }
+
   async close() { /* adapters that own connections override this */ }
 
   // ---- adapter hooks (input is already validated and normalised) -----------------------------
@@ -406,6 +433,8 @@ class EventStore {
   // _xdmSamples(tenant, { limit }) -> object[]     the xdm object of the newest `limit` events whose parsed.xdm is an object (same order)
   // _expiredCounts(tenant, policy, { now }) -> [{ source_type, events, oldest }]   policy is normalised; oldest is an ISO time
   // _deleteExpired(tenant, policy, { now, deadline, batch }) -> { deleted, by_source, truncated }   deadline is epoch ms or null
+  // _storageStats() -> { partitioned, events_rows, events_bytes, default_partition_rows?, partitions? }   see storageStats()
+  // _dropPartitionsBefore(day) -> { dropped, failed, reason? }   day is a valid YYYY-MM-DD
   async _insert(tenant, envelopes, opts) { throw new EventStoreError('NOT_IMPLEMENTED', 'insertBatch'); }
   async _getByIds(tenant, ids) { throw new EventStoreError('NOT_IMPLEMENTED', 'getByIds'); }
   async _scan(tenant, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'scan'); }
@@ -423,6 +452,8 @@ class EventStore {
   async _xdmSamples(tenant, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'fieldStats'); }
   async _expiredCounts(tenant, policy, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'expiredCounts'); }
   async _deleteExpired(tenant, policy, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'deleteExpired'); }
+  async _storageStats() { throw new EventStoreError('NOT_IMPLEMENTED', 'storageStats'); }
+  async _dropPartitionsBefore(day) { throw new EventStoreError('NOT_IMPLEMENTED', 'dropPartitionsBefore'); }
 }
 
 module.exports = { EventStore, EventStoreError, daysFor, shortestDays, cutoffIso, DAY_MS, MAX_BATCH, MAX_SCAN, DEFAULT_SCAN, MAX_IDS, MAX_SOURCE_TYPES, MAX_GROUPS, GROUP_BY, encodeCursor, decodeCursor };

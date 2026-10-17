@@ -9,15 +9,16 @@
 //      - the event store deletes rows past their own retention (getEventStore().deleteExpired(): batched
 //        DELETEs on PostgreSQL, per-source DELETEs on ClickHouse; needed for per-source rules)
 //      - DROP of a whole daily partition once it is older than EVERY tenant's longest
-//        retention (PostgreSQL only: instant, and the only way disk is returned to the OS immediately)
+//        retention (getEventStore().dropPartitionsBefore(): instant, and the only way disk is returned to the OS
+//        immediately; the rule for WHEN it is safe lives here, the dropping is the engine's)
 //  * "What would a purge delete" (preview) also asks the event store (expiredCounts()).
-//  * Partition housekeeping and the storage summary are PostgreSQL's own business and stay here; they are skipped
-//    when ASIX_EVENT_STORE is not postgres.
+//  * The storage summary's events numbers come from the store (storageStats()). Only creating PostgreSQL's daily
+//    partitions ahead of time (ensurePartitions) is Postgres-only; it is skipped when ASIX_EVENT_STORE is not postgres.
 //  * Everything runs under one advisory lock, so API replicas never purge concurrently.
 
 const db = require('../db');
 const { getEventStore } = require('../events');
-const { PART_RE, eventsKind, listPartitions } = require('../events/pg-partitions');
+const { eventsKind, listPartitions } = require('../events/pg-partitions');
 
 const LOCK_KEY = 7412004;
 const DEFAULT_DAYS = Math.min(Math.max(parseInt(process.env.RETENTION_DEFAULT_DAYS, 10) || 90, 1), 3650);
@@ -28,7 +29,7 @@ const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const nextDay = (day) => new Date(Date.parse(day + 'T00:00:00Z') + 86400000).toISOString().slice(0, 10);
 const partName = (day) => 'events_p' + day.replace(/-/g, '');
 
-// ---------------------------------------------------------------- partitions (PostgreSQL only)
+// ---------------------------------------------------------------- creating partitions (PostgreSQL only)
 // eventsKind() and listPartitions() live in src/events/pg-partitions.js (the Postgres adapter needs them too).
 const usesPostgres = () => getEventStore().name === 'postgres';
 
@@ -103,8 +104,6 @@ async function purgeTenant(tenantId, { deadline = Date.now() + MAX_RUN_MS } = {}
 // Only when EVERY tenant has automatic purge on and no "keep forever" rule: then a partition
 // whose newest possible event is older than the longest retention contains nothing to keep.
 async function dropExpiredPartitions() {
-  if (!usesPostgres()) return { dropped: [], reason: 'events are not stored in PostgreSQL' };
-  if ((await eventsKind(db)) !== 'p') return { dropped: [], reason: 'events table is not partitioned' };
   let maxDays = 0;
   for (const t of (await db.query('SELECT id FROM tenants')).rows) {
     const pol = await loadPolicy(db, t.id);
@@ -113,14 +112,9 @@ async function dropExpiredPartitions() {
     maxDays = Math.max(maxDays, pol.default_days, ...pol.overrides.map((o) => o.retention_days));
   }
   if (!maxDays) return { dropped: [], reason: 'no tenants' };
-  const cutoff = (await db.query("SELECT to_char(localtimestamp - ($1::int * interval '1 day'), 'YYYY-MM-DD') AS d", [maxDays])).rows[0].d;
-  const dropped = [];
-  for (const p of await listPartitions(db)) {
-    if (p.is_default || !p.to || !PART_RE.test(p.name) || p.to > cutoff) continue;
-    await db.query(`DROP TABLE ${p.name}`);
-    dropped.push(p.name);
-  }
-  return { dropped, max_retention_days: maxDays, cutoff };
+  const cutoff = new Date(Date.now() - maxDays * 86400000).toISOString().slice(0, 10);       // UTC day
+  const r = await getEventStore().dropPartitionsBefore(cutoff);                              // the engine drops its own partitions
+  return { ...r, max_retention_days: maxDays, cutoff };
 }
 
 // ---------------------------------------------------------------- runs
@@ -166,7 +160,9 @@ async function runScheduled() {
     try {
       const d = await dropExpiredPartitions();
       out.dropped = d.dropped;
-      if (d.dropped.length) await finishRun(id, 'completed', { partitions_dropped: d.dropped.length, detail: d });
+      if (d.failed && d.failed.length) { out.errors += 1; out.failed = d.failed; console.error('[retention] partitions not dropped:', JSON.stringify(d.failed)); }
+      if (d.failed && d.failed.length) await finishRun(id, d.dropped.length ? 'partial' : 'failed', { partitions_dropped: d.dropped.length, detail: d, error: `could not drop: ${d.failed.map((f) => f.name).join(', ')}` });
+      else if (d.dropped.length) await finishRun(id, 'completed', { partitions_dropped: d.dropped.length, detail: d });
       else await db.query('DELETE FROM retention_runs WHERE id = $1', [id]);          // nothing happened: keep the history quiet
     } catch (e) { out.errors += 1; await finishRun(id, 'failed', { error: e.message }); console.error('[retention] partition drop failed:', e.message); }
     return out;
@@ -184,26 +180,16 @@ async function dailyCounts(tenantId, days) {
 
 // ---------------------------------------------------------------- storage summary (read-only)
 async function summary(tenantId) {
-  const kind = await eventsKind(db);
-  const partitions = kind === 'p' ? await listPartitions(db) : [];
-  const out = { partitioned: kind === 'p', database_bytes: Number((await db.query('SELECT pg_database_size(current_database()) AS b')).rows[0].b) };
+  const stats = await getEventStore().storageStats();                // the events: layout, sizes, rows (any engine)
+  const out = { partitioned: stats.partitioned, database_bytes: Number((await db.query('SELECT pg_database_size(current_database()) AS b')).rows[0].b) };
   const range = await getEventStore().timeRange(tenantId);
   out.oldest = range.oldest; out.newest = range.newest;
-  const rows = [];
-  for (const p of partitions) {                                     // estimates are -1/0 until autovacuum has analysed a new partition
-    let n = p.est_rows;
-    if ((n <= 0) && p.heap_bytes < 256 * 1048576) n = Number((await db.query(`SELECT COUNT(*)::bigint AS n FROM ${p.name}`)).rows[0].n);
-    rows.push({ ...p, rows: Math.max(n, 0) });
-  }
-  out.partitions = rows.filter((p) => !p.is_default).sort((a, b) => (a.from < b.from ? 1 : -1));
-  const def = rows.find((p) => p.is_default); out.default_partition_rows = def ? def.rows : 0;
-  out.events_bytes = rows.reduce((a, p) => a + p.bytes, 0);
-  if (kind !== 'p') {
-    out.events_bytes = Number((await db.query("SELECT pg_total_relation_size('public.events') AS b")).rows[0].b);
-    out.events_rows = Number((await db.query('SELECT COUNT(*)::bigint AS n FROM events')).rows[0].n);
-  } else out.events_rows = rows.reduce((a, p) => a + p.rows, 0);
+  out.partitions = stats.partitions;
+  out.default_partition_rows = stats.default_partition_rows;
+  out.events_bytes = stats.events_bytes;
+  out.events_rows = stats.events_rows;
   out.daily = await dailyCounts(tenantId, 14);
-  out.tables = (await db.query(
+  out.tables = (await db.query(                                      // the control-plane database (PostgreSQL), whatever the events engine
     `SELECT CASE WHEN c.relispartition THEN 'events (all partitions)' ELSE c.relname END AS name, SUM(pg_total_relation_size(c.oid))::bigint AS bytes
      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
      WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND NOT (c.relkind = 'p' AND c.relname = 'events')

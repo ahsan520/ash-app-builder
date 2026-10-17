@@ -284,6 +284,35 @@ class PostgresEventStore extends EventStore {
     return { deleted, by_source, truncated, partitions_scanned: targets.length };
   }
 
+  // The layout of `events`: daily partitions (k8s/12-schema-init.yaml) or one plain table.
+  async _storageStats() {
+    if ((await eventsKind(this.db)) !== 'p') {
+      const bytes = Number((await this.db.query("SELECT pg_total_relation_size('public.events') AS b")).rows[0].b);
+      const n = Number((await this.db.query('SELECT COUNT(*)::bigint AS n FROM events')).rows[0].n);
+      return { partitioned: false, events_rows: n, events_bytes: bytes, default_partition_rows: 0, partitions: [] };
+    }
+    const rows = [];
+    for (const p of await listPartitions(this.db)) {                // estimates are -1/0 until autovacuum has analysed a new partition
+      let n = p.est_rows;
+      if (n <= 0 && p.heap_bytes < 256 * 1048576 && (p.is_default || PART_RE.test(p.name))) n = Number((await this.db.query(`SELECT COUNT(*)::bigint AS n FROM ${p.name}`)).rows[0].n);
+      rows.push({ ...p, rows: Math.max(n, 0) });
+    }
+    const def = rows.find((p) => p.is_default);
+    return { partitioned: true, events_rows: rows.reduce((a, p) => a + p.rows, 0), events_bytes: rows.reduce((a, p) => a + p.bytes, 0),
+      default_partition_rows: def ? def.rows : 0, partitions: rows.filter((p) => !p.is_default).sort((a, b) => (a.from < b.from ? 1 : -1)) };
+  }
+
+  // DROP TABLE on each daily partition whose range ends on or before `day`. events_default is never dropped.
+  async _dropPartitionsBefore(day) {
+    if ((await eventsKind(this.db)) !== 'p') return { dropped: [], failed: [], reason: 'events table is not partitioned' };
+    const dropped = []; const failed = [];
+    for (const p of await listPartitions(this.db)) {
+      if (p.is_default || !p.to || !PART_RE.test(p.name) || p.to > day) continue;
+      try { await this.db.query(`DROP TABLE ${p.name}`); dropped.push(p.name); } catch (e) { failed.push({ name: p.name, error: e.message }); }
+    }
+    return { dropped, failed };
+  }
+
   // An XQL plan becomes SQL here (src/search/xql-postgres.js: every value is a bound parameter, the tenant is $1).
   async _search(tenant, plan, opts) {
     const q = toSql(plan, tenant);

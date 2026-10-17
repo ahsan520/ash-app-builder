@@ -10,6 +10,8 @@ const { runPlan, runMatch } = require('../search/xql-eval');
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const clone = (v) => structuredClone(v);
 
+const nextDay = (day) => new Date(Date.parse(`${day}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+
 class MemoryEventStore extends EventStore {
   constructor() { super(); this.tenants = new Map(); }
   get name() { return 'memory'; }
@@ -166,6 +168,29 @@ class MemoryEventStore extends EventStore {
     const deleted = rows.length - keep.length;
     this.tenants.set(tenant, keep);
     return { deleted };
+  }
+
+  // The memory store has no partitions on disk; it reports one per UTC day so the same tests and pages work.
+  async _storageStats() {
+    const by = new Map();
+    for (const rows of this.tenants.values()) {
+      for (const e of rows) {
+        const g = by.get(e.received_at.slice(0, 10)) || { rows: 0, bytes: 0 };
+        g.rows += 1; g.bytes += e.raw.length + JSON.stringify(e.parsed).length;
+        by.set(e.received_at.slice(0, 10), g);
+      }
+    }
+    const partitions = [...by.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1)).map(([from, g]) => ({ name: from.replace(/-/g, ''), from, to: nextDay(from), rows: g.rows, bytes: g.bytes }));
+    return { partitioned: true, events_rows: partitions.reduce((n, p) => n + p.rows, 0), events_bytes: partitions.reduce((n, p) => n + p.bytes, 0), default_partition_rows: 0, partitions };
+  }
+
+  async _dropPartitionsBefore(day) {
+    const gone = new Set();
+    for (const [tenant, rows] of this.tenants) {
+      const keep = rows.filter((e) => { const d = e.received_at.slice(0, 10); if (d < day) { gone.add(d); return false; } return true; });
+      this.tenants.set(tenant, keep);
+    }
+    return { dropped: [...gone].sort().map((d) => d.replace(/-/g, '')), failed: [] };
   }
 
   // Events whose received_at is older than now minus the days that apply to their source type.
