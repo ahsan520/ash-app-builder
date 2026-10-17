@@ -14,8 +14,7 @@
 const crypto = require('crypto');
 const express = require('express');
 const db = require('../db');
-const parsingRules = require('../ingestion/parsing-rules');
-const rulesStore = require('../ingestion/rules-store');
+const parseService = require('../ingestion/parse-service');
 const { getEventStore } = require('../events');
 
 const KEY_PREFIX = 'asix_ik_';
@@ -138,22 +137,22 @@ router.post(
     const ip = clientIp(req);
     for (const it of items) Object.assign(it.parsed, { transport: 'http', remote_address: ip, collector_id: collector });
 
-    // Parsing rules (user-defined first, then built-in defaults). A rule can enrich fields, set the
-    // event time, move the event to another dataset, or drop it. Errors here never block ingestion.
+    // Parsing rules (user-defined first, then built-in defaults) and the data model pass, inline or on the parser
+    // workers (ASIX_PARSER_WORKERS, see src/ingestion/parse-service.js). A rule can enrich fields, set the event time,
+    // move the event to another dataset, or drop it. A parsing failure never loses events: they are stored unparsed,
+    // with parsed._parse_error saying why when a worker timed out or crashed. Only a full worker queue is refused (503).
     let kept = items, dropped = 0;
     try {
-      const sets = await rulesStore.getActiveSets(key.tenant_id);
-      const modelSets = await rulesStore.getModelSets(key.tenant_id);
-      kept = [];
-      for (const it of items) {
-        const o = parsingRules.apply(sets, { source_type: sourceType, raw: it.raw, time: it.time, parsed: it.parsed });
-        if (o.dropped) { dropped++; continue; }
-        // Data model pass: maps the parsed fields onto XDM (parsed.xdm.*). It never throws.
-        const mo = parsingRules.applyModel(modelSets, { source_type: o.source_type, raw: it.raw, time: o.time, parsed: o.parsed });
-        if (mo.xdm) o.parsed.xdm = mo.xdm;
-        kept.push({ raw: it.raw, time: o.time, parsed: o.parsed, source_type: o.source_type });
+      ({ kept, dropped } = await parseService.parseForIngest(key.tenant_id, sourceType, items));
+    } catch (e) {
+      if (e && e.code === 'PARSER_BUSY') {
+        res.set('Retry-After', '2');
+        return err(res, 503, 'INGEST_BUSY', 'Parsing is busy, retry shortly');
       }
-    } catch (e) { console.error('Parsing rules failed, ingesting unparsed:', e.message); kept = items; dropped = 0; }
+      console.error('Parsing rules failed, ingesting unparsed:', e.message);
+      kept = items; dropped = 0;
+      if (e && parseService.STORE_UNPARSED.has(e.code)) for (const it of kept) it.parsed._parse_error = e.code;
+    }
 
     try {
       await db.withTenant(key.tenant_id, async (client) => {

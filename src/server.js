@@ -7,6 +7,7 @@ async function main() {
   // so the platform restarts it and the failure is visible, instead of an API that accepts requests it cannot store.
   try { await getEventStore().init(); }
   catch (e) { console.error('[events] the event store could not be initialised: ' + e.message); process.exit(1); }
+  require('./ingestion/parser-pool').getParserPool(); // starts the parser workers now if ASIX_PARSER_WORKERS is set (logs one line)
   server = app.listen(port, '0.0.0.0', () => {
     console.log('ASIX API listening on port ' + port);
     require('./detection/rule-runner').start();
@@ -19,6 +20,7 @@ async function main() {
 main();
 async function shutdown(signal) {
   console.log(signal + ' received, shutting down');
+  await require('./ingestion/parser-pool').closeParserPool().catch(() => {});
   if (server) server.close(() => process.exit(0)); else process.exit(0);
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
