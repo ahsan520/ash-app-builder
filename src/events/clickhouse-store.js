@@ -20,7 +20,7 @@
 // they get here and are the only values written into the SQL text. Free-text filters (source_type,
 // collector_id) and every cursor value go through ClickHouse query parameters, never string splicing.
 
-const { EventStore, EventStoreError } = require('./event-store');
+const { EventStore, EventStoreError, daysFor, shortestDays, cutoffIso, MAX_GROUPS } = require('./event-store');
 const { ENVELOPE_VERSION, UUID_RE } = require('./envelope');
 const { toClickHouse, matchToClickHouse } = require('../search/xql-clickhouse');
 
@@ -306,6 +306,62 @@ class ClickHouseEventStore extends EventStore {
         { params, settings: { lightweight_deletes_sync: 2 } });
     }
     return { deleted };
+  }
+
+  // Retention. The policy differs per source type, so these work source type by source type with scalar query parameters
+  // (no array parameters to escape): first the source types that have anything older than the shortest retention (and the
+  // oldest event of each), then one count per source type that really has expired events against its own cut-off.
+  // At most MAX_GROUPS (1,000) source types are looked at in one call; deleteExpired says `truncated` if there were more.
+  async _expiredCandidates(tenant, policy, nowMs) {
+    return this._rows(
+      `SELECT source_type, min(received_at) AS lo FROM ${this._table} FINAL
+       WHERE tenant_id = {t:UUID} AND received_at < {c:DateTime64(3, 'UTC')} GROUP BY source_type ORDER BY source_type LIMIT ${MAX_GROUPS}`,
+      { params: { t: tenant, c: chTime(cutoffIso(nowMs, shortestDays(policy))) } });
+  }
+
+  // Count of one source type's events older than `cutoff` (ISO), with the oldest one.
+  async _expiredOf(tenant, sourceType, cutoff) {
+    const rows = await this._rows(
+      `SELECT count() AS n, min(received_at) AS lo FROM ${this._table} FINAL
+       WHERE tenant_id = {t:UUID} AND source_type = {s:String} AND received_at < {c:DateTime64(3, 'UTC')}`,
+      { params: { t: tenant, s: sourceType, c: chTime(cutoff) } });
+    return { n: Number(rows[0] ? rows[0].n : 0), oldest: rows[0] && Number(rows[0].n) ? isoTime(rows[0].lo) : null };
+  }
+
+  async _expiredCounts(tenant, policy, { now }) {
+    const nowMs = Date.parse(now);
+    const out = [];
+    for (const c of await this._expiredCandidates(tenant, policy, nowMs)) {
+      const days = daysFor(policy, c.source_type);
+      if (days === null) continue;
+      const cutoff = cutoffIso(nowMs, days);
+      if (!(Date.parse(isoTime(c.lo)) < Date.parse(cutoff))) continue;
+      const r = await this._expiredOf(tenant, c.source_type, cutoff);
+      if (r.n) out.push({ source_type: c.source_type, events: r.n, oldest: r.oldest });
+    }
+    return out;
+  }
+
+  // One lightweight DELETE per source type that has expired events (it completes before it returns, as in _deleteBefore),
+  // after counting them for the report. Whole-partition DROP / table TTL are the cheaper path for big tables and are not used yet.
+  async _deleteExpired(tenant, policy, { now, deadline }) {
+    const nowMs = Date.parse(now);
+    const candidates = await this._expiredCandidates(tenant, policy, nowMs);
+    const by_source = {}; let deleted = 0; let truncated = candidates.length >= MAX_GROUPS;
+    for (const c of candidates) {
+      const days = daysFor(policy, c.source_type);
+      if (days === null) continue;
+      const cutoff = cutoffIso(nowMs, days);
+      if (!(Date.parse(isoTime(c.lo)) < Date.parse(cutoff))) continue;
+      if (deadline !== null && Date.now() > deadline) { truncated = true; break; }
+      const { n } = await this._expiredOf(tenant, c.source_type, cutoff);
+      if (!n) continue;
+      await this._exec(
+        `DELETE FROM ${this._table} WHERE tenant_id = {t:UUID} AND source_type = {s:String} AND received_at < {c:DateTime64(3, 'UTC')}`,
+        { params: { t: tenant, s: c.source_type, c: chTime(cutoff) }, settings: { lightweight_deletes_sync: 2 } });
+      by_source[c.source_type] = n; deleted += n;
+    }
+    return { deleted, by_source, truncated };
   }
 
   // Counts per collector / source type / UTC day. The key expression comes from a fixed list; the column is a

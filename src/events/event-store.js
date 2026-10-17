@@ -23,6 +23,8 @@
 //   listEvents(tenantId, { source_type?, collector_id?, from?, to?, q?, limit?, offset? }) -> envelope[]   (newest event time first, offset paging)
 //   dataSources(tenantId, { recentSince? }) -> [{ source_type, collector_id, events_total, events_recent, last_received }]
 //   ingestionStats(tenantId, { by?, now?, groups? }) -> { totals, hourly, groups }   (the Command Center numbers)
+//   expiredCounts(tenantId, policy, { now? }) -> [{ source_type, events, oldest }]   (what a purge would delete, read-only)
+//   deleteExpired(tenantId, policy, { now?, deadline?, batch? }) -> { deleted, by_source, truncated }   (the retention purge)
 //
 // Order is always (received_at, id). `since` is inclusive, `until` exclusive, both on received_at.
 // Cursors (`next` / `after`) are opaque and only valid with the adapter that produced them.
@@ -49,6 +51,9 @@ const XDM_SAMPLE = { def: 500, max: 5000 };
 const MAX_FIELD_NAMES = 200;
 const MAX_XDM_NAMES = 500;
 const MAX_XDM_DEPTH = 20;
+const DAY_MS = 86400000;
+const RETENTION_DAYS = { min: 1, max: 3650 };
+const PURGE_BATCH = { def: 10000, max: 100000 };
 
 class EventStoreError extends Error {
   constructor(code, message) {
@@ -111,6 +116,45 @@ function leafPaths(o, prefix, depth = 0, out = []) {
   }
   return out;
 }
+
+// --- retention policy: { default_days, overrides: [{ source_type, retention_days | null }] } --------------------
+// An event is expired when received_at is older than `now` minus the days that apply to its source type: the
+// override's days when the source type has one (null = keep forever), else default_days. Sources with no override
+// follow the default, so "keep forever" is only ever written as an explicit override.
+function normalizePolicy(p) {
+  if (p === null || typeof p !== 'object' || Array.isArray(p)) throw new EventStoreError('INVALID_QUERY', 'policy must be an object');
+  const days = (v, what) => {
+    if (!Number.isInteger(v) || v < RETENTION_DAYS.min || v > RETENTION_DAYS.max) {
+      throw new EventStoreError('INVALID_QUERY', `${what} must be a whole number from ${RETENTION_DAYS.min} to ${RETENTION_DAYS.max}`);
+    }
+    return v;
+  };
+  const default_days = days(p.default_days, 'default_days');
+  const list = p.overrides === undefined || p.overrides === null ? [] : p.overrides;
+  if (!Array.isArray(list) || list.length > MAX_GROUPS) throw new EventStoreError('INVALID_QUERY', `overrides must be a list of at most ${MAX_GROUPS} entries`);
+  const seen = new Set();
+  const overrides = list.map((o) => {
+    if (o === null || typeof o !== 'object' || typeof o.source_type !== 'string' || !o.source_type || o.source_type.length > 255 || o.source_type.includes('\0')) {
+      throw new EventStoreError('INVALID_QUERY', 'each override needs a source_type of 1 to 255 characters');
+    }
+    if (seen.has(o.source_type)) throw new EventStoreError('INVALID_QUERY', `duplicate override for source_type "${o.source_type}"`);
+    seen.add(o.source_type);
+    return { source_type: o.source_type, retention_days: o.retention_days === null ? null : days(o.retention_days, `retention_days for "${o.source_type}"`) };
+  }).sort((a, b) => cmpText(a.source_type, b.source_type));
+  return { default_days, overrides };
+}
+const cmpText = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+// How many days of this source type's events are kept (null = forever). Takes a normalised policy.
+function daysFor(policy, sourceType) {
+  const o = policy.overrides.find((x) => x.source_type === sourceType);
+  return o ? o.retention_days : policy.default_days;
+}
+
+// The shortest retention that applies to anything: no event newer than now minus this can be expired.
+const shortestDays = (policy) => Math.min(policy.default_days, ...policy.overrides.filter((o) => o.retention_days !== null).map((o) => o.retention_days));
+
+const cutoffIso = (nowMs, days) => new Date(nowMs - days * DAY_MS).toISOString();
 
 class EventStore {
   get name() { return 'abstract'; }
@@ -311,6 +355,36 @@ class EventStore {
     };
   }
 
+  // What a purge would delete right now (read-only): the events past their retention, per source type, with the received
+  // time of the oldest one. [{ source_type, events, oldest }], most events first, ties by source type; source types with
+  // nothing expired are left out. `now` (an ISO time, default the current time) is the instant the policy is applied at.
+  // Feeds the "Check what would be deleted" button of the storage page.
+  async expiredCounts(tenantId, policy, opts = {}) {
+    const tenant = assertTenant(tenantId);
+    const pol = normalizePolicy(policy);
+    if (opts === null || typeof opts !== 'object') throw new EventStoreError('INVALID_QUERY', 'options must be an object');
+    const now = timeArg(opts.now, 'now') || new Date().toISOString();
+    const rows = await this._expiredCounts(tenant, pol, { now });
+    return rows.map((r) => ({ source_type: r.source_type, events: Number(r.events), oldest: r.oldest || null }))
+      .sort((a, b) => (b.events - a.events) || cmpText(a.source_type, b.source_type));
+  }
+
+  // The retention purge: permanently deletes this tenant's events that are past their retention (see normalizePolicy
+  // above for the rule). Returns { deleted, by_source: { <source_type>: n }, truncated }. `deadline` (epoch milliseconds)
+  // stops the work early: `truncated` is then true and running it again carries on. `batch` (1 to 100,000, default
+  // 10,000) is how many rows an engine that deletes in batches removes per statement. Adapters may add fields of their own
+  // (the Postgres one reports `partitions_scanned`). It does not drop whole partitions: that stays with each engine's own housekeeping.
+  async deleteExpired(tenantId, policy, opts = {}) {
+    const tenant = assertTenant(tenantId);
+    const pol = normalizePolicy(policy);
+    if (opts === null || typeof opts !== 'object') throw new EventStoreError('INVALID_QUERY', 'options must be an object');
+    const now = timeArg(opts.now, 'now') || new Date().toISOString();
+    if (opts.deadline !== undefined && opts.deadline !== null && !Number.isFinite(opts.deadline)) throw new EventStoreError('INVALID_QUERY', 'deadline must be a time in epoch milliseconds');
+    const batch = intArg(opts.batch, PURGE_BATCH, 'batch');
+    const r = await this._deleteExpired(tenant, pol, { now, deadline: opts.deadline === undefined ? null : opts.deadline, batch });
+    return { ...r, deleted: Number(r.deleted), by_source: r.by_source || {}, truncated: !!r.truncated };
+  }
+
   async close() { /* adapters that own connections override this */ }
 
   // ---- adapter hooks (input is already validated and normalised) -----------------------------
@@ -330,6 +404,8 @@ class EventStore {
   // _timeRange(tenant) -> { oldest, newest }       ISO times or null
   // _fieldKeys(tenant, { limit }) -> [{ name, events }]   top-level keys of `parsed` over the newest `limit` events, ordered (received_at, id) descending
   // _xdmSamples(tenant, { limit }) -> object[]     the xdm object of the newest `limit` events whose parsed.xdm is an object (same order)
+  // _expiredCounts(tenant, policy, { now }) -> [{ source_type, events, oldest }]   policy is normalised; oldest is an ISO time
+  // _deleteExpired(tenant, policy, { now, deadline, batch }) -> { deleted, by_source, truncated }   deadline is epoch ms or null
   async _insert(tenant, envelopes, opts) { throw new EventStoreError('NOT_IMPLEMENTED', 'insertBatch'); }
   async _getByIds(tenant, ids) { throw new EventStoreError('NOT_IMPLEMENTED', 'getByIds'); }
   async _scan(tenant, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'scan'); }
@@ -345,6 +421,8 @@ class EventStore {
   async _timeRange(tenant) { throw new EventStoreError('NOT_IMPLEMENTED', 'timeRange'); }
   async _fieldKeys(tenant, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'fieldStats'); }
   async _xdmSamples(tenant, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'fieldStats'); }
+  async _expiredCounts(tenant, policy, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'expiredCounts'); }
+  async _deleteExpired(tenant, policy, q) { throw new EventStoreError('NOT_IMPLEMENTED', 'deleteExpired'); }
 }
 
-module.exports = { EventStore, EventStoreError, MAX_BATCH, MAX_SCAN, DEFAULT_SCAN, MAX_IDS, MAX_SOURCE_TYPES, MAX_GROUPS, GROUP_BY, encodeCursor, decodeCursor };
+module.exports = { EventStore, EventStoreError, daysFor, shortestDays, cutoffIso, DAY_MS, MAX_BATCH, MAX_SCAN, DEFAULT_SCAN, MAX_IDS, MAX_SOURCE_TYPES, MAX_GROUPS, GROUP_BY, encodeCursor, decodeCursor };

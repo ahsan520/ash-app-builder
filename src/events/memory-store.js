@@ -4,7 +4,7 @@
 // anyone writing a new adapter. It keeps everything in process memory, so it is for tests and
 // local experiments only; src/events/index.js refuses to use it when NODE_ENV=production.
 
-const { EventStore } = require('./event-store');
+const { EventStore, daysFor, cutoffIso } = require('./event-store');
 const { runPlan, runMatch } = require('../search/xql-eval');
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
@@ -166,6 +166,37 @@ class MemoryEventStore extends EventStore {
     const deleted = rows.length - keep.length;
     this.tenants.set(tenant, keep);
     return { deleted };
+  }
+
+  // Events whose received_at is older than now minus the days that apply to their source type.
+  _isExpired(policy, nowMs, e) {
+    const days = daysFor(policy, e.source_type);
+    return days !== null && e.received_at < cutoffIso(nowMs, days);
+  }
+
+  async _expiredCounts(tenant, policy, { now }) {
+    const nowMs = Date.parse(now);
+    const by = new Map();
+    for (const e of this._rows(tenant)) {
+      if (!this._isExpired(policy, nowMs, e)) continue;
+      const g = by.get(e.source_type) || { source_type: e.source_type, events: 0, oldest: e.received_at };
+      g.events += 1;
+      if (e.received_at < g.oldest) g.oldest = e.received_at;
+      by.set(e.source_type, g);
+    }
+    return [...by.values()];
+  }
+
+  async _deleteExpired(tenant, policy, { now, deadline }) {
+    const nowMs = Date.parse(now);
+    const rows = this._rows(tenant);
+    if (deadline !== null && Date.now() > deadline) return { deleted: 0, by_source: {}, truncated: rows.some((e) => this._isExpired(policy, nowMs, e)) };
+    const keep = []; const by_source = {}; let deleted = 0;
+    for (const e of rows) {
+      if (this._isExpired(policy, nowMs, e)) { deleted += 1; by_source[e.source_type] = (by_source[e.source_type] || 0) + 1; } else keep.push(e);
+    }
+    this.tenants.set(tenant, keep);
+    return { deleted, by_source, truncated: false };
   }
 }
 

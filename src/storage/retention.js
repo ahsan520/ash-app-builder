@@ -6,42 +6,31 @@
 //  * Retention is per tenant: a default number of days plus optional per-source-type overrides
 //    (NULL = keep forever). Automatic purging is OFF until the tenant switches it on.
 //  * Expired data goes two ways:
-//      - batched DELETEs of rows past their own retention (needed for per-source rules)
+//      - the event store deletes rows past their own retention (getEventStore().deleteExpired(): batched
+//        DELETEs on PostgreSQL, per-source DELETEs on ClickHouse; needed for per-source rules)
 //      - DROP of a whole daily partition once it is older than EVERY tenant's longest
-//        retention (instant, and the only way disk is returned to the OS immediately)
+//        retention (PostgreSQL only: instant, and the only way disk is returned to the OS immediately)
+//  * "What would a purge delete" (preview) also asks the event store (expiredCounts()).
+//  * Partition housekeeping and the storage summary are PostgreSQL's own business and stay here; they are skipped
+//    when ASIX_EVENT_STORE is not postgres.
 //  * Everything runs under one advisory lock, so API replicas never purge concurrently.
 
 const db = require('../db');
 const { getEventStore } = require('../events');
+const { PART_RE, eventsKind, listPartitions } = require('../events/pg-partitions');
 
 const LOCK_KEY = 7412004;
 const DEFAULT_DAYS = Math.min(Math.max(parseInt(process.env.RETENTION_DEFAULT_DAYS, 10) || 90, 1), 3650);
 const PARTITIONS_AHEAD = 7;
-const BATCH = 10000;
 const MAX_RUN_MS = Math.max(30, Number(process.env.RETENTION_MAX_RUN_SECONDS || 600)) * 1000;
-const PART_RE = /^events_p\d{8}$/;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const nextDay = (day) => new Date(Date.parse(day + 'T00:00:00Z') + 86400000).toISOString().slice(0, 10);
 const partName = (day) => 'events_p' + day.replace(/-/g, '');
 
-// ---------------------------------------------------------------- partitions
-async function eventsKind(q) {
-  return (await q.query("SELECT c.relkind::text AS k FROM pg_class c WHERE c.oid = 'public.events'::regclass")).rows[0].k;
-}
-
-async function listPartitions(q) {
-  const r = await q.query(
-    `SELECT c.relname AS name, pg_get_expr(c.relpartbound, c.oid) AS bound, pg_total_relation_size(c.oid)::bigint AS bytes,
-            pg_relation_size(c.oid)::bigint AS heap_bytes, c.reltuples::bigint AS est_rows
-     FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid
-     WHERE i.inhparent = 'public.events'::regclass ORDER BY c.relname`);
-  return r.rows.map((p) => {
-    const m = /FROM \('(\d{4}-\d{2}-\d{2})[^']*'\) TO \('(\d{4}-\d{2}-\d{2})/.exec(p.bound || '');
-    return { name: p.name, bytes: Number(p.bytes), heap_bytes: Number(p.heap_bytes), est_rows: Number(p.est_rows),
-      is_default: p.bound === 'DEFAULT', from: m ? m[1] : null, to: m ? m[2] : null };
-  });
-}
+// ---------------------------------------------------------------- partitions (PostgreSQL only)
+// eventsKind() and listPartitions() live in src/events/pg-partitions.js (the Postgres adapter needs them too).
+const usesPostgres = () => getEventStore().name === 'postgres';
 
 // Creates the partition for one day. If rows for that day already sit in events_default the plain
 // CREATE fails, so they are moved into a standalone table which is then attached.
@@ -70,6 +59,7 @@ async function ensurePartition(day) {
 }
 
 async function ensurePartitions() {
+  if (!usesPostgres()) return { partitioned: false, created: [] };
   if ((await eventsKind(db)) !== 'p') return { partitioned: false, created: [] };
   const have = new Set((await listPartitions(db)).map((p) => p.name));
   const days = (await db.query(`SELECT to_char(CURRENT_DATE + g, 'YYYY-MM-DD') AS day FROM generate_series(-1, ${PARTITIONS_AHEAD}) g`)).rows;
@@ -86,19 +76,9 @@ async function loadPolicy(q, tenantId) {
 }
 const minDaysOf = (pol) => Math.min(pol.default_days, ...pol.overrides.filter((o) => o.retention_days !== null).map((o) => o.retention_days));
 
-// Events that are past their retention right now, by source type (read-only).
-async function preview(q, tenantId, pol) {
-  const r = await q.query(
-    `SELECT e.source_type, COUNT(*)::bigint AS events, MIN(e.received_at) AS oldest
-     FROM events e
-     LEFT JOIN unnest($2::text[], $3::int[]) AS pol(source_type, days) ON pol.source_type = e.source_type
-     WHERE e.tenant_id = $1
-       AND e.received_at < localtimestamp - ($5::int * interval '1 day')              -- lets Postgres prune partitions
-       AND (CASE WHEN pol.source_type IS NULL THEN $4::int ELSE pol.days END) IS NOT NULL
-       AND e.received_at < localtimestamp - ((CASE WHEN pol.source_type IS NULL THEN $4::int ELSE pol.days END) * interval '1 day')
-     GROUP BY e.source_type ORDER BY events DESC`,
-    [tenantId, pol.overrides.map((o) => o.source_type), pol.overrides.map((o) => o.retention_days), pol.default_days, minDaysOf(pol)]);
-  const rows = r.rows.map((x) => ({ source_type: x.source_type, events: Number(x.events), oldest: x.oldest }));
+// Events that are past their retention right now, by source type (read-only). Asked of the event store.
+async function preview(tenantId, pol) {
+  const rows = await getEventStore().expiredCounts(tenantId, pol);
   return { total: rows.reduce((a, x) => a + x.events, 0), by_source: rows };
 }
 
@@ -111,45 +91,19 @@ const finishRun = (id, status, f = {}) => db.query(
   [id, status, f.partitions_dropped || 0, f.rows_deleted || 0, JSON.stringify(f.detail || {}), f.error ? String(f.error).slice(0, 500) : null]);
 
 // ---------------------------------------------------------------- purge (row level)
+// The event store does the deleting (it knows its own tables); this keeps the policy, the time limit and the result shape.
 async function purgeTenant(tenantId, { deadline = Date.now() + MAX_RUN_MS } = {}) {
-  const pol = await loadPolicy(db, tenantId), minDays = minDaysOf(pol);
-  const partitioned = (await eventsKind(db)) === 'p';
-  // A partition can hold expired rows if its first day is on or before the day of the shortest cutoff.
-  const cutoffDay = (await db.query("SELECT to_char(localtimestamp - ($1::int * interval '1 day'), 'YYYY-MM-DD') AS d", [minDays])).rows[0].d;
-  const targets = partitioned
-    ? (await listPartitions(db)).filter((p) => p.is_default || (p.from && p.from <= cutoffDay)).map((p) => p.name)
-    : ['events'];
-  const overrides = pol.overrides.map((o) => o.source_type);
-  const rules = [
-    ...pol.overrides.filter((o) => o.retention_days !== null).map((o) => ({ label: o.source_type, cond: 'source_type = $2::text', value: o.source_type, days: o.retention_days })),
-    { label: '(default)', cond: 'source_type <> ALL($2::text[])', value: overrides, days: pol.default_days },
-  ];
-  const deleted = {}; let total = 0, truncated = false;
-  outer: for (const part of targets.sort()) {
-    if (part !== 'events' && !PART_RE.test(part) && part !== 'events_default') continue;
-    for (const rule of rules) {
-      for (;;) {
-        if (Date.now() > deadline) { truncated = true; break outer; }
-        const gone = await db.withTenant(tenantId, async (client) => {
-          await client.query("SET LOCAL statement_timeout = '60s'");
-          return (await client.query(
-            `DELETE FROM ${part} WHERE ctid = ANY(ARRAY(
-               SELECT ctid FROM ${part} WHERE tenant_id = $1 AND ${rule.cond} AND received_at < localtimestamp - ($3::int * interval '1 day') LIMIT ${BATCH}))
-             RETURNING source_type`, [tenantId, rule.value, rule.days])).rows;
-        });
-        total += gone.length;
-        for (const g of gone) deleted[g.source_type] = (deleted[g.source_type] || 0) + 1;
-        if (gone.length < BATCH) break;
-      }
-    }
-  }
-  return { rows_deleted: total, by_source: deleted, truncated, partitions_scanned: targets.length };
+  const pol = await loadPolicy(db, tenantId);
+  const r = await getEventStore().deleteExpired(tenantId, pol, { deadline });
+  return { rows_deleted: r.deleted, by_source: r.by_source, truncated: r.truncated,
+    ...(r.partitions_scanned === undefined ? {} : { partitions_scanned: r.partitions_scanned }) };
 }
 
 // ---------------------------------------------------------------- drop whole partitions
 // Only when EVERY tenant has automatic purge on and no "keep forever" rule: then a partition
 // whose newest possible event is older than the longest retention contains nothing to keep.
 async function dropExpiredPartitions() {
+  if (!usesPostgres()) return { dropped: [], reason: 'events are not stored in PostgreSQL' };
   if ((await eventsKind(db)) !== 'p') return { dropped: [], reason: 'events table is not partitioned' };
   let maxDays = 0;
   for (const t of (await db.query('SELECT id FROM tenants')).rows) {
@@ -184,7 +138,7 @@ async function withLock(fn) {
 // A user pressed "Purge now" for their own tenant (works even when automatic purge is off).
 async function runManual(tenantId, { dryRun = true } = {}) {
   const pol = await loadPolicy(db, tenantId);
-  if (dryRun) return { dry_run: true, policy: pol, ...(await preview(db, tenantId, pol)) };
+  if (dryRun) return { dry_run: true, policy: pol, ...(await preview(tenantId, pol)) };
   return withLock(async () => {
     const id = await startRun('manual', tenantId);
     try {

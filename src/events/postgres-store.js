@@ -10,7 +10,8 @@
 // Timestamps: the table uses `timestamp` (no zone) and ASIX treats it as UTC, as it does
 // everywhere else (localtimestamp, received_at defaults). Keep PostgreSQL's timezone on UTC.
 
-const { EventStore } = require('./event-store');
+const { EventStore, shortestDays, cutoffIso } = require('./event-store');
+const { PART_RE, eventsKind, listPartitions } = require('./pg-partitions');
 const { ENVELOPE_VERSION } = require('./envelope');
 const { toSql, matchToSql } = require('../search/xql-postgres');
 
@@ -223,12 +224,64 @@ class PostgresEventStore extends EventStore {
   }
 
   // A plain row delete. Dropping whole daily partitions (what src/storage/retention.js does for
-  // large tables) stays in the retention job until it is moved behind this interface.
+  // large tables) is PostgreSQL housekeeping and stays in the retention job.
   async _deleteBefore(tenant, cutoff) {
     return this._run(tenant, null, async (client) => {
       const r = await client.query('DELETE FROM events WHERE tenant_id = $1 AND received_at < $2::timestamp', [tenant, cutoff]);
       return { deleted: r.rowCount };
     });
+  }
+
+  // Per source type, the events older than the days that apply to it. The first time test uses the shortest retention
+  // of any source, which lets PostgreSQL prune daily partitions before looking at a row.
+  async _expiredCounts(tenant, policy, { now }) {
+    const rows = await this._run(tenant, null, async (client) => (await client.query(
+      `SELECT e.source_type, COUNT(*)::bigint AS events, MIN(e.received_at)::text AS oldest
+       FROM events e
+       LEFT JOIN unnest($2::text[], $3::int[]) AS pol(source_type, days) ON pol.source_type = e.source_type
+       WHERE e.tenant_id = $1
+         AND e.received_at < $6::timestamp - ($5::int * interval '1 day')
+         AND (CASE WHEN pol.source_type IS NULL THEN $4::int ELSE pol.days END) IS NOT NULL
+         AND e.received_at < $6::timestamp - ((CASE WHEN pol.source_type IS NULL THEN $4::int ELSE pol.days END) * interval '1 day')
+       GROUP BY e.source_type`,
+      [tenant, policy.overrides.map((o) => o.source_type), policy.overrides.map((o) => o.retention_days), policy.default_days, shortestDays(policy), now])).rows);
+    return rows.map((r) => ({ source_type: r.source_type, events: Number(r.events), oldest: toIso(r.oldest) }));
+  }
+
+  // Deletes expired rows in batches of `batch` (a DELETE of every expired row at once would hold locks and fill the WAL).
+  // Per rule: one per source type with its own days, plus one for every other source type at the default. On a
+  // partitioned table, only the partitions that can hold an expired row are visited (ctid is only unique inside one table).
+  async _deleteExpired(tenant, policy, { now, deadline, batch }) {
+    const nowMs = Date.parse(now);
+    const partitioned = (await eventsKind(this.db)) === 'p';
+    const cutoffDay = cutoffIso(nowMs, shortestDays(policy)).slice(0, 10);
+    const targets = partitioned
+      ? (await listPartitions(this.db)).filter((p) => p.is_default || (p.from && p.from <= cutoffDay)).map((p) => p.name)
+      : ['events'];
+    const rules = [
+      ...policy.overrides.filter((o) => o.retention_days !== null).map((o) => ({ cond: 'source_type = $2::text', value: o.source_type, cutoff: cutoffIso(nowMs, o.retention_days) })),
+      { cond: 'source_type <> ALL($2::text[])', value: policy.overrides.map((o) => o.source_type), cutoff: cutoffIso(nowMs, policy.default_days) },
+    ];
+    const by_source = {}; let deleted = 0; let truncated = false;
+    outer: for (const part of targets.sort()) {
+      if (part !== 'events' && part !== 'events_default' && !PART_RE.test(part)) continue;     // the name goes into the SQL text
+      for (const rule of rules) {
+        for (;;) {
+          if (deadline !== null && Date.now() > deadline) { truncated = true; break outer; }
+          const gone = await this._run(tenant, null, async (client) => {
+            await client.query("SET LOCAL statement_timeout = '60s'");
+            return (await client.query(
+              `DELETE FROM ${part} WHERE ctid = ANY(ARRAY(
+                 SELECT ctid FROM ${part} WHERE tenant_id = $1 AND ${rule.cond} AND received_at < $3::timestamp LIMIT ${batch}))
+               RETURNING source_type`, [tenant, rule.value, rule.cutoff])).rows;
+          });
+          deleted += gone.length;
+          for (const g of gone) by_source[g.source_type] = (by_source[g.source_type] || 0) + 1;
+          if (gone.length < batch) break;
+        }
+      }
+    }
+    return { deleted, by_source, truncated, partitions_scanned: targets.length };
   }
 
   // An XQL plan becomes SQL here (src/search/xql-postgres.js: every value is a bound parameter, the tenant is $1).
