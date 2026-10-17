@@ -195,6 +195,21 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
 - Not built: parser and dashboard content in packs, pack upgrade notices (the version is shown but not tracked per
   tenant), per-rule tuning inside the Packs page, packs signed and delivered from a marketplace (Phase 4).
 
+### License limits (what exists)
+- **One place for the rules:** `src/modules/limits.js` (pure functions). The limits come from the signed license, or the profile's defaults when there is
+  no valid license (Home and Enterprise both default to 1 tenant and 90 days; a failed module snapshot falls back to the Home defaults).
+- **Retention cap, enforced on save:** `PUT /v1/storage/retention` answers `403 LICENSE_LIMIT` when `default_days` or an override is above the cap, or an
+  override is keep-forever (null) while a cap is set. Only what the request changes is checked, so switching automatic purge on or off is never blocked.
+  `GET /v1/storage/retention` now also returns `limit_days` and `over_limit` (stored settings above the cap). The portal sets the inputs' `max` to the cap
+  and shows a notice.
+- **Nothing is deleted or changed because of a limit:** an expired or removed license, or a lower cap, leaves stored retention settings and all data as they
+  are and reports them as over the limit. The retention job is unchanged: it purges only by the rules the tenant saved.
+- **Tenants:** `checkTenantCreate(count, limits)` returns the refusal (`LICENSE_LIMIT`) to use before inserting a tenant. `GET /v1/modules` now returns
+  `usage.tenants` and `over_limit`, and the Modules page shows the count next to the limit. No route creates tenants yet (`src/tenant/tenant-service.js` is a stub), so
+  nothing calls it today.
+- Checked with `tests/limits.test.js` (rules, and the real storage route with the sign-in chain and database stubbed). Not built: a per-tenant cap, SSO/other limit
+  keys, an audit entry when a save is refused beyond the normal request audit, a portal menu that follows module state.
+
 ### How the three dials are implemented now
 - **Modules:** one manifest file per module in `src/modules/manifests/`. A module is on only if its
   tier is part of the profile, its license feature (if any) is granted, and everything it requires is
@@ -207,8 +222,8 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   `/etc/asix/license.jwt`) and verified with the public key at `/etc/asix/license.pub`. Missing,
   expired or invalid licenses fall back to Home limits and never block the platform or touch data.
   `scripts/license-tool.js` makes keys and signs licenses; the private key stays off the platform.
-- **Not enforced yet:** the `tenants` and `retention_days_max` limits are reported on the Modules
-  page but not yet applied by tenant creation or the retention job. The Home retention cap of 90 days
+- **License limits (enforced, see below):** `retention_days_max` is applied when retention rules are saved; `tenants` is a
+  rule ready for tenant creation to call (there is no tenant-creation route yet). The Home retention cap of 90 days
   is a placeholder until the licensing decision below is made.
 - **Not yet done:** the portal menu does not hide or grey out entries based on module state, and there
   is no per-tenant module toggle (that would need a schema change).

@@ -905,13 +905,14 @@ async function pgStorage() {
   const msg = storageMsg; storageMsg = '';
 
   // --- retention form
-  const days = el('input', { type: 'number', min: 1, max: 3650, value: pol.default_days, style: 'width:90px' });
+  const capDays = ret.limit_days || 3650;   // license / edition cap; the server enforces it too
+  const days = el('input', { type: 'number', min: 1, max: capDays, value: pol.default_days, style: 'width:90px' });
   const rows = pol.overrides.map((o) => ({ source_type: o.source_type, days: o.retention_days }));
   const ovBox = el('div');
   const drawOv = () => {
     ovBox.replaceChildren(rows.length ? table([
       { h: 'Source type', f: (r) => r.source_type },
-      { h: 'Keep for (days)', f: (r) => { const i = el('input', { type: 'number', min: 1, max: 3650, value: r.days ?? '', disabled: r.days === null, style: 'width:90px', oninput: () => { r.days = i.value === '' ? 1 : Number(i.value); } }); return i; } },
+      { h: 'Keep for (days)', f: (r) => { const i = el('input', { type: 'number', min: 1, max: capDays, value: r.days ?? '', disabled: r.days === null, style: 'width:90px', oninput: () => { r.days = i.value === '' ? 1 : Number(i.value); } }); return i; } },
       { h: 'Keep forever', f: (r) => el('input', { type: 'checkbox', checked: r.days === null, onchange: (e) => { r.days = e.target.checked ? null : pol.default_days; drawOv(); } }) },
       { h: '', f: (r) => el('button', { className: 'btn', textContent: 'Remove', onclick: () => { rows.splice(rows.indexOf(r), 1); drawOv(); } }) },
     ], rows) : el('div', { className: 'mute', textContent: 'No per-source rules: every source type follows the default.' }));
@@ -937,6 +938,7 @@ async function pgStorage() {
   const stat = (v, l) => card('', el('div', { className: 'stat' }, v, el('small', { textContent: l })));
   return [...head('Storage & retention', 'Where your event data lives, how fast it grows, and how long it is kept. Events are stored in PostgreSQL, one partition per day.'),
     msg ? card('', el('span', { className: 'pill ok', textContent: msg })) : '',
+    ret.limit_days ? card('', el('div', { className: ret.over_limit.length ? 'warn' : 'mute', textContent: 'This installation can keep events for at most ' + ret.limit_days + ' days (a license can raise this; see Modules).' + (ret.over_limit.length ? ' Over the limit now: ' + ret.over_limit.map((o) => (o.scope === 'default' ? 'the default' : o.scope) + ' (' + (o.days === null ? 'forever' : o.days + ' days') + ')').join(', ') + '. Nothing is deleted because of this; lower these before saving other retention changes.' : '') })) : '',
     sum.partitioned ? '' : card('', el('div', { className: 'warn', textContent: 'The events table is not partitioned (it was too large or spanned too many days for the automatic migration). Retention still works by deleting rows, but disk space is only reclaimed after the database vacuums. See the schema notes to force the migration.' })),
     sum.default_partition_rows ? card('', el('div', { className: 'warn', textContent: sum.default_partition_rows.toLocaleString() + ' events sit in the catch-all partition (their dates fall outside the normal range). The next hourly maintenance moves them out.' })) : '',
     el('div', { className: 'grid' }, stat(fmtSize(sum.database_bytes), 'whole database'), stat(sum.events_rows.toLocaleString(), 'events stored'), stat(fmtSize(sum.events_bytes), 'events table + indexes'),
@@ -1691,8 +1693,9 @@ async function pgModules() {
   return [...head('Modules', 'One platform, two editions. The profile sets the deployment shape and a signed license unlocks extra modules and limits. Menu entries and features follow this list.'),
     el('div', { className: 'grid' },
       card('Edition', kv({ profile: r.profile.label, storage: r.profile.deployment.storage, ingest: r.profile.deployment.ingest, 'high availability': r.profile.deployment.ha ? 'yes' : 'no' })),
-      card('License and limits', kv({ license: licText, 'expires (UTC)': lic.expires_at ? when(lic.expires_at) : '-', tenants: lim(r.limits.tenants), 'retention cap (days)': lim(r.limits.retention_days_max) }),
-        lic.reason ? el('div', { className: 'mute', style: 'margin-top:8px', textContent: lic.reason }) : '')),
+      card('License and limits', kv({ license: licText, 'expires (UTC)': lic.expires_at ? when(lic.expires_at) : '-', tenants: lim(r.limits.tenants) + (r.usage && r.usage.tenants !== undefined ? ' (' + r.usage.tenants + ' in use)' : ''), 'retention cap (days)': lim(r.limits.retention_days_max) }),
+        lic.reason ? el('div', { className: 'mute', style: 'margin-top:8px', textContent: lic.reason }) : '',
+        (r.over_limit || []).length ? el('div', { className: 'warn', style: 'margin-top:8px', textContent: 'Over a limit: ' + r.over_limit.map((o) => o.limit + ' ' + o.used + ' of ' + o.allowed).join(', ') + '. Nothing was removed; adding more is blocked until a license raises it.' }) : '')),
     card('Modules (' + on + ' of ' + r.modules.length + ' on)', table([
       { h: 'Module', f: (m) => m.name }, { h: 'Edition', f: (m) => (m.tier === 'home' ? 'Home' : 'Enterprise') },
       { h: 'State', f: (m) => pill(MOD_STATE[m.state][0], MOD_STATE[m.state][1]) },

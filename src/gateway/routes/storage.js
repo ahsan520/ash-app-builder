@@ -8,6 +8,7 @@ const {
 // ---- Storage & retention ---------------------------------------------------------------------
 const storage = require('../../storage/retention');
 const { getEventStore } = require('../../events');
+const limits = require('../../modules/limits');
 const SRC_RE = /^[A-Za-z0-9._-]{1,100}$/;
 
 router.get('/v1/storage/summary', ...guarded('storage:read'), async (req, res) => {
@@ -28,7 +29,9 @@ router.get('/v1/storage/retention', ...guarded('storage:read'), async (req, res)
       `SELECT id, tenant_id, trigger, status, started_at, finished_at, partitions_dropped, rows_deleted::bigint AS rows_deleted, error
        FROM retention_runs WHERE tenant_id = $1 OR tenant_id IS NULL ORDER BY started_at DESC LIMIT 20`, [req.tenant_id])).rows
       .map((r) => ({ ...r, rows_deleted: Number(r.rows_deleted) }));
-    res.status(200).json({ success: true, policy: pol, known_sources: sources, runs, system_default_days: storage.DEFAULT_DAYS });
+    const lim = await limits.currentLimits();
+    res.status(200).json({ success: true, policy: pol, known_sources: sources, runs, system_default_days: storage.DEFAULT_DAYS,
+      limit_days: lim.retention_days_max ?? null, over_limit: limits.retentionOverLimit(pol, lim) });
   } catch (e) { console.error('Retention read failed:', e.message); apiError(res, 500, 'RETENTION_READ_ERROR', 'Failed to read retention settings'); }
 });
 
@@ -51,6 +54,9 @@ router.put('/v1/storage/retention', ...guarded('storage:write'), async (req, res
     }
     overrides = b.overrides;
   }
+  // the license (or Home default) cap on how long events may be kept; checked only on what this request changes
+  const over = limits.checkRetentionChange(b, await limits.currentLimits());
+  if (over) return apiError(res, 403, over.code, over.message);
   try {
     await db.withTenant(req.tenant_id, async (client) => {
       await client.query(
