@@ -444,6 +444,126 @@ function runConformance(label, setup) {
       assert.strictEqual((await store.getByIds(A, [e2.id, e3.id])).length, 2, 'the cutoff itself is kept');
       await assert.rejects(store.deleteBefore(A, undefined), (e) => e.code === 'INVALID_QUERY');
     });
+
+    describe('expiredCounts and deleteExpired (retention)', () => {
+      const DAY = 86400000;
+      const NOW = iso(60 * 24 * 100);                         // an instant well after every other test's data
+      const nowMs = Date.parse(NOW);
+      const at = (daysAgo, extraMs = 0) => new Date(nowMs - daysAgo * DAY + extraMs).toISOString();
+      const mk = (source, daysAgo, extraMs = 0) => ({ id: uuid(), received_at: at(daysAgo, extraMs), source_type: source, collector_id: 'ret', raw: `${source} ${daysAgo}d`, parsed: {} });
+      const left = async (tenant, source) => store.count(tenant, { source_type: source });
+      // a policy that only expires one source type (everything else is kept for the longest allowed time)
+      const only = (source, days) => ({ default_days: 3650, overrides: [{ source_type: source, retention_days: days }] });
+      const policy = { default_days: 30, overrides: [{ source_type: 'ret-short', retention_days: 7 }, { source_type: 'ret-long', retention_days: 365 }, { source_type: 'ret-forever', retention_days: null }] };
+      const seed = async (tenant) => store.insertBatch(tenant, [
+        mk('ret-default', 40), mk('ret-default', 31), mk('ret-default', 29), mk('ret-default', 1),                 // 2 expired at 30 days
+        mk('ret-short', 8), mk('ret-short', 6), mk('ret-short', 100),                                              // 2 expired at 7 days
+        mk('ret-long', 100), mk('ret-long', 366), mk('ret-long', 400),                                             // 2 expired at 365 days
+        mk('ret-forever', 3000), mk('ret-forever', 500),                                                           // nothing ever expires
+      ]);
+
+      it('counts what is past its own retention, per source, and changes nothing', async () => {
+        await seed(A);
+        const rows = await store.expiredCounts(A, policy, { now: NOW });
+        const mine = rows.filter((r) => r.source_type.startsWith('ret-'));
+        assert.deepStrictEqual(mine.map((r) => [r.source_type, r.events]), [['ret-default', 2], ['ret-long', 2], ['ret-short', 2]], 'forever and unexpired sources are left out; ties are by name');
+        assert.strictEqual(instant(mine.find((r) => r.source_type === 'ret-default').oldest), nowMs - 40 * DAY);
+        assert.strictEqual(instant(mine.find((r) => r.source_type === 'ret-long').oldest), nowMs - 400 * DAY);
+        assert.strictEqual(await left(A, 'ret-default'), 4, 'a preview deletes nothing');
+        assert.strictEqual(await left(A, 'ret-forever'), 2);
+      });
+
+      it('keeps an event exactly at its cut-off and removes one just past it', async () => {
+        const exact = mk('ret-edge', 30);                       // received exactly now - 30 days: kept
+        const past = mk('ret-edge', 30, -1);                    // one millisecond older: expired
+        await store.insertBatch(A, [exact, past]);
+        const rows = await store.expiredCounts(A, only('ret-edge', 30), { now: NOW });
+        assert.strictEqual(rows.find((r) => r.source_type === 'ret-edge').events, 1);
+        const r = await store.deleteExpired(A, only('ret-edge', 30), { now: NOW });
+        assert.strictEqual(r.by_source['ret-edge'], 1);
+        assert.deepStrictEqual((await store.getByIds(A, [exact.id, past.id])).map((e) => e.id), [exact.id]);
+      });
+
+      it('deletes exactly what the preview counted, reports it, and a second run finds nothing', async () => {
+        const before = await store.expiredCounts(A, policy, { now: NOW });
+        const total = before.reduce((n, r) => n + r.events, 0);
+        const r = await store.deleteExpired(A, policy, { now: NOW });
+        assert.strictEqual(r.deleted, total);
+        assert.strictEqual(r.truncated, false);
+        assert.deepStrictEqual(Object.fromEntries(before.map((x) => [x.source_type, x.events])), r.by_source);
+        assert.strictEqual(await left(A, 'ret-default'), 2);
+        assert.strictEqual(await left(A, 'ret-short'), 1);
+        assert.strictEqual(await left(A, 'ret-long'), 1);
+        assert.strictEqual(await left(A, 'ret-forever'), 2, 'keep-forever is never deleted');
+        assert.deepStrictEqual(await store.expiredCounts(A, policy, { now: NOW }), []);
+        const again = await store.deleteExpired(A, policy, { now: NOW });
+        assert.deepStrictEqual([again.deleted, again.by_source, again.truncated], [0, {}, false]);
+      });
+
+      it('a source with no override follows the default; an override can also be longer than it', async () => {
+        await store.insertBatch(A, [mk('ret-new-source', 50), mk('ret-new-source', 5), mk('ret-keepish', 50)]);
+        const p = { default_days: 20, overrides: [{ source_type: 'ret-keepish', retention_days: 60 }] };
+        const r = await store.deleteExpired(A, p, { now: NOW });
+        assert.strictEqual(r.by_source['ret-new-source'], 1);
+        assert.strictEqual(r.by_source['ret-keepish'], undefined);
+        assert.strictEqual(await left(A, 'ret-new-source'), 1);
+        assert.strictEqual(await left(A, 'ret-keepish'), 1);
+      });
+
+      it('works in batches, and a deadline that has passed stops it before it deletes and says so', async () => {
+        await store.insertBatch(A, Array.from({ length: 7 }, (_, i) => mk('ret-batch', 100 + i)));
+        const stopped = await store.deleteExpired(A, only('ret-batch', 30), { now: NOW, deadline: Date.now() - 1000 });
+        assert.strictEqual(stopped.truncated, true);
+        assert.strictEqual(stopped.deleted, 0);
+        assert.strictEqual(await left(A, 'ret-batch'), 7);
+        const r = await store.deleteExpired(A, only('ret-batch', 30), { now: NOW, batch: 2, deadline: Date.now() + 600000 });
+        assert.strictEqual(r.truncated, false);
+        assert.strictEqual(r.deleted, 7, 'running it again carries on');
+        assert.strictEqual(r.by_source['ret-batch'], 7);
+        assert.strictEqual(await left(A, 'ret-batch'), 0);
+      });
+
+      it('only ever touches the tenant it is given', async () => {
+        await store.insertBatch(B, [mk('ret-tenant-b', 400), mk('ret-tenant-b', 1)]);
+        await store.insertBatch(A, [mk('ret-tenant-a', 400)]);
+        const r = await store.deleteExpired(A, only('ret-tenant-a', 30), { now: NOW });
+        assert.strictEqual(r.by_source['ret-tenant-b'], undefined);
+        assert.strictEqual(await left(B, 'ret-tenant-b'), 2);
+        assert.strictEqual(await left(A, 'ret-tenant-a'), 0);
+        assert.deepStrictEqual((await store.expiredCounts(B, only('ret-tenant-b', 30), { now: NOW })).map((x) => [x.source_type, x.events]), [['ret-tenant-b', 1]]);
+      });
+
+      it('handles source types with awkward characters and long overrides lists', async () => {
+        const odd = ["it's", 'a"b', 'back\\slash', 'per%cent', 'semi;colon', 'ünï'];
+        await store.insertBatch(A, odd.flatMap((o) => [mk(o, 90), mk(o, 1)]));
+        const p = { default_days: 365, overrides: [...odd.map((o) => ({ source_type: o, retention_days: 10 })), ...Array.from({ length: 200 }, (_, i) => ({ source_type: `ret-pad-${i}`, retention_days: 5 }))] };
+        const rows = await store.expiredCounts(A, p, { now: NOW });
+        assert.deepStrictEqual(odd.map((o) => (rows.find((x) => x.source_type === o) || {}).events), odd.map(() => 1));
+        const r = await store.deleteExpired(A, p, { now: NOW });
+        for (const o of odd) { assert.strictEqual(r.by_source[o], 1, o); assert.strictEqual(await left(A, o), 1, o); }
+      });
+
+      it('rejects a bad policy or bad options before touching anything', async () => {
+        const bad = (fn) => assert.rejects(fn, (e) => e.code === 'INVALID_QUERY');
+        await bad(() => store.expiredCounts(A, null));
+        await bad(() => store.expiredCounts(A, {}));
+        await bad(() => store.expiredCounts(A, { default_days: 0 }));
+        await bad(() => store.expiredCounts(A, { default_days: 3651 }));
+        await bad(() => store.expiredCounts(A, { default_days: 1.5 }));
+        await bad(() => store.deleteExpired(A, { default_days: '30' }));
+        await bad(() => store.deleteExpired(A, { default_days: 30, overrides: 'x' }));
+        await bad(() => store.deleteExpired(A, { default_days: 30, overrides: [{ source_type: '', retention_days: 5 }] }));
+        await bad(() => store.deleteExpired(A, { default_days: 30, overrides: [{ source_type: 'a', retention_days: 0 }] }));
+        await bad(() => store.deleteExpired(A, { default_days: 30, overrides: [{ source_type: 'a', retention_days: undefined }] }));
+        await bad(() => store.deleteExpired(A, { default_days: 30, overrides: [{ source_type: 'a', retention_days: 5 }, { source_type: 'a', retention_days: null }] }));
+        await bad(() => store.deleteExpired(A, { default_days: 30 }, { now: 'yesterday' }));
+        await bad(() => store.deleteExpired(A, { default_days: 30 }, { batch: 0 }));
+        await bad(() => store.deleteExpired(A, { default_days: 30 }, { batch: 100001 }));
+        await bad(() => store.deleteExpired(A, { default_days: 30 }, { deadline: 'soon' }));
+        await assert.rejects(store.deleteExpired('nope', { default_days: 30 }), (e) => e.code === 'INVALID_TENANT');
+        await assert.rejects(store.expiredCounts('nope', { default_days: 30 }), (e) => e.code === 'INVALID_TENANT');
+      });
+    });
   });
 }
 
