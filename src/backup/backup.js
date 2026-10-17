@@ -7,7 +7,8 @@
 // (sizes + SHA-256 of each file) is written last, so a set without a manifest is incomplete.
 // Every BACKUP_VERIFY_EVERY_DAYS days the set is also restored into a scratch database and
 // compared with the source ("a backup you have not restored is a hope, not a backup").
-// Results go to the backup_runs table, which the portal's Data safety card reads.
+// Results go to the backup_runs table, which the portal's Data safety card reads. When ClickHouse is deployed, the same job then
+// backs up the events held there (src/backup/clickhouse-backup.js).
 
 const fs = require('fs');
 const os = require('os');
@@ -92,7 +93,12 @@ async function runBackup({ trigger = 'scheduled', env = process.env, db = requir
 module.exports = { runBackup, verifySet, config, stamp };
 
 if (require.main === module) {
-  runBackup({ trigger: process.env.BACKUP_TRIGGER || 'scheduled' })
-    .then((r) => { console.log('[backup] done', JSON.stringify(r)); process.exit(0); })
-    .catch((e) => { console.error('[backup] FAILED:', e.message); process.exit(1); });
+  // PostgreSQL first, then ClickHouse (if it is deployed): one failing does not stop the other, and the job exits 1 if either failed.
+  (async () => {
+    const trigger = process.env.BACKUP_TRIGGER || 'scheduled';
+    let failed = false;
+    try { console.log('[backup] done', JSON.stringify(await runBackup({ trigger }))); } catch (e) { failed = true; console.error('[backup] FAILED:', e.message); }
+    try { console.log('[backup] clickhouse', JSON.stringify(await require('./clickhouse-backup').runClickHouseBackup({ trigger }))); } catch (e) { failed = true; console.error('[backup] CLICKHOUSE FAILED:', e.message); }
+    process.exit(failed ? 1 : 0);
+  })();
 }

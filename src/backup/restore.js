@@ -7,6 +7,7 @@
 //                                          (connections are terminated, database dropped and recreated
 //                                          with its original owner); with --as it creates a copy.
 //   globals <set>                          replay the roles file (disaster recovery on a fresh cluster)
+//   ch-list | ch-verify | ch-restore       the events held in ClickHouse (see src/backup/clickhouse-backup.js)
 //
 // Replacing needs --yes. Nothing is ever restored from a file whose checksum or authentication fails.
 
@@ -60,7 +61,21 @@ async function restoreGlobals(cfg, set) {
   try { await run('psql', ['-X', '-q', '-d', 'postgres', '-f', plain], { env: cfg.env }); return { globals: true }; } finally { fs.rmSync(plain, { force: true }); }
 }
 
-module.exports = { listSets, restoreDb, restoreGlobals, manifestOf };
+// ClickHouse events (src/backup/clickhouse-backup.js): ch-list | ch-verify | ch-restore [--as <table>] [--from <day>] [--to <day>] [--yes]
+async function chCommand(cmd, rest) {
+  const ch = require('./clickhouse-backup'), cfg = ch.config(), deps = ch.realDeps(process.env, null);
+  const opt = (n) => { const i = rest.indexOf(n); return i >= 0 ? rest[i + 1] : undefined; };
+  if (cmd === 'ch-list') return ch.listBackup(cfg);
+  if (cmd === 'ch-verify') return ch.verifyBackup(cfg, deps);
+  const as = opt('--as'), range = { from: opt('--from'), to: opt('--to') };
+  if (as !== undefined && (!ch.TABLE_RE.test(as) || as === 'events')) throw new Error('--as must be a new table name (letters, digits, underscore), not "events"');
+  if (as === undefined && !rest.includes('--yes')) throw new Error('restoring into the live events table adds the backed-up events to it (nothing is deleted): pass --yes to confirm, or --as <table> for a separate copy');
+  if (as) return { into: as, ...(await ch.restoreEvents(cfg, { store: await deps.openTable(as), exact: true }, range)) };
+  await deps.store.init();
+  return { into: 'events', ...(await ch.restoreEvents(cfg, { store: deps.store, exact: false }, range)) };
+}
+
+module.exports = { listSets, restoreDb, restoreGlobals, manifestOf, chCommand };
 
 if (require.main === module) {
   const [cmd, set, db, ...rest] = process.argv.slice(2), cfg = config(), flag = (n) => rest.includes(n) || db === n;
@@ -69,6 +84,7 @@ if (require.main === module) {
     if (cmd === 'verify') return console.log(JSON.stringify(await verifySet(cfg, set, manifestOf(cfg, set))));
     if (cmd === 'restore') { const i = rest.indexOf('--as'); return console.log(JSON.stringify(await restoreDb(cfg, set, db, { as: i >= 0 ? rest[i + 1] : null, yes: flag('--yes') }))); }
     if (cmd === 'globals') return console.log(JSON.stringify(await restoreGlobals(cfg, set)));
-    throw new Error('usage: restore.js list | verify <set> | restore <set> <db> [--as <name>] [--yes] | globals <set>');
+    if (/^ch-(list|verify|restore)$/.test(cmd)) return console.log(JSON.stringify(await chCommand(cmd, process.argv.slice(3)), null, 2));
+    throw new Error('usage: restore.js list | verify <set> | restore <set> <db> [--as <name>] [--yes] | globals <set> | ch-list | ch-verify | ch-restore [--as <table>] [--from <day>] [--to <day>] [--yes]');
   })().then(() => process.exit(0)).catch((e) => { console.error('[restore] FAILED:', e.message); process.exit(1); });
 }

@@ -8,29 +8,48 @@
 #   sudo scripts/restore-backup.sh restore <set> <database> [--yes]           REPLACE the live database (stops the apps that use it first)
 #   sudo scripts/restore-backup.sh globals <set>                              recreate roles (only when rebuilding a fresh cluster)
 #
+# The events held in ClickHouse have their own backup (one encrypted file per day, see docs/clickhouse-backup.md):
+#   sudo scripts/restore-backup.sh ch-list                                    days in the ClickHouse backup, rows, sizes
+#   sudo scripts/restore-backup.sh ch-verify                                  load all of it into a scratch table and compare with the manifest, change nothing
+#   sudo scripts/restore-backup.sh ch-restore --as <new_table> [--from D] [--to D]   restore into a NEW table to look at it, change nothing else
+#   sudo scripts/restore-backup.sh ch-restore --yes [--from D] [--to D]       ADD the backed-up events to the live events table (never deletes)
+#
 # <database> is asix_platform (events, rules, alerts, ...) or keycloak (users, passwords, clients).
 # Everything runs in a one-off Kubernetes Job from the API image; the passphrase never leaves the cluster.
 set -euo pipefail
 NS="${NAMESPACE:-asix-platform}"
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 K=(k3s kubectl -n "$NS")
-cmd="${1:-}"; set_name="${2:-}"; db="${3:-}"; shift $(( $# > 3 ? 3 : $# )) || true
-as=""; yes=""
-while (( $# )); do case "$1" in --as) as="${2:-}"; shift 2 ;; --yes) yes=1; shift ;; *) echo "unknown option: $1" >&2; exit 1 ;; esac; done
-
 die() { echo "$*" >&2; exit 1; }
-SET_RE='^asix-[0-9]{8}T[0-9]{6}Z$'; DB_RE='^[A-Za-z0-9_]{1,63}$'
-case "$cmd" in
-  list) args=(list) ;;
-  verify)  [[ "$set_name" =~ $SET_RE ]] || die "usage: $0 verify <set>   (see: $0 list)"; args=(verify "$set_name") ;;
-  globals) [[ "$set_name" =~ $SET_RE ]] || die "usage: $0 globals <set>"; args=(globals "$set_name") ;;
-  restore)
-    [[ "$set_name" =~ $SET_RE && "$db" =~ $DB_RE ]] || die "usage: $0 restore <set> <database> [--as <new-name>] [--yes]"
-    args=(restore "$set_name" "$db")
-    if [[ -n "$as" ]]; then [[ "$as" =~ $DB_RE ]] || die "invalid --as name"; args+=(--as "$as")
-    else args+=(--yes); fi ;;
-  *) die "usage: $0 list | verify <set> | restore <set> <database> [--as <name>] [--yes] | globals <set>" ;;
-esac
+cmd="${1:-}"; set_name=""; db=""; as=""; yes=""
+if [[ "$cmd" == ch-* ]]; then
+  # ClickHouse events: no backup set name, no applications to stop (the restore only adds events)
+  shift
+  [[ "$cmd" =~ ^ch-(list|verify|restore)$ ]] || die "usage: $0 ch-list | ch-verify | ch-restore [--as <new_table>] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--yes]"
+  args=("$cmd")
+  while (( $# )); do case "$1" in
+    --as) [[ "${2:-}" =~ ^[A-Za-z_][A-Za-z0-9_]{0,63}$ && "${2:-}" != "events" ]] || die "--as must be a NEW table name (letters, digits, underscore), not 'events'"; as="$2"; args+=(--as "$2"); shift 2 ;;
+    --from|--to) [[ "${2:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "$1 needs a day like 2026-10-17"; args+=("$1" "$2"); shift 2 ;;
+    --yes) args+=(--yes); shift ;;
+    *) die "unknown option: $1" ;;
+  esac; done
+  [[ "$cmd" != "ch-restore" || -n "$as" || " ${args[*]} " == *" --yes "* ]] || die "ch-restore adds the backed-up events to the live events table (nothing is deleted): pass --yes, or --as <new_table> for a separate copy"
+else
+  set_name="${2:-}"; db="${3:-}"; shift $(( $# > 3 ? 3 : $# )) || true
+  while (( $# )); do case "$1" in --as) as="${2:-}"; shift 2 ;; --yes) yes=1; shift ;; *) die "unknown option: $1" ;; esac; done
+  SET_RE='^asix-[0-9]{8}T[0-9]{6}Z$'; DB_RE='^[A-Za-z0-9_]{1,63}$'
+  case "$cmd" in
+    list) args=(list) ;;
+    verify)  [[ "$set_name" =~ $SET_RE ]] || die "usage: $0 verify <set>   (see: $0 list)"; args=(verify "$set_name") ;;
+    globals) [[ "$set_name" =~ $SET_RE ]] || die "usage: $0 globals <set>"; args=(globals "$set_name") ;;
+    restore)
+      [[ "$set_name" =~ $SET_RE && "$db" =~ $DB_RE ]] || die "usage: $0 restore <set> <database> [--as <new-name>] [--yes]"
+      args=(restore "$set_name" "$db")
+      if [[ -n "$as" ]]; then [[ "$as" =~ $DB_RE ]] || die "invalid --as name"; args+=(--as "$as")
+      else args+=(--yes); fi ;;
+    *) die "usage: $0 list | verify <set> | restore <set> <database> [--as <name>] [--yes] | globals <set> | ch-list | ch-verify | ch-restore [--as <table>] [--yes]" ;;
+  esac
+fi
 
 # --- replacing a live database: confirm, then stop everything that uses it -------------------
 scaled=()
@@ -84,6 +103,9 @@ spec:
               valueFrom: { secretKeyRef: { name: asix-backup-secret, key: BACKUP_PASSPHRASE } }
             - { name: BACKUP_DIR, value: "/backups" }
             - { name: BACKUP_TMP, value: "/scratch" }
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: { secretKeyRef: { name: clickhouse-secret, key: CLICKHOUSE_PASSWORD, optional: true } }
+            - { name: ASIX_CLICKHOUSE_URL, value: "http://asix:\$(CLICKHOUSE_PASSWORD)@clickhouse:8123/asix" }
           volumeMounts:
             - { name: backups, mountPath: /backups, readOnly: true }
             - { name: scratch, mountPath: /scratch }

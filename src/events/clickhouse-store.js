@@ -134,6 +134,11 @@ class ClickHouseEventStore extends EventStore {
 
   // Creates the table if it is missing. Safe to run any number of times.
   async ensureSchema() { await this._exec(schemaSql(this._table)); }
+  // Drops THIS store's table. Only for scratch tables (the backup's test restore): the live `events` table cannot be dropped through it.
+  async dropTable() {
+    if (this._table === 'events') throw new Error('refusing to drop the live events table');
+    await this._exec(`DROP TABLE IF EXISTS ${this._table}`);
+  }
 
   // Called once when the API starts (src/server.js): creates the table if it is missing, retrying while ClickHouse is still
   // coming up (a fresh install starts the API and the database together). Throws the last error once the attempts are used.

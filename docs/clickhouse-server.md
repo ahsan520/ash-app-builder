@@ -1,6 +1,6 @@
 # ClickHouse server in k8s/
 
-Phase 3 of `docs/product-plan.md`, first item. The ClickHouse **adapter** has existed since Phase 2 (`docs/event-store.md`);
+Phase 3 of `docs/product-plan.md`, first item (backup: `docs/clickhouse-backup.md`; copying events: below). The ClickHouse **adapter** has existed since Phase 2 (`docs/event-store.md`);
 this adds the ClickHouse **server** next to PostgreSQL on the k3s box, so `ASIX_EVENT_STORE=clickhouse` has something to point at.
 
 Files: `k8s/11-clickhouse.yaml` (ConfigMap, StatefulSet, headless Service), the `ASIX_EVENT_STORE`, `CLICKHOUSE_PASSWORD` and
@@ -56,9 +56,10 @@ Keycloak, nginx. Tight but it fits; do not also raise everything else.
 4. **Catch up:** events that reached PostgreSQL after the copy and before the old pods stopped are not in ClickHouse yet. Run the copy again
    with the time from step 2: `... copy-events.js --from postgres --to clickhouse --since <that time>`. Events already there are skipped, so
    this is safe to repeat.
-5. **ClickHouse is not backed up.** The nightly job (`k8s/32-backup.yaml`) dumps PostgreSQL and Keycloak only. Events in ClickHouse live on
-   one volume with no backup and no restore test. Until that exists, PostgreSQL keeps its copy of the history (the tool deletes nothing),
-   which is your fallback.
+5. **ClickHouse is backed up by the nightly job** (`docs/clickhouse-backup.md`): one encrypted file per day, incremental, test-restored about weekly,
+   restorable with `scripts/restore-backup.sh ch-restore`. Before relying on it, run `sudo scripts/restore-backup.sh ch-verify` once on the box (the
+   backup has not run there yet). PostgreSQL keeps its copy of the history (the copy tool deletes nothing), which is your fallback until you have seen
+   a ClickHouse backup and test restore succeed.
 6. Going back is the same one-line change, preceded by `copy-events.js --from clickhouse --to postgres` for what was written to ClickHouse in the meantime.
 - Everything that is not an event (rules, alerts, tenants, users, collectors, settings) stays in PostgreSQL and is unaffected by the switch.
   The IOC matcher keeps its place in PostgreSQL as an event time and id, so it carries on after a switch (from reading the code: events inside
@@ -106,6 +107,6 @@ Runs inside an API pod (they have both databases' settings; the tenant list come
 - The `k8s-manifests` CI job and the other new CI parts have not run on GitHub; the script was run locally.
 
 ## Not built
-- Backup and restore of ClickHouse (ClickHouse `BACKUP` to a disk or S3, a test restore, a line on the Data safety page).
+- Off-VM copies of the ClickHouse backup, and ClickHouse's own `BACKUP` command (see `docs/clickhouse-backup.md`).
 - Anything beyond one node: replication, Keeper, sharding, TLS between the API and ClickHouse, a NetworkPolicy.
 - A per-tenant choice of store (one store per API process).

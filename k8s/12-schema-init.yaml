@@ -627,6 +627,8 @@ data:
         error TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_backup_runs_started ON backup_runs(started_at DESC);
+    -- 'postgres' (the PostgreSQL dumps) or 'clickhouse' (the events held in ClickHouse, src/backup/clickhouse-backup.js)
+    ALTER TABLE backup_runs ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'postgres';
     GRANT SELECT, INSERT, UPDATE, DELETE ON backup_runs TO asix_admin;
 
     -- One-time, atomic conversion of events to a daily-partitioned table. The block either

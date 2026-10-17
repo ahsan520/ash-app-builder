@@ -219,7 +219,7 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
 |---|---|
 | ClickHouse server in `k8s/` (StatefulSet, volume, password Secret) | Done, optional and not used until `ASIX_EVENT_STORE=clickhouse` (see below and `docs/clickhouse-server.md`) |
 | Copy existing events between PostgreSQL and ClickHouse | Done (see below and `docs/clickhouse-server.md`); not yet run on the k3s box |
-| ClickHouse backup and restore test | Not started |
+| ClickHouse backup and restore test | Done (see below and `docs/clickhouse-backup.md`); not yet run on the k3s box |
 | Kafka between broker and parser; parser processes outside the API | Not started |
 | S3 archive, HA control-plane DB, multi-node capacity dashboard | Not started |
 
@@ -246,6 +246,17 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
 - Checked on real PostgreSQL 16 and ClickHouse 24.8.14.39 through the real command line (`tests/copy-events-db.test.js`, run by the CI job `clickhouse`) and with
   in-memory stores (`tests/copy-events.test.js`, in `npm test`). **Not yet run on the k3s box, and not measured at millions of events.**
 - Not built: copying anything but events, a progress file to resume (use `--since`), parallel tenants, a portal button.
+
+### ClickHouse backup (what exists)
+- The nightly job (`asix-backup`) now also backs up the events held in ClickHouse when ClickHouse is deployed: one encrypted file per UTC day (all tenants),
+  incremental (a day is re-read only when its count changed or it is one of the last two), a manifest with a content digest per day, `BACKUP_KEEP` days of grace
+  for days that retention removed. About weekly it loads everything into a scratch table and compares each day with the manifest, then drops the table.
+- Recorded in `backup_runs` (new column `kind`), shown by the Data safety page: critical when ClickHouse is the event store and has no backup, a failed or stale
+  backup, or no test restore; warnings otherwise. `scripts/restore-backup.sh ch-list | ch-verify | ch-restore --as <table> | ch-restore --yes` (restore only adds).
+- Checked on real PostgreSQL 16 and ClickHouse 24.8.14.39: unit tests, a gated real-database test (CI job `clickhouse`), and the real nightly job and `restore.js`
+  commands end to end. A bug found on the way (two runs in one second could write the same file name) is fixed and has a test. **Not yet run on the k3s box, and not
+  measured at millions of events.**
+- Not built: ClickHouse's native `BACKUP`, restoring one tenant, off-VM copies, a portal screen (findings appear in the existing list).
 
 ## Open decisions (ask before committing)
 - Smallest Home machine to design against (assumed: 4 vCPU / 8 GB / 100 GB until told otherwise).
