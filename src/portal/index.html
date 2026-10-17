@@ -356,14 +356,14 @@ function spark(hourly) {
 }
 let viewBy = 'source';
 async function pgDashboard() {
-  const [d, sm] = await Promise.all([api('/v1/dashboard/ingestion?by=' + viewBy), api('/v1/alerts/summary').catch(() => null)]);
+  const [d, sm, mine] = await Promise.all([api('/v1/dashboard/ingestion?by=' + viewBy), api('/v1/alerts/summary').catch(() => null), api('/v1/my-alerts').catch(() => null)]);
   const tt = d.totals, total = tt.events_24h;
   const sel = el('select', { onchange: () => { viewBy = sel.value; route(); } }, el('option', { value: 'source', textContent: 'Source type' }), el('option', { value: 'collector', textContent: 'Collector' }));
   sel.value = viewBy;
   const kpi = (v, l, on) => el('div', { className: 'kpi' + (on ? ' sel' : '') }, el('div', { className: 'v', textContent: v }), el('div', { className: 'l', textContent: l }));
   const [mb, unit] = fmtBytes(tt.bytes_24h);
   const legend = el('div', { className: 'legend' }, d.groups.map((g, i) => el('span', {}, el('i', { style: 'background:' + PALETTE[i % PALETTE.length] }), g.key + ' - ' + g.events_24h.toLocaleString())));
-  return [el('h1', { textContent: 'Command Center' }), el('div', { className: 'mute', textContent: 'Live view of events ingested into this tenant over the last 24 hours.' }), sevRow(sm),
+  return [el('h1', { textContent: 'Command Center' }), el('div', { className: 'mute', textContent: 'Live view of events ingested into this tenant over the last 24 hours.' }), sevRow(sm), myAlertsTile(mine),
     el('div', { className: 'cc' },
       el('div', {}, el('div', { className: 'viewby' }, 'View by', sel),
         kpi(total.toLocaleString(), 'All events (24h)', true), kpi(sm ? String(sm.active_total) : '-', 'Active alerts'), kpi(tt.events_1h.toLocaleString(), 'Events in the last hour'),
@@ -1807,6 +1807,22 @@ function lockedPage(m) {
   return [...head(m.name, 'This part of ASIX is not switched on for this installation.'),
     card('Why', el('div', { textContent: modWhy(m) || 'It is not enabled.' }), el('div', { className: 'mute', style: 'margin-top:8px', textContent: m.description || '' }),
       el('div', { style: 'margin-top:10px' }, el('button', { className: 'btn pri', textContent: 'Open Modules', onclick: () => { location.hash = '#/modules'; } })))];
+}
+
+// ---- My open alerts tile (Command Center) -------------------------------------------------
+// Alerts assigned to the signed-in user that are still open or acknowledged (GET /v1/my-alerts). Shows nothing for
+// a service account, when the call fails, or when the alerts module is not on.
+function myAlertsTile(m) {
+  if (!m || !m.applicable || menuModule('incidents')) return '';
+  const link = (label, q) => el('a', { href: '#/incidents?assignee=' + q, textContent: label });
+  if (!m.active_total) return el('div', { style: 'margin-top:14px' }, card('My open alerts', el('div', { className: 'mute', textContent: 'Nothing is assigned to you.' }), el('div', { style: 'margin-top:8px' }, link('See unassigned alerts', 'unassigned'))));
+  return el('div', { style: 'margin-top:14px' }, card('My open alerts',
+    el('div', { style: 'display:flex;align-items:center;gap:10px;flex-wrap:wrap' }, el('b', { textContent: m.active_total + ' active' }),
+      el('span', { className: 'mute', textContent: m.open + ' open, ' + m.acknowledged + ' acknowledged' + (m.oldest_open_at ? '; oldest unhandled for ' + ago(m.oldest_open_at) : '') }),
+      ...SEV.filter((x) => m.active[x]).map((x) => el('a', { href: '#/incidents?assignee=me&sev=' + x, style: 'text-decoration:none' }, sevPill(x, m.active[x])))),
+    table([{ h: 'Severity', f: (a) => sevPill(a.severity) }, { h: 'Alert', f: (a) => el('a', { href: '#/incidents?assignee=me', textContent: a.title }) },
+      { h: 'Status', f: (a) => pill(a.status, a.status === 'open' ? 'bad' : 'ok') }, { h: 'Last seen', f: (a) => ago(a.last_event_at) }], m.alerts),
+    m.active_total > m.alerts.length ? el('div', { style: 'margin-top:8px' }, link('See all ' + m.active_total + ' of my alerts', 'me')) : ''));
 }
 
 // ---- boot ---------------------------------------------------------------------------

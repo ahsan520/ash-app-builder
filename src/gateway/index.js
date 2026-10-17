@@ -48,6 +48,7 @@ app.use(require('./routes/search'));
 app.use(require('./routes/alerts'));
 app.use(require('./routes/alert-triage'));
 app.use(require('./routes/alert-dedupe'));
+app.use(require('./routes/my-alerts'));
 app.use(require('./routes/threat-intel'));
 app.use(require('./routes/collectors'));
 app.use(require('./routes/notifications'));

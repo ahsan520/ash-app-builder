@@ -142,7 +142,12 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
 - Uses the existing `alerts:read` / `alerts:write` permissions, so no role changes are needed.
 - Needs the new schema (`alerts.assignee_id`, `alert_notes`); it is applied by the normal schema-init
   job on deploy and is safe to re-run.
-- Not built: a "my open alerts" dashboard tile, notes on status changes, note editing or deletion.
+- **"My open alerts" tile (done):** the Command Center shows, under the severity row, how many open or acknowledged alerts are assigned to the signed-in
+  user (by severity, how many are still open, and how long the oldest unhandled one has waited) and the five that most need attention (worst severity,
+  open before acknowledged, newest first), each linking to the Alerts page filtered to "assigned to me". With nothing assigned it links to the unassigned
+  alerts instead. `GET /v1/my-alerts` (uses `alerts:read`; a service account has no user, so it answers `applicable: false` and the tile is not drawn). The tile
+  is also hidden when the Alerts module is not on. Checked on real PostgreSQL 16 (`tests/my-alerts-db.test.js`, in the CI `postgres` job) and in unit tests.
+- Not built: notes on status changes, note editing or deletion.
 
 ### Alert dedupe (what exists)
 - **What counts as a repeat:** two active (open or acknowledged) alerts from the same rule with the same group key. The rule
