@@ -1,0 +1,21 @@
+# Optional second config file: adds a syslog-over-TLS listener (RFC 5425, default port 6514) to the broker.
+# bootstrap-broker.sh installs it only when run with --tls-cert and --tls-key, and then starts Vector with
+#   VECTOR_CONFIG=/etc/vector/vector.yaml,/etc/vector/vector-tls.yaml
+# (set in broker.env). The transform in vector.yaml reads every source named syslog_*, so nothing else changes:
+# events from this listener take the same line rewrite, disk buffer and HTTPS sink as UDP and plain TCP.
+#
+# Test without a network:   vector validate --no-environment deploy/broker/vector.yaml deploy/broker/vector-tls.yaml
+sources:
+  syslog_tls:
+    type: syslog
+    mode: tcp
+    address: 0.0.0.0:${ASIX_SYSLOG_TLS_PORT:-6514}
+    connection_limit: 500
+    tls:
+      enabled: true
+      crt_file: ${ASIX_TLS_CERT_FILE:-/etc/asix-broker/tls/server.crt}
+      key_file: ${ASIX_TLS_KEY_FILE:-/etc/asix-broker/tls/server.key}
+      # With ASIX_TLS_VERIFY_CLIENT=true every sender must present a certificate issued by ASIX_TLS_CA_FILE
+      # (mutual TLS). The default accepts any client, which is what most devices can do.
+      ca_file: ${ASIX_TLS_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}
+      verify_certificate: ${ASIX_TLS_VERIFY_CLIENT:-false}

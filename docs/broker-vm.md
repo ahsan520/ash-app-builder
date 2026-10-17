@@ -5,13 +5,14 @@ it to the ASIX data node. It holds no database credentials: it only knows one UR
 stolen or exposed broker can be cut off by revoking that key.
 
 ```
-devices ──syslog UDP/TCP 514──> Vector (broker VM) ──HTTPS + ingestion key──> /v1/ingest/http (ASIX)
+devices ──syslog UDP/TCP 514──────────> Vector (broker VM) ──HTTPS + ingestion key──> /v1/ingest/http (ASIX)
+devices ──syslog over TLS 6514 (opt.)─┘
                                    │ disk buffer (1 GiB)                              │
                                    └─ heartbeat every 60 s ────────────────────> /v1/ingest/heartbeat
 ```
 
 ## What you get
-- **Syslog in:** UDP and TCP on one port (default 514), RFC 3164 and RFC 5424.
+- **Syslog in:** UDP and TCP on one port (default 514), RFC 3164 and RFC 5424. **Optionally syslog over TLS** (RFC 5425) on its own port (default 6514), see below.
 - **No server change for parsing:** Vector rewrites each event as `ISO-time host app[pid]: message`, which the
   HTTP lane already parses into host, app name, pid and event time, so existing parsing rules and the data
   model apply unchanged.
@@ -39,11 +40,42 @@ devices ──syslog UDP/TCP 514──> Vector (broker VM) ──HTTPS + ingesti
 
 The script validates the Vector config before restarting, and is safe to re-run (for example to change the key).
 
+## Syslog over TLS (optional)
+Plain syslog is readable and forgeable by anyone on the path. For sources that cross a network you do not control, add the TLS listener:
+```bash
+./scripts/deploy/bootstrap-broker.sh --url https://asix1/v1/ingest/http --key asix_ik_... --name broker-1 \
+    --tls-cert /path/server.crt --tls-key /path/server.key [--tls-port 6514] [--tls-client-ca /path/client-ca.pem]
+```
+- The certificate is the broker's own. Devices must trust whoever issued it, and its name or IP must match what they connect to. The
+  script checks that certificate and key belong together before changing anything.
+- **Without `--tls-client-ca`** any device can connect and the traffic is encrypted. **With it** (mutual TLS) every sender must present a
+  certificate issued by that CA; a sender with none, or with one from another CA, is refused at the handshake.
+- UDP and plain TCP stay as they were on `--port`. To turn TLS off, re-run the script without the `--tls-*` options: it removes the listener
+  and its copy of the key. Open the TLS port (default 6514/tcp) on the VM's firewall.
+- Both framings are accepted: newline-delimited and RFC 5425 octet-counted (`<length> <message>`). Events then take the same line rewrite,
+  disk buffer and HTTPS sink as every other syslog source; nothing changes on the ASIX side and there is no schema change.
+- How it is wired: `deploy/broker/vector-tls.yaml` is a second Vector config file with one source, `syslog_tls`; the transform in `vector.yaml`
+  reads `syslog_*`. The script sets `VECTOR_CONFIG=/etc/vector/vector.yaml,/etc/vector/vector-tls.yaml` in `broker.env`, which the Vector
+  package's service picks up (its unit runs plain `/usr/bin/vector`). The key is stored `640 root:vector` in `/etc/asix-broker/tls/`.
+- Check on the broker: `openssl s_client -connect 127.0.0.1:6514 -CAfile <issuing CA>`, then send one line, for example
+  `printf '<34>1 2026-10-17T10:00:00Z host app 1 - - tls test\n' | openssl s_client -connect 127.0.0.1:6514 -CAfile <CA> -quiet`
+  (add `-cert`/`-key` with mutual TLS). The line shows in search with source `syslog` and the broker's name.
+- A device configured for TLS syslog that the broker refuses (wrong CA, expired certificate, no client certificate) only fails on the device
+  side; look at `journalctl -u vector` on the broker. Certificates are not renewed for you: replace the files and re-run the script.
+- **Checked** with Vector 0.47.0: both config files validate; with a test CA, newline-framed and octet-counted lines over TLS arrived at the
+  HTTP sink in the expected `ISO-time host app[pid]: message` form; with mutual TLS on, the sender with a certificate from the CA got through
+  and a sender with no certificate and one with an untrusted certificate did not; the bootstrap script ran for real (only `systemctl`
+  stubbed) with and without TLS, refused a key that does not match, a certificate without a key and a TLS port equal to the plain port, and
+  removed the listener when re-run without TLS. `tests/broker-tls-config.test.js` (in `npm test`) keeps the three files in step. **Not yet
+  tried:** on a real broker VM under systemd, and with real devices (rsyslog, syslog-ng, network gear). Vector is still not in CI.
+- Not covered: the in-cluster Node collector (`src/ingestion/syslog-server.js`) has no TLS listener; use a broker VM for TLS sources.
+
 ## Files
 | File | Purpose |
 |---|---|
 | `deploy/broker/vector.yaml` | Vector config: syslog sources, line rewrite, HTTP sink with disk buffer |
 | `deploy/broker/vector-tests.yaml` | Vector unit tests for the line format: `vector test deploy/broker/vector.yaml deploy/broker/vector-tests.yaml` |
+| `deploy/broker/vector-tls.yaml` | Optional second Vector config: the syslog-over-TLS source (installed only with `--tls-cert`) |
 | `deploy/broker/broker.env.example` | Settings (`/etc/asix-broker/broker.env` on the VM, mode 640) |
 | `deploy/broker/vector-asix.conf` | systemd drop-in: loads the env file, lets Vector bind port 514 |
 | `deploy/broker/asix-broker-heartbeat.{sh,service,timer}` | The one-minute heartbeat |
@@ -62,8 +94,8 @@ The script validates the Vector config before restarting, and is safe to re-run 
   **built-in**, merged with the event counts it already derived from events.
 
 ## Limits and not built yet
-- One syslog port for UDP and TCP, no TLS syslog (RFC 5425) listener and no non-syslog sources (files, Windows
-  events, Kafka) on the broker yet.
+- One syslog port for UDP and TCP, plus the optional TLS port. No non-syslog sources (files, Windows events, Kafka) on the broker yet.
+  TLS certificates are not renewed or reloaded for you (re-run the script after replacing them).
 - The broker is not managed from the portal (no remote config push, upgrade or capacity view); the portal only
   sees it as a collector. `src/brokers/broker-framework.js` is still the Phase 3 placeholder.
 - A 4xx other than 408/429 from ASIX (for example a revoked key) is not retried by Vector, so those events are

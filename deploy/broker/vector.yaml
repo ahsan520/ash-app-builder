@@ -28,7 +28,8 @@ transforms:
   # ASIX HTTP lane already parses (host, app_name, proc_id, event time) with no server change.
   to_asix_line:
     type: remap
-    inputs: [syslog_udp, syslog_tcp]
+    # Wildcard: also picks up syslog_tls from vector-tls.yaml when the broker was set up with a certificate.
+    inputs: ["syslog_*"]
     source: |
       # The syslog source gives a timestamp; a string is also accepted so the tests can set one.
       t = timestamp(.timestamp) ?? parse_timestamp(.timestamp, format: "%+") ?? now()

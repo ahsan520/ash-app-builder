@@ -134,8 +134,12 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
 - Heartbeat: brokers (and the in-cluster syslog collector) ping `POST /v1/ingest/heartbeat` (or `/broker` for the
   shared token) every 60 s, refreshing `collectors.last_seen`, so an idle source stays Connected. The Collectors
   page merges the key-less (built-in) heartbeat rows with their event-derived counts.
-- Not built: managing brokers from the portal (config push, upgrades, capacity), syslog over TLS, non-syslog
-  sources on the broker, Kafka between broker and parser (Phase 3), a per-collector connected threshold (still 15 min).
+- **Syslog over TLS (done, optional):** `bootstrap-broker.sh --tls-cert/--tls-key` adds an RFC 5425 listener (default 6514) as a second Vector
+  config file; events take the same rewrite, buffer and HTTPS sink. Optional mutual TLS with `--tls-client-ca`. Checked against Vector 0.47.0
+  (handshake, both framings, mutual TLS accept and refuse, the bootstrap script with and without TLS); not yet tried on a real broker VM
+  under systemd or with real devices. Details: `docs/broker-vm.md`.
+- Not built: managing brokers from the portal (config push, upgrades, capacity), TLS on the in-cluster Node collector, certificate renewal,
+  non-syslog sources on the broker, Kafka between broker and parser (Phase 3), a per-collector connected threshold (still 15 min).
 
 ### Alert triage (what exists)
 - Each alert can be assigned to a user of the same tenant (or unassigned), and carries analyst notes
