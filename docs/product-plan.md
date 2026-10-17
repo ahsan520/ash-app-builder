@@ -208,7 +208,7 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   `usage.tenants` and `over_limit`, and the Modules page shows the count next to the limit. No route creates tenants yet (`src/tenant/tenant-service.js` is a stub), so
   nothing calls it today.
 - Checked with `tests/limits.test.js` (rules, and the real storage route with the sign-in chain and database stubbed). Not built: a per-tenant cap, SSO/other limit
-  keys, an audit entry when a save is refused beyond the normal request audit, a portal menu that follows module state.
+  keys, an audit entry when a save is refused beyond the normal request audit.
 
 ### How the three dials are implemented now
 - **Modules:** one manifest file per module in `src/modules/manifests/`. A module is on only if its
@@ -225,8 +225,12 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
 - **License limits (enforced, see below):** `retention_days_max` is applied when retention rules are saved; `tenants` is a
   rule ready for tenant creation to call (there is no tenant-creation route yet). The Home retention cap of 90 days
   is a placeholder until the licensing decision below is made.
-- **Not yet done:** the portal menu does not hide or grey out entries based on module state, and there
-  is no per-tenant module toggle (that would need a schema change).
+- **Portal menu follows module state (done):** the portal reads `GET /v1/modules` (at most once a minute) and greys any menu entry whose module is not on,
+  tagged "locked" (or "soon" for a planned module). Opening one shows why (profile, license or dependency) and a link to Modules instead of calling the API.
+  The path-to-module map (`MENU_MODULE`) is one block in `src/portal/index.html`. It only shapes the menu: the server still decides what is allowed, a user
+  without `modules:read` or a failed read greys nothing, and the Modules page is never greyed. On a Home install every Home module is on, so today nothing is
+  greyed; it shows up when a module is locked (for example a Home module whose dependency is off) or an Enterprise page is added.
+  There is still no per-tenant module toggle (that would need a schema change).
 
 ## Status of Phase 3 (updated this build)
 

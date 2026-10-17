@@ -16,6 +16,7 @@
   .n { display:flex; align-items:center; gap:12px; padding:9px 18px; color:var(--mute); cursor:pointer; user-select:none; border-left:3px solid transparent; }
   .n:hover { background:var(--hover); color:var(--text); } .n.on { color:var(--text); background:var(--sel); border-left-color:var(--acc); }
   .n.soon { opacity:.45; cursor:default; } .n.soon:hover { background:none; color:var(--mute); }
+  .n.locked { opacity:.55; }
   .n .ic { width:18px; text-align:center; } .n small { margin-left:auto; font-size:10px; border:1px solid var(--line); padding:0 5px; border-radius:8px; }
   .grp { padding:14px 18px 4px; font-size:10px; text-transform:uppercase; letter-spacing:.8px; color:var(--mute); opacity:.7; }
   .userbox { display:flex; align-items:center; gap:10px; padding:10px 14px; border-top:1px solid var(--line); margin-top:6px; }
@@ -264,8 +265,9 @@ const theme = () => { try { return localStorage.getItem('asix-theme') || 'dark';
 function setTheme(t) { document.documentElement.dataset.theme = t; try { localStorage.setItem('asix-theme', t); } catch {} }
 
 function navRow(n, active, path, onclick) {
-  const r = el('div', { className: 'n' + (n.soon ? ' soon' : '') + (active === path ? ' on' : '') },
-    el('span', { className: 'ic', textContent: n.ic || '' }), el('span', { textContent: n.label }), n.soon ? el('small', { textContent: 'soon' }) : '');
+  const lk = n.soon ? null : menuModule(path);   // a module that is not on for this installation (see "Menu follows module state")
+  const r = el('div', { className: 'n' + (n.soon ? ' soon' : '') + (lk ? ' locked' : '') + (active === path ? ' on' : '') },
+    el('span', { className: 'ic', textContent: n.ic || '' }), el('span', { textContent: n.label }), n.soon ? el('small', { textContent: 'soon' }) : lk ? el('small', { textContent: lk.state === 'planned' ? 'soon' : 'locked' }) : '');
   if (!n.soon) r.onclick = onclick;
   return r;
 }
@@ -290,10 +292,13 @@ async function route() {
   const [rawPath, qs] = (location.hash.replace(/^#\/?/, '') || 'dashboard').split('?');
   const path = rawPath === 'threat' ? 'threat/correlations' : rawPath;
   routeQuery = new URLSearchParams(qs || '');
+  await ensureMenuState();
   const leaf = leaves.find((l) => l.path === path) || leaves[0];
   buildNav(leaf.path);
   const c = leaf.crumb || [leaf.label];
   $('crumb').replaceChildren(...c.flatMap((x, i) => (i ? [' \u203A ', el('b', { textContent: x })] : [x])));
+  const off = menuModule(leaf.path);
+  if (off) return $('content').replaceChildren(el('div', { className: 'wrap' }, lockedPage(off)));
   $('content').replaceChildren(el('div', { className: 'mute', textContent: 'Loading...' }));
   try { const view = await leaf.page(); $('content').replaceChildren(el('div', { className: 'wrap' }, view)); }
   catch (e) { $('content').replaceChildren(el('div', { className: 'wrap' }, errBox(e))); }
@@ -1686,6 +1691,7 @@ const modWhy = (m) => (m.state === 'planned' ? (m.included_in_profile ? 'Not bui
   : m.reason === 'license' ? 'Needs a license that includes "' + m.entitlement + '"' : 'Needs ' + m.reason.replace('dependency:', '') + ' to be on');
 async function pgModules() {
   const r = await api('/v1/modules');
+  menuSet(r.modules); menuAt = Date.now(); buildNav('modules');   // keep the menu in step with what this page shows
   const lic = r.license;
   const licText = lic.status === 'valid' ? 'valid' + (lic.customer ? ' for ' + lic.customer : '') : lic.status === 'none' ? 'none installed' : lic.status;
   const lim = (v) => (v === null || v === undefined ? 'unlimited' : String(v));
@@ -1764,6 +1770,43 @@ async function pgPacks() {
       table([{ h: 'Rule', f: (x) => el('div', {}, el('div', { textContent: x.name }), el('div', { className: 'mute', style: 'font-size:12px', textContent: x.description })) },
         { h: 'Severity', f: (x) => sevPill(x.severity) }, { h: 'MITRE', f: (x) => (x.mitre || []).join(', ') }], p.rules),
       acts(p)))];
+}
+
+// ---- Menu follows module state ------------------------------------------------------
+// Which module each menu path belongs to (path as the router sees it). A module that is not "enabled"
+// (locked by profile, license or dependency, or planned) greys its entries and shows an explanation instead of
+// calling an API that the module would not serve. Paths missing here are always shown. This only shapes the
+// menu: the server decides what is allowed. If /v1/modules cannot be read (no modules:read, network), nothing is
+// greyed out.
+// BEGIN menu-state (tests/portal-menu.test.js runs this block on its own: no DOM, no api() calls inside it)
+const MENU_MODULE = {
+  dashboard: 'dashboards', incidents: 'alerts', search: 'search', threat: 'detections', posture: 'posture', packs: 'content-packs',
+  'settings/status': 'core', 'settings/account': 'core', 'settings/access': 'core',
+  'settings/capacity': 'capacity',
+  'settings/sources': 'ingestion', 'settings/collectors': 'ingestion', 'settings/installers': 'ingestion', 'settings/parsing': 'ingestion', 'settings/datamodel': 'ingestion',
+  'settings/retention': 'retention', 'settings/safety': 'retention',
+  'settings/notify': 'notifications', 'settings/deliveries': 'notifications',
+  'threat/library': 'threat-intel', 'threat/indicators': 'threat-intel',
+  'threat/ioc': 'detections', 'threat/bioc': 'detections', 'threat/correlations': 'detections',
+};
+let menuMods = null, menuAt = 0;   // module id -> row from /v1/modules
+function menuSet(list) { menuMods = {}; for (const m of list || []) if (m && m.id) menuMods[m.id] = m; }
+// the module row when this path's module is NOT on, else null (also null when nothing is known yet)
+function menuModule(path) {
+  const id = MENU_MODULE[path];
+  const m = id && menuMods ? menuMods[id] : null;
+  return m && m.state !== 'enabled' ? m : null;
+}
+// END menu-state
+async function ensureMenuState() {
+  if (menuMods && Date.now() - menuAt < 60000) return;
+  menuAt = Date.now();   // also after a failure, so a user without modules:read does not retry on every click
+  try { menuSet((await api('/v1/modules')).modules); } catch { /* keep what we had: nothing is greyed out */ }
+}
+function lockedPage(m) {
+  return [...head(m.name, 'This part of ASIX is not switched on for this installation.'),
+    card('Why', el('div', { textContent: modWhy(m) || 'It is not enabled.' }), el('div', { className: 'mute', style: 'margin-top:8px', textContent: m.description || '' }),
+      el('div', { style: 'margin-top:10px' }, el('button', { className: 'btn pri', textContent: 'Open Modules', onclick: () => { location.hash = '#/modules'; } })))];
 }
 
 // ---- boot ---------------------------------------------------------------------------
