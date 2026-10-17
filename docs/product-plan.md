@@ -55,6 +55,7 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) has started: see 
 | Detections, IOC matcher and alert sample events moved behind the store | Done (see below and `docs/event-store.md`, "Detection rules") |
 | Events list, data sources and Command Center reads in `routes/core.js` moved behind the store | Done (see `docs/event-store.md`) |
 | Retention job moved behind the store | Done (see below and `docs/event-store.md`, "The retention job behind the store") |
+| ClickHouse retention by partition drop and ClickHouse storage page | Done (see below and `docs/event-store.md`) |
 | ClickHouse adapter (same conformance suite) | Done — `src/events/clickhouse-store.js`; passes the conformance suites (store, search, rule match) against a real ClickHouse 24.8 and runs in its own CI job. XQL `search()` and detection rules run on it |
 | Parsers as separate workers | Not started |
 
@@ -97,7 +98,8 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) has started: see 
 - The events list (`/v1/search/events`), data sources and Command Center now read through `listEvents`, `dataSources` and
   `ingestionStats`, checked on in-memory, PostgreSQL and ClickHouse 24.8 and against the SQL they replaced.
 - **The retention preview and row purge now go through the store** (`expiredCounts`, `deleteExpired`), with the same policy (default days, per-source overrides, keep forever), API and run log. Checked on in-memory, PostgreSQL 16 and ClickHouse 24.8 by one conformance block, and on the partitioned Postgres table against the old preview SQL (`tests/retention-db.test.js`); the job also runs with events in ClickHouse (`tests/retention-clickhouse.test.js`). Partition creation and whole-partition drops stay PostgreSQL housekeeping and are skipped on other engines.
-- Not built: ClickHouse retention by partition drop or table TTL (it purges with per-source `DELETE`s), storage page sizes for ClickHouse, parsers as separate workers, a ClickHouse table
+- **ClickHouse partition retention and storage sizes are done** (`dropPartitionsBefore`, `storageStats`): when every tenant has automatic purge on and no keep-forever rule, whole UTC days older than the longest retention are dropped (`ALTER TABLE ... DROP PARTITION ID` on ClickHouse, `DROP TABLE` of the daily partition on PostgreSQL), and the storage page's events numbers come from the store on any engine. A ClickHouse table TTL is deliberately not used (retention is per tenant and per source). ClickHouse refuses to drop a partition above its `max_partition_size_to_drop` (50 GB default); that day is reported as failed and the others still go.
+- Not built: parsers as separate workers, a ClickHouse table
   created on deploy (run `ensureSchema()`), and any per-tenant choice of adapter (one adapter per process).
 
 ### Broker VM and collector heartbeat (what exists)
