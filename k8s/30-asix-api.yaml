@@ -68,7 +68,7 @@ spec:
             # nightly backup covers PostgreSQL only: read docs/clickhouse-server.md before changing it. The ClickHouse server
             # itself is k8s/11-clickhouse.yaml (deploy.sh --with-clickhouse); without it, "clickhouse" here stops the API at start.
             - name: ASIX_EVENT_STORE
-              value: "postgres"
+              value: "clickhouse"
             - name: CLICKHOUSE_PASSWORD
               valueFrom:
                 secretKeyRef:
