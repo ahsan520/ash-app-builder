@@ -52,6 +52,7 @@ app.use(require('./routes/my-alerts'));
 app.use(require('./routes/threat-intel'));
 app.use(require('./routes/collectors'));
 app.use(require('./routes/collector-threshold'));
+app.use(require('./routes/brokers'));
 app.use(require('./routes/notifications'));
 app.use(require('./routes/storage'));
 app.use(require('./routes/capacity'));

@@ -96,8 +96,9 @@ Plain syslog is readable and forgeable by anyone on the path. For sources that c
 ## Limits and not built yet
 - One syslog port for UDP and TCP, plus the optional TLS port. No non-syslog sources (files, Windows events, Kafka) on the broker yet.
   TLS certificates are not renewed or reloaded for you (re-run the script after replacing them).
-- The broker is not managed from the portal (no remote config push, upgrade or capacity view); the portal only
-  sees it as a collector. `src/brokers/broker-framework.js` is still the Phase 3 placeholder.
+- The portal has a read-only **Brokers** page (Settings, Brokers: status, Vector version, events in 24 hours, installer key state, what needs attention, and the
+  command to add a broker). It cannot change a broker: there is no remote config push, upgrade or capacity view. A broker is recognised by its heartbeat's
+  version text (`vector-<version>`), so a broker that has never sent a heartbeat does not appear. `src/brokers/broker-framework.js` is still the Phase 3 placeholder.
 - A 4xx other than 408/429 from ASIX (for example a revoked key) is not retried by Vector, so those events are
   dropped; fix the key and re-run the bootstrap script.
 - The connected/disconnected threshold is 15 minutes unless you set one for that collector (Collectors page, **Threshold**; 1 to 10080 minutes). A broker

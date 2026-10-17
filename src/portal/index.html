@@ -230,6 +230,7 @@ const SETTINGS = [
   { id: 'sources', label: 'Data sources', page: pgSources },
   { id: 'collectors', label: 'Collectors', page: pgCollectors },
   { id: 'installers', label: 'Installers', page: pgInstallers },
+  { id: 'brokers', label: 'Brokers', page: pgBrokers },
   { id: 'parsing', label: 'Parsing rules', page: pgParsing },
   { id: 'parser', label: 'Parser pool', page: pgParserPool },
   { id: 'datamodel', label: 'Data model rules', page: pgDataModel },
@@ -1105,6 +1106,31 @@ async function pgParserPool() {
           el('div', { className: 'mute', style: 'margin-top:8px;font-size:12px', textContent: 'These events are kept with their raw text and the field parsed._parse_error. Find them in Log search with: filter _parse_error != null. They are not re-parsed later.' }))];
 }
 
+// ---- Brokers ---------------------------------------------------------------------------------
+// Read-only: the broker VMs that report to this install (docs/broker-vm.md), and the command to add one.
+async function pgBrokers() {
+  const r = await api('/v1/brokers'), s = r.summary;
+  const ver = Object.entries(s.versions).map(([v, n]) => v + ' x' + n).join(', ');
+  return [el('div', { style: 'display:flex;align-items:baseline;gap:12px;flex-wrap:wrap' }, el('h2', { textContent: 'Brokers' }), el('span', { className: 'mute', textContent: 'updated ' + when(r.generated_at) + ' UTC' }),
+      el('button', { className: 'btn', style: 'margin-left:auto', textContent: 'Refresh', onclick: () => route() })),
+    el('p', { className: 'desc', textContent: 'Broker VMs that receive syslog and forward it to ASIX. A broker shows here once it has sent a heartbeat. Read-only: change a broker by re-running its bootstrap script.' }),
+    el('div', { className: 'grid' },
+      card('Brokers', el('div', { className: 'stat' }, String(s.total), el('small', { textContent: s.connected + ' connected, ' + s.disconnected + ' disconnected' }))),
+      card('Events, last 24 hours', el('div', { className: 'stat' }, s.events_24h.toLocaleString(), el('small', { textContent: r.counts_error || 'through brokers' }))),
+      card('Vector versions', el('div', {}, s.total ? ver : '-', s.mixed_versions ? el('div', { className: 'mute', style: 'margin-top:6px;font-size:12px', textContent: 'More than one version is in use.' }) : ''))),
+    card('', table([
+      { h: 'Name', f: (b) => b.name + (b.alias ? ' (' + b.alias + ')' : '') },
+      { h: 'Status', f: (b) => pill(b.status === 'connected' ? '\u2713 Connected' : '\u2715 Disconnected', b.status === 'connected' ? 'ok' : 'off') },
+      { h: 'Vector', f: (b) => b.vector_version || '-' }, { h: 'OS', f: (b) => b.os || '-' }, { h: 'IP address', f: (b) => b.last_ip || '-' },
+      { h: 'Last seen (UTC)', f: (b) => when(b.last_seen) }, { h: 'Events (24h)', f: (b) => b.events_24h.toLocaleString() },
+      { h: 'Installer', f: (b) => (b.installer ? b.installer.name + (b.installer.status === 'revoked' ? ' (revoked)' : '') : 'deleted') },
+      { h: 'Needs attention', f: (b) => (b.problems.length ? el('span', { style: 'color:var(--bad,#c33)', textContent: b.problems.join(' ') }) : '') },
+    ], r.brokers, 'No brokers yet. Create an installer, then run the command below on the broker VM.')),
+    el('h3', { style: 'margin-top:18px', textContent: 'Add a broker' }),
+    card('', el('p', { className: 'desc', textContent: 'Create an installer first (Settings, Installers) and copy its key: it is shown once. Then on the new VM, as root:' }),
+      el('pre', { className: 'mono', style: 'white-space:pre-wrap;margin:0', textContent: r.install_command }))];
+}
+
 // ---- Threat intelligence pages ---------------------------------------------------------
 const IND_TYPES = ['ip', 'domain', 'url', 'md5', 'sha1', 'sha256', 'email'];
 let indF = { type: '', q: '', offset: 0 }, indMsg = '';
@@ -1820,7 +1846,7 @@ const MENU_MODULE = {
   dashboard: 'dashboards', incidents: 'alerts', search: 'search', threat: 'detections', posture: 'posture', packs: 'content-packs',
   'settings/status': 'core', 'settings/account': 'core', 'settings/access': 'core',
   'settings/capacity': 'capacity',
-  'settings/sources': 'ingestion', 'settings/collectors': 'ingestion', 'settings/installers': 'ingestion', 'settings/parsing': 'ingestion', 'settings/parser': 'ingestion', 'settings/datamodel': 'ingestion',
+  'settings/sources': 'ingestion', 'settings/collectors': 'ingestion', 'settings/installers': 'ingestion', 'settings/brokers': 'ingestion', 'settings/parsing': 'ingestion', 'settings/parser': 'ingestion', 'settings/datamodel': 'ingestion',
   'settings/retention': 'retention', 'settings/safety': 'retention',
   'settings/notify': 'notifications', 'settings/deliveries': 'notifications',
   'threat/library': 'threat-intel', 'threat/indicators': 'threat-intel',

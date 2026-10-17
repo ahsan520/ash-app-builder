@@ -138,7 +138,12 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   config file; events take the same rewrite, buffer and HTTPS sink. Optional mutual TLS with `--tls-client-ca`. Checked against Vector 0.47.0
   (handshake, both framings, mutual TLS accept and refuse, the bootstrap script with and without TLS); not yet tried on a real broker VM
   under systemd or with real devices. Details: `docs/broker-vm.md`.
-- Not built: managing brokers from the portal (config push, upgrades, capacity), TLS on the in-cluster Node collector, certificate renewal,
+- **Brokers page (done, read-only):** Settings, Brokers lists the broker VMs that report to this install (`GET /v1/brokers`, uses `collectors:read`, no schema or role
+  change), recognised by the heartbeat's `vector-<version>` version text (`src/brokers/broker-view.js`). Each shows status (with its own connected threshold), Vector
+  version, events in the last 24 hours (from the event store; the page still loads if that fails), installer key state, and what needs attention (key revoked or deleted,
+  not seen for N minutes). The top shows totals and whether Vector versions are mixed, and the page gives the `bootstrap-broker.sh` command for a new broker (key left as a
+  placeholder). Checked on real PostgreSQL 16 (`tests/brokers-db.test.js`, CI `postgres` job) and in unit and route tests (`tests/brokers.test.js`); the page has not been seen in a browser.
+- Not built: changing a broker from the portal (config push, upgrades, capacity per broker), TLS on the in-cluster Node collector, certificate renewal,
   non-syslog sources on the broker, Kafka between broker and parser (Phase 3). The connected threshold is per collector now (see "Collector connected threshold" below).
 
 ### Collector connected threshold (what exists)
