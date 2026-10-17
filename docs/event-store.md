@@ -87,8 +87,9 @@ const { rows, truncated, mode, columns } = await getEventStore().search(tenantId
   tree) and `validatePlan()`, which `search()` runs first: field names must be plain identifiers, sizes and depth are bounded,
   the limit is 1 to 5,000. A bad plan is `INVALID_QUERY`. Values never become part of query text: PostgreSQL and ClickHouse bind
   them as parameters.
-- Engines: `src/search/xql-postgres.js` (SQL, also still behind `xql.compile()` for BIOC rules and old callers, byte for byte
-  what the old compiler wrote, except that a field called `constructor` or `toString` is now an ordinary field), `src/search/xql-clickhouse.js` (reads `parsed` with the JSON functions; output columns are
+- Engines: `src/search/xql-postgres.js` (SQL, byte for byte
+  what the old compiler wrote, except that a field called `constructor` or `toString` is now an ordinary field; the old
+  `xql.compile()` / `compileCondition()` wrappers are gone), `src/search/xql-clickhouse.js` (reads `parsed` with the JSON functions; output columns are
   renamed c0, c1... so a user alias such as `parsed` cannot shadow a real column), `src/search/xql-eval.js` (in memory).
 - Rows are keyed by output column. `raw` rows are `{ _id, _time (Date), source_type, collector_id, _raw, parsed }`; `fields` and
   `comp` rows hold text (and `null`) for fields and numbers for aggregates (a number or a numeric string: compare numerically).
@@ -107,7 +108,8 @@ const { rows, truncated, mode, columns } = await getEventStore().search(tenantId
   are gated by `ASIX_TEST_DB=1` like the store suite). Its large part compares each engine with
   `tests/fixtures/xql-search-expected.json`, made on real PostgreSQL by `tests/fixtures/gen-xql-search-expected.js`, which
   refuses to write unless the in-memory engine agrees. Regenerate it only when the language's meaning is changed on purpose.
-  `tests/xql-golden.test.js` pins the SQL and the error messages of the old compiler. `tests/search-route.test.js` goes through
+  `tests/xql-golden.test.js` pins the SQL and the error messages of the old compiler (it calls `parse` + `toSql` and `parseCondition` + `conditionToSql`
+  directly; `conditionToSql` has no other caller and exists as that test's oracle). `tests/search-route.test.js` goes through
   the real route (memory in CI, Postgres when gated).
 - Adding an adapter now also means implementing `_search` and running `runSearchConformance` unchanged (and `_matchGroups` with `runMatchConformance`).
 
@@ -124,11 +126,10 @@ Node's built-in `fetch`, so there is **no extra npm dependency**.
 | `ASIX_CLICKHOUSE_URL` | `http://user:password@host:8123/<database>` (database defaults to `asix`). Required in production. |
 | `ASIX_CLICKHOUSE_TIMEOUT_MS` | Per-request timeout, default 30000. Reads also run under `max_execution_time=20` s. |
 
-- **Table.** `store.ensureSchema()` creates it (idempotent); the DDL is `schemaSql()` in the adapter file:
+- **Table.** `store.init()` creates it when the API starts (see "Created on deploy" below); `store.ensureSchema()` is the call underneath (idempotent); the DDL is `schemaSql()` in the adapter file:
   `ReplacingMergeTree`, `PARTITION BY toYYYYMMDD(received_at)`, `ORDER BY (tenant_id, received_at, id)`, times as
   `DateTime64(3, 'UTC')` (the envelope's millisecond precision), `collector_id` and `event_time` nullable,
-  `parsed` stored as JSON text. Nothing creates the table on deploy yet (there is no ClickHouse in `k8s/` until
-  Phase 3): run `ensureSchema()` when you bring a server up.
+  `parsed` stored as JSON text.
 - **Idempotency does not depend on merges.** ReplacingMergeTree only removes duplicates when parts merge, which can be
   much later. So `insertBatch` first looks up which `(id, received_at)` pairs already exist and inserts only the new
   ones (`inserted` / `skipped` are exact), repeats inside one batch count once, and every read that could see two copies
@@ -304,10 +305,23 @@ ClickHouse partition. The conformance suite has a second block for `storageStats
 - A policy is validated as a whole first: more than 1,000 overrides, a source type over 255 characters or a duplicate is refused.
   (The API already limited an update to 50 overrides and 100 characters.)
 
+## Created on deploy (`store.init()`)
+`src/server.js` calls `getEventStore().init()` once, before the API starts listening. PostgreSQL and the memory store do nothing
+there (PostgreSQL's schema is applied by `k8s/12-schema-init.yaml`). The ClickHouse adapter runs `CREATE TABLE IF NOT EXISTS` and
+retries while ClickHouse is still coming up (10 attempts, 3 seconds apart; `initRetry` in the constructor changes that). If it still
+cannot, the process logs `[events] the event store could not be initialised: ...` and **exits**, so the platform restarts it and the
+failure is visible instead of an API that accepts requests it cannot store.
+- The database named in `ASIX_CLICKHOUSE_URL` must already exist (the official image makes it from `CLICKHOUSE_DB`); `init()` creates
+  the table, not the database, and needs the CREATE TABLE privilege once.
+- A table that was made by hand with a different partition key keeps working, but `init()` logs one warning that whole-day retention
+  will not drop anything from it (row deletes still work, and a monthly partition is never mistaken for a day).
+- Checked by: `tests/clickhouse-partitions.test.js` (stubbed HTTP: one CREATE, retries, giving up, the warning), the conformance suite
+  (`init()` can be called repeatedly, on every engine), `tests/event-store-clickhouse.test.js` (a real server: created from nothing,
+  second call harmless, data kept; a monthly table is warned about and left alone), and by starting the real `src/server.js` against an
+  empty ClickHouse database (the table appeared with `toYYYYMMDD(received_at)`) and against an unreachable one (exit code 1, nothing listening).
+
 ## What is left (next in Phase 2)
-- Remove the `xql.compile` / `compileCondition` wrappers (nothing but `tests/xql-golden.test.js` calls them now;
-  that test pins the old compiler's SQL and has to be reworked or retired with them). Order and starting points:
-  `docs/parallel-work.md`, "What to build next".
-- A ClickHouse table created on deploy (run `ensureSchema()` until then).
+- A ClickHouse server in `k8s/` (a StatefulSet with a volume and a password Secret): Phase 3. Until then ClickHouse is run
+  separately and `ASIX_CLICKHOUSE_URL` points at it; the API creates the table, not the server or the database.
 - Parsers as separate workers.
 - The syslog listener and the in-cluster collector reach the store through the HTTP lane, so they are covered.
