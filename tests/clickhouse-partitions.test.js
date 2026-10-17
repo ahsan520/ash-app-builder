@@ -58,3 +58,44 @@ describe('ClickHouse partition retention (stubbed HTTP)', () => {
     assert.strictEqual(sent.length, 0);
   });
 });
+
+describe('ClickHouse init() (stubbed HTTP)', () => {
+  const ok = (text = '') => ({ ok: true, status: 200, text: async () => text });
+  const mk = (handler, initRetry = { attempts: 3, delayMs: 1 }) => {
+    const sent = [];
+    const fetch = async (url, init) => { const sql = new URL(url).searchParams.get('query') || String(init.body); sent.push(sql); return handler(sql, sent.length); };
+    return { store: new ClickHouseEventStore({ url: 'http://default:ci@127.0.0.1:8123/asix', table: 'events', fetch, initRetry }), sent };
+  };
+
+  it('creates the table with CREATE TABLE IF NOT EXISTS, once, when ClickHouse is up', async () => {
+    const { store, sent } = mk((sql) => ok(/system\.tables/.test(sql) ? '{"partition_key":"toYYYYMMDD(received_at)"}' : ''));
+    await store.init();
+    assert.strictEqual(sent.filter((q) => /CREATE TABLE IF NOT EXISTS events/.test(q)).length, 1);
+    assert.match(sent[0], /PARTITION BY toYYYYMMDD\(received_at\)/);
+  });
+
+  it('retries while ClickHouse is still starting, then succeeds', async () => {
+    let calls = 0;
+    const { store, sent } = mk((sql) => { if (/CREATE TABLE/.test(sql) && ++calls < 3) return { ok: false, status: 503, text: async () => 'starting' }; return ok(); });
+    await store.init();
+    assert.strictEqual(calls, 3);
+    assert.strictEqual(sent.filter((q) => /CREATE TABLE/.test(q)).length, 3);
+  });
+
+  it('gives up after the attempts and throws the last error', async () => {
+    const { store, sent } = mk(() => ({ ok: false, status: 500, text: async () => 'Code: 81. DB::Exception: Database asix does not exist' }), { attempts: 2, delayMs: 1 });
+    await assert.rejects(store.init(), (e) => e.code === 'BACKEND_ERROR' && /does not exist/.test(e.message));
+    assert.strictEqual(sent.length, 2);
+  });
+
+  it('warns, and does not fail, when a hand-made table is not partitioned by day', async () => {
+    const warned = []; const orig = console.warn; console.warn = (m) => warned.push(String(m));
+    try {
+      const { store } = mk((sql) => ok(/system\.tables/.test(sql) ? '{"partition_key":"toYYYYMM(received_at)"}' : ''));
+      await store.init();
+    } finally { console.warn = orig; }
+    assert.strictEqual(warned.length, 1);
+    assert.match(warned[0], /toYYYYMM\(received_at\).*not by day/);
+  });
+});
+

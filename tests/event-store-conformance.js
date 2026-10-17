@@ -30,6 +30,11 @@ function runConformance(label, setup) {
     before(async () => { ({ store, tenants: [A, B], cleanup, prepareDay } = await setup()); });
     after(async () => { if (cleanup) await cleanup(); });
 
+    it('init() can be called any number of times before use', async () => {
+      await store.init(); await store.init();
+      assert.strictEqual(typeof (await store.count(A, {})), 'number');
+    });
+
     it('round-trips every envelope field', async () => {
       const e = ev(1, { raw: 'Failed password for root', parsed: { host: 'web01', xdm: { source: { ipv4: '203.0.113.9' } }, tags: ['a', 'b'], n: 1.5, ok: true, none: null } });
       const r = await store.insertBatch(A, [e]);

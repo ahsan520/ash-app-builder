@@ -1,11 +1,16 @@
 'use strict';
-// The XQL parser now produces a query plan and xql-postgres.js turns it into SQL. This checks the SQL, the
+// The XQL parser produces a query plan and xql-postgres.js turns it into SQL. This checks the SQL, the
 // bound values and every error message against what the old one-pass compiler produced (tests/fixtures/
 // xql-golden.json, generated from that compiler before the change), so search and BIOC rules behave as before.
+// The old `xql.compile()` / `compileCondition()` wrappers are gone; the two helpers below are what they were.
 const test = require('node:test');
 const assert = require('assert');
-const { compile, compileCondition, XqlError } = require('../src/search/xql');
+const { parse, parseCondition, XqlError } = require('../src/search/xql');
+const { toSql, conditionToSql } = require('../src/search/xql-postgres');
 const G = require('./fixtures/xql-golden.json');
+
+const compile = (query, { tenantId, from, to, limit }) => toSql(parse(query, { from, to, limit }), tenantId);
+const compileCondition = (query, values) => conditionToSql(parseCondition(query), values);
 
 test('compile() matches the old compiler on every query (SQL, values, mode, columns, limit, errors)', () => {
   assert.ok(G.compile.length > 100);

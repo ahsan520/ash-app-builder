@@ -3,7 +3,7 @@
 const assert = require('assert');
 const { normalizeDefinition, buildRuleMatch } = require('../src/detection/rule-query');
 const { matchToSql } = require('../src/search/xql-postgres');
-const { compileCondition } = require('../src/search/xql');
+const { parseCondition } = require('../src/search/xql');
 const { BUILTIN_RULES } = require('../src/detection/rule-runner');
 
 // valid condition: constants resolve, everything user-typed is a bound parameter in the SQL a store makes from the spec
@@ -22,7 +22,7 @@ assert.ok(normalizeDefinition({ xql: 'dataset = syslog | filter xdm.event.type =
 for (const bad of ['xdm.x = ', 'comp count()', 'filter xdm.x = XDM_CONST.NOPE', 'dataset = a | fields b', 'x = "1"; DROP TABLE events']) {
   assert.ok(normalizeDefinition({ xql: bad }).error, 'should reject: ' + bad);
 }
-assert.throws(() => compileCondition('', []), /Enter a condition/);
+assert.throws(() => parseCondition(''), /Enter a condition/);
 
 // a rule needs some condition; builder rows are kept only when well formed
 assert.ok(normalizeDefinition({}).error);

@@ -88,4 +88,30 @@ describe('clickhouse adapter specifics', () => {
   it('rejects an unsafe table name', () => {
     assert.throws(() => new ClickHouseEventStore({ table: 'events; DROP TABLE x' }), /table name/);
   });
+
+  it('init() creates a missing table, can run again, and leaves existing data alone', async () => {
+    const table = `events_test_${crypto.randomBytes(6).toString('hex')}`;
+    const fresh = new ClickHouseEventStore({ table, initRetry: { attempts: 1, delayMs: 1 } });
+    try {
+      await fresh.init();                                                   // nothing there yet: created
+      const { ids } = await fresh.insertBatch(A, [{ source_type: 'x-init', raw: 'first' }]);
+      await fresh.init();                                                   // again: no error, nothing lost
+      assert.strictEqual((await fresh.getByIds(A, ids)).length, 1);
+    } finally { await fresh._exec(`DROP TABLE IF EXISTS ${table}`); await fresh.close(); }
+  });
+
+  it('a hand-made table partitioned by month still works, and whole-day drops leave it alone', async () => {
+    const table = `events_test_${crypto.randomBytes(6).toString('hex')}`;
+    const s = new ClickHouseEventStore({ table, initRetry: { attempts: 1, delayMs: 1 } });
+    const warned = []; const orig = console.warn; console.warn = (m) => warned.push(String(m));
+    try {
+      await s._exec(`CREATE TABLE ${table} (id UUID, tenant_id UUID, source_type LowCardinality(String), collector_id Nullable(String), received_at DateTime64(3, 'UTC'), event_time Nullable(DateTime64(3, 'UTC')), raw String, parsed String) ENGINE = ReplacingMergeTree PARTITION BY toYYYYMM(received_at) ORDER BY (tenant_id, received_at, id)`);
+      await s.init();
+      assert.strictEqual(warned.length, 1);
+      const e = { id: crypto.randomUUID(), received_at: '2001-03-04T05:00:00.000Z', source_type: 'x-month', raw: 'old' };
+      await s.insertBatch(A, [e]);
+      assert.deepStrictEqual(await s.dropPartitionsBefore('2030-01-01'), { dropped: [], failed: [] }, 'a monthly partition is not a day, so nothing is dropped');
+      assert.strictEqual((await s.getByIds(A, [e.id])).length, 1);
+    } finally { console.warn = orig; await s._exec(`DROP TABLE IF EXISTS ${table}`); await s.close(); }
+  });
 });
