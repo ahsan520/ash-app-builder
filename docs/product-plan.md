@@ -233,7 +233,8 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   `docs/clickhouse-server.md` before switching.
 - Checked on a real ClickHouse 24.8.14.39 with the manifest's own config file (store, search, rule-match and retention suites pass as user `asix`; the
   real `src/server.js` ingested into it) and by validating every manifest against the Kubernetes schema (`scripts/ci/validate-k8s.py`, CI job
-  `k8s-manifests`). **Not run on a cluster:** the image's user and database creation, the probes, the volume and the new `deploy.sh` step.
+  `k8s-manifests`). Deployed on the k3s box: the pod came up Running, the image created user and database `asix`, the config file was loaded, the API
+  pods reached it with the secret's password, and the volume is `Retain`. **Not yet tried:** load, and a restart with events in it.
 - Not built: the event copy tool, ClickHouse backup, anything beyond one node (replication, Keeper, TLS to the API, a NetworkPolicy).
 
 ## Open decisions (ask before committing)

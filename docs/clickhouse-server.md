@@ -65,11 +65,19 @@ Keycloak, nginx. Tight but it fits; do not also raise everything else.
   same service, port, user and database as the ClickHouse manifest) passes; a deliberately wrong field name and a broken XML tag were both caught.
 - `bash -n` on `deploy.sh` and `sync-and-deploy.sh`.
 
-## Not checked (no cluster in the build environment)
-- That the official image creates user `asix` and database `asix` from the three variables (it does for `default` in CI; the image
-  documents it for other names).
-- `$(CLICKHOUSE_PASSWORD)` expanding inside `ASIX_CLICKHOUSE_URL`, the probes, the PVC, the 2Gi limit under real load, and the new `deploy.sh`
-  step itself, on k3s. First deploy: watch `k3s kubectl -n asix-platform describe pod clickhouse-0`.
+## Checked on the k3s box (2026-10-17, first deploy)
+- `./sync-and-deploy.sh --with-clickhouse` deployed it: `clickhouse-0` was `1/1 Running` about a minute after the apply, the secret was created, and the rest of the deploy was unaffected.
+- The image created user `asix` and database `asix` from the three variables (`SELECT currentUser(), currentDatabase()` gave `asix`, `default`; `SHOW DATABASES` lists `asix`), version 24.8.14.39.
+- `asix.xml` was loaded: the only diagnostic tables present are `query_log` (and an empty `mysql_binlogs`); `part_log` and `crash_log` are created on first use.
+- `$(CLICKHOUSE_PASSWORD)` expanded inside `ASIX_CLICKHOUSE_URL` in the API pods, and `ClickHouseEventStore.init()` run inside an API pod succeeded (so the Service name, port, user and password all work from the API). This created the empty `events` table in ClickHouse, which is harmless.
+- `ASIX_EVENT_STORE` is `postgres` in the API pods, as shipped.
+- The volume's reclaim policy is `Retain` (`protect-volumes.sh` ran).
+- Idle use: 152Mi of memory and 84m CPU for ClickHouse, against a 2Gi limit.
+- The startup and probe settings held: no restarts.
+
+## Not checked
+- Behaviour under real load: memory against the 2Gi limit while ingesting and searching, merges and disk growth.
+- A pod restart or VM reboot with data in it (the volume is `Retain`, but a restart with events in it has not been tried).
 - The `k8s-manifests` CI job and the other new CI parts have not run on GitHub; the script was run locally.
 
 ## Not built
