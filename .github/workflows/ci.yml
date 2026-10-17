@@ -12,6 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Lint and every test that needs no database (the in-memory event store runs the whole conformance suites).
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -29,3 +30,127 @@ jobs:
         run: npm run lint
       - name: Unit tests
         run: npm test
+
+  # The tests gated behind ASIX_TEST_DB=1, on a real PostgreSQL 16 with the platform schema.
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: asix_admin          # the image makes this user a superuser
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: asix_platform
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U asix_admin -d asix_platform"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      ASIX_TEST_DB: "1"
+      DB_HOST: 127.0.0.1
+      DB_PASSWORD: ci
+      PGPASSWORD: ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Platform schema, applied twice to prove it is idempotent
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet --break-system-packages pyyaml
+          python3 - <<'PY'
+          import yaml
+          for d in yaml.safe_load_all(open('k8s/12-schema-init.yaml')):
+              if d and d.get('kind') == 'ConfigMap':
+                  open('/tmp/schema.sql', 'w').write(d['data']['schema.sql'])
+          PY
+          for pass in 1 2; do
+            psql -h 127.0.0.1 -U asix_admin -d asix_platform -v ON_ERROR_STOP=1 -q -f /tmp/schema.sql
+          done
+      - name: Database tests
+        run: |
+          for t in event-store-postgres event-search-postgres event-match-postgres search-route detection-store-db \
+                   event-ingest-db read-counts-db core-reads-db alert-dedupe-db heartbeat-db retention-db; do
+            echo "::group::$t"
+            node --test "tests/$t.test.js"
+            echo "::endgroup::"
+          done
+          # New gated test files (*-db.test.js and friends) must be added to the list above.
+
+  # The event store on a real ClickHouse 24.8 (same conformance suites), plus the retention job with events in ClickHouse
+  # and the control-plane data in PostgreSQL (so this job has both services).
+  clickhouse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.8
+        env:
+          CLICKHOUSE_DB: asix
+          CLICKHOUSE_USER: default
+          CLICKHOUSE_PASSWORD: ci
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: asix_admin
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: asix_platform
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U asix_admin -d asix_platform"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      ASIX_TEST_DB: "1"
+      ASIX_CLICKHOUSE_URL: http://default:ci@127.0.0.1:8123/asix
+      DB_HOST: 127.0.0.1
+      DB_PASSWORD: ci
+      PGPASSWORD: ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Platform schema (for the retention job test)
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet --break-system-packages pyyaml
+          python3 - <<'PY'
+          import yaml
+          for d in yaml.safe_load_all(open('k8s/12-schema-init.yaml')):
+              if d and d.get('kind') == 'ConfigMap':
+                  open('/tmp/schema.sql', 'w').write(d['data']['schema.sql'])
+          PY
+          psql -h 127.0.0.1 -U asix_admin -d asix_platform -v ON_ERROR_STOP=1 -q -f /tmp/schema.sql
+      - name: Wait for ClickHouse
+        run: |
+          for i in $(seq 1 30); do
+            curl -fs --user default:ci http://127.0.0.1:8123/ping >/dev/null && break
+            sleep 2
+          done
+          curl -fs --user default:ci http://127.0.0.1:8123/ -d 'CREATE DATABASE IF NOT EXISTS asix'
+      - name: ClickHouse tests
+        run: |
+          for t in event-store-clickhouse event-search-clickhouse event-match-clickhouse retention-clickhouse; do
+            echo "::group::$t"
+            node --test "tests/$t.test.js"
+            echo "::endgroup::"
+          done
+          # New gated ClickHouse test files must be added to the list above.
