@@ -58,6 +58,7 @@ app.use(require('./routes/parsing'));
 app.use(require('./routes/data-model'));
 app.use(require('./routes/modules'));
 app.use(require('./routes/packs'));
+app.use(require('./routes/parser-status'));
 
 app.get('/', (req, res) => {
   res.json({

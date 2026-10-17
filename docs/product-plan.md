@@ -118,7 +118,11 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
 - Checked with real worker threads and a fake worker that hangs, crashes and runs out of memory (`tests/parser-pool.test.js`), and on real
   PostgreSQL 16 through the real HTTP lane, inline and on 2 workers (`tests/parse-ingest-db.test.js`), plus the real `src/server.js` with 2
   workers (parsed an sshd line, exited 0 on SIGTERM).
-- Not built: a portal view of the pool, re-parsing events stored unparsed, parser processes outside the API and Kafka between broker and
+- **Parser pool page (done):** Settings, Parser pool shows how parsing runs, the pool's counters and how many events were stored unparsed in the
+  last 24 hours / 3 days / 7 days, by reason (`GET /v1/parser/status`, uses `capacity:read`, read-only, no schema or role change). The counters belong to
+  the API pod that answers and restart with it; the unparsed count comes from the event store, so it covers all pods and either engine. Details:
+  `docs/parser-workers.md`.
+- Not built: re-parsing events stored unparsed, counters that add up across API pods, parser processes outside the API and Kafka between broker and
   parser (Phase 3), a per-tenant share of the workers.
 
 ### Broker VM and collector heartbeat (what exists)

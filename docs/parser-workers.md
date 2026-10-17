@@ -52,11 +52,23 @@ the pod memory limit (each worker adds roughly 40 to 60 MB; 768Mi is a sensible 
 | The same tenant and rule text fails 3 batches in a row | For 60 s its events are stored unparsed at once, without trying (`PARSE_QUARANTINED`); the API logs it. A success resets the count | `202` |
 | Every worker busy and the queue full (`PARSER_BUSY`) | **Not accepted, nothing stored** | `503 INGEST_BUSY`, `Retry-After: 2` (the broker's disk buffer and the syslog collector's spool retry) |
 
-Search `parsed._parse_error` to find events that were stored unparsed. They are not re-parsed later: there is no re-parse job.
+Search `parsed._parse_error` to find events that were stored unparsed (Log search: `filter _parse_error != null`), or open **Settings, Parser pool** (below). They are not re-parsed later: there is no re-parse job.
+
+## Parser pool page and API (read-only)
+- Portal: **Settings, Parser pool** (under Data collection, next to Parsing rules). It shows how parsing runs (inline, or workers with the
+  time limit and queue size), the pool's counters, and how many events were stored unparsed in the last 24 hours, 3 days or 7 days, by reason.
+- API: `GET /v1/parser/status?hours=24` (1 to 168; default 24). Needs `capacity:read`, so no role change. Answer: `settings` (`mode` `inline` or
+  `workers`, `workers`, `timeout_ms`, `queue`), `pool` (the counters from `pool.stats()`, or `null` when inline), `unparsed` (`hours`, `total`,
+  `by_reason`, `truncated`) and `unparsed_error` (set, with `unparsed.total` `null`, when the count could not be read; the rest still answers).
+- **The counters are per API pod.** They live in the memory of the replica that answered and restart with it, so with several replicas the
+  numbers change from request to request. The unparsed count comes from the event store (one XQL query, `filter _parse_error != null | comp count()
+  by _parse_error`), so it covers every replica and works on PostgreSQL and ClickHouse alike.
+- Code: `src/ingestion/parser-status.js` (new, shaping and the count), `src/gateway/routes/parser-status.js` (new), mounted in `src/gateway/index.js`,
+  portal `pgParserPool()` in `src/portal/index.html` (one `SETTINGS` line and one `MENU_MODULE` entry, module `ingestion`).
 
 ## Not built
-- A portal view of the pool (`pool.stats()` has workers, busy, queued, completed, failed, timeouts, crashes, rejected, quarantined,
-  `rules_resent`, but nothing shows it yet; the API logs timeouts, crashes and quarantines).
+- Pool counters that survive a restart or add up across replicas (the page shows the answering pod's counters only; the API still logs
+  timeouts, crashes and quarantines).
 - Re-parsing events that were stored unparsed.
 - Parser processes outside the API, and Kafka between the broker and the parser (Phase 3).
 - A per-tenant worker share (one tenant's busy batches can fill the queue for others; the quarantine only covers batches that time out or crash).
@@ -67,6 +79,9 @@ Search `parsed._parse_error` to find events that were stored unparsed. They are 
 - `tests/parser-pool.test.js`: real workers equal inline results (many batches at once, own rules, rule sets alternating, a worker
   that forgot its rules); a fake worker (`tests/fixtures/fake-parser-worker.js`) that hangs, crashes or runs out of memory:
   time limit, replacement, queue limit including `0`, quarantine and its reset, `close()`. No database.
+- `tests/parser-status.test.js`: the shaping, the unparsed count on the in-memory store (window, tenant isolation, unknown reasons kept, a failing
+  store does not break the answer or leak its message) and the real route with sign-in stubbed (permission `capacity:read`, window bounds, a live pool).
+- `tests/parser-status-db.test.js` (gated by `ASIX_TEST_DB=1`): the same count and route on a real `events` table, with a second tenant's events present.
 - `tests/parse-ingest-db.test.js` (gated by `ASIX_TEST_DB=1`): the real HTTP lane on PostgreSQL. Built-in and tenant rules, a saved
   change taking effect at once, drops, timeout and crash stored unparsed and marked, the 503 and its collector counts. CI runs it
   inline and again with `ASIX_PARSER_WORKERS=2`.
