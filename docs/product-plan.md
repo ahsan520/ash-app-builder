@@ -144,7 +144,8 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   not seen for N minutes). The top shows totals and whether Vector versions are mixed, and the page gives the `bootstrap-broker.sh` command for a new broker (key left as a
   placeholder). Checked on real PostgreSQL 16 (`tests/brokers-db.test.js`, CI `postgres` job) and in unit and route tests (`tests/brokers.test.js`); the page has not been seen in a browser.
 - Not built: changing a broker from the portal (config push, upgrades, capacity per broker), TLS on the in-cluster Node collector, certificate renewal,
-  non-syslog sources on the broker, Kafka between broker and parser (Phase 3). The connected threshold is per collector now (see "Collector connected threshold" below).
+  non-syslog sources on the broker, Kafka between broker and parser (Phase 3). The connected threshold is per collector now (see "Collector connected threshold" below), and
+  a broker can raise an alert when it goes Disconnected (see "Collector disconnect alerts" below).
 
 ### Collector connected threshold (what exists)
 - A collector is **Connected** if it was last seen within its threshold: 15 minutes unless the collector has its own. A slow sender (a nightly job) can be given a
@@ -158,7 +159,29 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
 - Checked on real PostgreSQL 16 with the schema applied twice (`tests/collector-threshold-db.test.js`, in the CI `postgres` job: default, custom, back to default,
   other tenant refused, a heartbeat leaves it alone) and in unit and route tests (`tests/collector-status.test.js`, in `npm test`). The button has not been seen in a browser.
 - Not built: a default for the whole tenant (set per collector only), a threshold for sources that appear only in events (the in-cluster syslog collector keeps its
-  heartbeat row, so it can be set; a source with no row cannot), a "went Disconnected" alert or notification.
+  heartbeat row, so it can be set; a source with no row cannot). The "went Disconnected" alert is done: see "Collector disconnect alerts" below.
+
+### Collector disconnect alerts (what exists)
+- **Opt in per collector:** Collectors page, **Alert if down** button (Stop alerting turns it off), or `PUT /v1/collectors/:id/watch` with `{ "watch": true | false }`
+  (uses `collectors:write`, so no role change). Every collector starts off, so deploying this raises nothing by itself. The Brokers page shows the setting.
+- **What it does:** a watchdog (`src/collectors/watchdog.js`, started with the API like the rule runner; every 60 s, one replica at a time through a PostgreSQL
+  advisory lock) looks at the watched collectors. One that is past its connected threshold (the same rule and the same per-collector threshold as the Collectors page,
+  `src/collectors/status.js`) gets one alert: rule `Collector disconnected`, title `Collector disconnected: <name>`, severity `high`, group `collector:<id>`, no
+  detection rule behind it (like the IOC matcher's alerts). The alert goes through the notification channels that already exist: nothing was added there, a channel
+  whose minimum severity is `high` or lower and whose rule filter allows it sends it once.
+- **One alert per outage:** a collector that stays down keeps its one alert (open or acknowledged). If an analyst closes it while the collector is still down, no new
+  alert is raised for that outage (the alert remembers the `last_seen` it was raised for). When the collector sends again, the alert is closed with an "ASIX" note;
+  the next outage raises a new alert. The alert is also closed (with a note) when watching is turned off, the collector is deleted, or its threshold is raised above the gap.
+- **After an API restart:** collectors could not report while the API was down, so no new alert is raised for the first 5 minutes (`ASIX_WATCHDOG_GRACE_SECONDS`);
+  closing still works. A collector that has never been seen is skipped. `ASIX_WATCHDOG_SEVERITY` changes the severity (`critical`, `high`, `medium`, `low`);
+  `ASIX_WATCHDOG_ENABLED=false` stops the watchdog; `ASIX_WATCHDOG_INTERVAL_SECONDS` (default 60, minimum 15).
+- **Schema:** `collectors.watch_disconnect BOOLEAN NOT NULL DEFAULT false`, added by the normal schema-init job and safe to re-run. Nothing is deleted or hidden.
+- Checked on real PostgreSQL 16 with the schema applied twice (`tests/collector-watch-db.test.js`, in the CI `postgres` job: not watched raises nothing, start-up grace,
+  one alert for the down collector and none for the connected, unwatched or other tenant's, no duplicate while open or acknowledged, no repeat after a manual close,
+  closed with a note on reconnect, a new outage raises a new alert, custom threshold, watching off, collector deleted, and the real notification dispatcher sending it
+  once) and in unit and route tests (`tests/collector-watchdog.test.js`, in `npm test`). **Not yet run on the k3s box or seen in a browser.**
+- Not built: a tenant-wide "watch everything" switch, a per-collector severity, a separate "recovered" notification (the alert closes with a note, nothing is sent),
+  an alert for a collector that stops sending events while its heartbeat keeps arriving, an alert when a broker's installer key is revoked.
 
 ### Alert triage (what exists)
 - Each alert can be assigned to a user of the same tenant (or unassigned), and carries analyst notes

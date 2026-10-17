@@ -64,6 +64,14 @@ spec:
               value: "0"
             - name: ASIX_PARSER_TIMEOUT_MS
               value: "5000"
+            # Collector watchdog (src/collectors/watchdog.js): raises an alert when a collector you turned "Alert if down"
+            # on for goes Disconnected. Nothing is raised for collectors you did not choose. SEVERITY is the alert's severity
+            # (high = a notification channel's default minimum); GRACE is how long after an API start no new alert is raised,
+            # because collectors could not report while the API was down.
+            - name: ASIX_WATCHDOG_SEVERITY
+              value: "high"
+            - name: ASIX_WATCHDOG_GRACE_SECONDS
+              value: "300"
             # Event store (src/events): "postgres" (default) or "clickhouse". Switching does NOT copy existing events: run
             # src/events/copy-events.js first (docs/clickhouse-server.md, "Switching the API to ClickHouse"). The nightly backup
             # covers both: the PostgreSQL sets and, when ClickHouse is deployed, its events (docs/clickhouse-backup.md). The

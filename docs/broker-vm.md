@@ -103,3 +103,10 @@ Plain syslog is readable and forgeable by anyone on the path. For sources that c
   dropped; fix the key and re-run the bootstrap script.
 - The connected/disconnected threshold is 15 minutes unless you set one for that collector (Collectors page, **Threshold**; 1 to 10080 minutes). A broker
   with a long quiet spell does not need it: the heartbeat keeps it Connected. It is for slow senders such as a nightly job.
+
+## Getting an alert when a broker goes quiet
+A broker that stops (Vector down, VM off, network cut) shows as Disconnected on the Collectors and Brokers pages, but nothing tells you unless you look. On the
+Collectors page, press **Alert if down** on the broker's row: ASIX then raises a `Collector disconnected: <broker name>` alert (severity high) once the broker has
+been silent longer than its connected threshold, and closes it when the broker's heartbeat returns. Add a notification channel (Settings, Notifications) to be told
+by email, Slack or webhook. It is off until you press the button; a slow or rarely used broker should get a longer threshold first (**Threshold** button). Details:
+`docs/product-plan.md`, "Collector disconnect alerts".

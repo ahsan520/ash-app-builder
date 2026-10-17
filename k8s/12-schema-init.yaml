@@ -477,6 +477,7 @@ data:
         WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
 
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS connected_within_min INTEGER;
+    ALTER TABLE collectors ADD COLUMN IF NOT EXISTS watch_disconnect BOOLEAN NOT NULL DEFAULT false;
     CREATE INDEX IF NOT EXISTS idx_collectors_tenant_seen ON collectors(tenant_id, last_seen);
     CREATE INDEX IF NOT EXISTS idx_collectors_key ON collectors(key_id);
 

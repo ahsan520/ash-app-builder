@@ -18,7 +18,7 @@ router.get('/v1/collectors', ...guarded('collectors:read'), async (req, res) => 
   try {
     const reg = await db.withTenant(req.tenant_id, (client) => client.query(
       `SELECT c.id, c.name, c.alias, c.platform, c.os, c.version, c.last_ip, c.first_seen, c.last_seen,
-              c.events_total::bigint AS events_total, c.connected_within_min, k.name AS installer,
+              c.events_total::bigint AS events_total, c.connected_within_min, c.watch_disconnect, k.name AS installer,
               CASE WHEN c.key_id IS NULL THEN 'built-in' ELSE 'registered' END AS origin
        FROM collectors c LEFT JOIN ingestion_keys k ON k.id = c.key_id WHERE c.tenant_id = $1`, [req.tenant_id]));
     // Event counts come from the event store (one pass each): the last 7 days per collector, and the last 24 hours.
@@ -46,7 +46,7 @@ router.get('/v1/collectors', ...guarded('collectors:read'), async (req, res) => 
     // Each collector is judged against its own threshold (collectors.connected_within_min), else the default.
     // Sources that only appear in events have no row to hold one, so they use the default.
     const all = merged.concat([...evByName.values()]).map((c) => ({
-      ...c, events_total: Number(c.events_total), events_24h: d.get(c.name) || 0,
+      ...c, events_total: Number(c.events_total), events_24h: d.get(c.name) || 0, watch_disconnect: c.watch_disconnect === true,
       connected_within_min: effectiveMinutes(c.connected_within_min), connected_custom: isCustom(c.connected_within_min),
       status: statusOf(c.last_seen, c.connected_within_min, now),
     }));

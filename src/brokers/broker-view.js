@@ -27,7 +27,7 @@ function shape(row, { now = Date.now(), events24h = 0 } = {}) {
     first_seen: row.first_seen, last_seen: row.last_seen,
     events_total: Number(row.events_total) || 0, events_24h: events24h,
     connected_within_min: effectiveMinutes(row.connected_within_min), connected_custom: isCustom(row.connected_within_min),
-    status: statusOf(row.last_seen, row.connected_within_min, now),
+    status: statusOf(row.last_seen, row.connected_within_min, now), watch_disconnect: row.watch_disconnect === true,
     installer: row.key_id ? { id: row.key_id, name: row.installer_name || null, status: row.key_status || 'active', key_prefix: row.key_prefix || null, last_used_at: row.key_last_used_at || null } : null,
   };
   b.problems = problemsOf(b, now);

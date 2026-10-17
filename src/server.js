@@ -13,6 +13,7 @@ async function main() {
     require('./detection/rule-runner').start();
     require('./detection/ioc-matcher').start();
     require('./notifications/dispatcher').start();
+    require('./collectors/watchdog').start();
     require('./storage/retention').start();
     require('./capacity/capacity').start();
   });
