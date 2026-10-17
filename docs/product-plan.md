@@ -218,8 +218,8 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
 | Item | State |
 |---|---|
 | ClickHouse server in `k8s/` (StatefulSet, volume, password Secret) | Done, optional and not used until `ASIX_EVENT_STORE=clickhouse` (see below and `docs/clickhouse-server.md`) |
-| Copy existing events between PostgreSQL and ClickHouse | Done (see below and `docs/clickhouse-server.md`); not yet run on the k3s box |
-| ClickHouse backup and restore test | Done (see below and `docs/clickhouse-backup.md`); not yet run on the k3s box |
+| Copy existing events between PostgreSQL and ClickHouse | Done (see below and `docs/clickhouse-server.md`); run on the k3s box 2026-10-17 (2679 events, verified) |
+| ClickHouse backup and restore test | Done (see below and `docs/clickhouse-backup.md`); run on the k3s box 2026-10-17 (20 days backed up and verified, 2679 events restored into a new table) |
 | Kafka between broker and parser; parser processes outside the API | Not started |
 | S3 archive, HA control-plane DB, multi-node capacity dashboard | Not started |
 
@@ -244,7 +244,7 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   not duplicate events (ClickHouse keeps milliseconds, PostgreSQL microseconds, so the stores' `(id, received_at)` idempotency alone would). It deletes nothing and
   never overwrites a different event that holds the same id (it reports it).
 - Checked on real PostgreSQL 16 and ClickHouse 24.8.14.39 through the real command line (`tests/copy-events-db.test.js`, run by the CI job `clickhouse`) and with
-  in-memory stores (`tests/copy-events.test.js`, in `npm test`). **Not yet run on the k3s box, and not measured at millions of events.**
+  in-memory stores (`tests/copy-events.test.js`, in `npm test`). **Run on the k3s box 2026-10-17 (2679 events, all verified); not measured at millions of events.**
 - Not built: copying anything but events, a progress file to resume (use `--since`), parallel tenants, a portal button.
 
 ### ClickHouse backup (what exists)
@@ -254,8 +254,8 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
 - Recorded in `backup_runs` (new column `kind`), shown by the Data safety page: critical when ClickHouse is the event store and has no backup, a failed or stale
   backup, or no test restore; warnings otherwise. `scripts/restore-backup.sh ch-list | ch-verify | ch-restore --as <table> | ch-restore --yes` (restore only adds).
 - Checked on real PostgreSQL 16 and ClickHouse 24.8.14.39: unit tests, a gated real-database test (CI job `clickhouse`), and the real nightly job and `restore.js`
-  commands end to end. A bug found on the way (two runs in one second could write the same file name) is fixed and has a test. **Not yet run on the k3s box, and not
-  measured at millions of events.**
+  commands end to end. A bug found on the way (two runs in one second could write the same file name) is fixed and has a test. **Run on the k3s box 2026-10-17 (nightly job's
+  ClickHouse part, `ch-verify`, `ch-restore --as`); not measured at millions of events.**
 - Not built: ClickHouse's native `BACKUP`, restoring one tenant, off-VM copies, a portal screen (findings appear in the existing list).
 
 ## Open decisions (ask before committing)

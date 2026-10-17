@@ -62,9 +62,13 @@ sudo scripts/restore-backup.sh ch-restore --yes [--from D] [--to D]      # ADD t
 - `scripts/restore-backup.sh` argument handling with a stubbed `k3s`: every `ch-*` form builds the right Job and passes the ClickHouse settings;
   each refused form creates no Job; the existing commands are unchanged. Not run against a real cluster.
 
+## Checked on the k3s box (2026-10-17)
+- The CronJob has the new variables (`CLICKHOUSE_PASSWORD` from `clickhouse-secret`, `ASIX_CLICKHOUSE_URL`, `BACKUP_CLICKHOUSE=auto`) and `backup_runs.kind` exists.
+- A manual job (`create job --from=cronjob/asix-backup`) backed up 2679 events in 20 daily files (143,675 bytes), `verified: true`; files and `manifest.json` are in `/var/backups/asix/scheduled/clickhouse/`.
+- `scripts/restore-backup.sh ch-list` and `ch-verify` (20 days, 2679 rows) worked. `ch-restore --as events_copy` into an empty table restored 2679 (already there 0); run again on the filled table it restored 0 (already there 2679). The `events` table was not touched. The scratch table was dropped afterwards.
+- The script had no executable bit in the zip (see `docs/parallel-work.md`, known gaps).
+
 ## Not checked
-- On the k3s box: the CronJob with the new variables, the schema change (`ALTER TABLE backup_runs ADD COLUMN IF NOT EXISTS kind`, applied twice on a
-  local PostgreSQL), a real `ch-restore` Job. Run `ch-verify` and one `ch-restore --as` there before relying on it.
 - Size: tested on thousands of events. The first run reads the whole history through the API pod's 512Mi limit and the Job's 2-hour limit
   (`activeDeadlineSeconds: 7200`); a large history may need more of either, and the weekly test restore writes a full second copy into ClickHouse
   while it runs. Not measured.

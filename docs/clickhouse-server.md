@@ -98,7 +98,11 @@ Runs inside an API pod (they have both databases' settings; the tenant list come
   microsecond received times, null collectors and event times, unicode and nested JSON copied PostgreSQL to ClickHouse and every one verified; same events per day on both
   sides; a second run copies 0; `--since` catches a late event; `--dry-run` writes nothing; another tenant untouched; copied back ClickHouse to PostgreSQL with no
   duplicates and only the 40 ClickHouse-only events added; all tenants including an empty one; bad arguments refused. CI runs the second file in the `clickhouse` job.
-- Not run on the k3s box yet: the API image has the tool only after the next deploy.
+
+## Checked on the k3s box: the copy tool (2026-10-17)
+- `copy-events.js --from postgres --to clickhouse --dry-run`: 1 tenant, read 2679, would copy 2679, already there 0.
+- The copy: read 2679, copied 2679, verified 2679 (each copy read back and compared). It printed a `--since` time to catch events written after the run.
+- `ASIX_EVENT_STORE` was still `postgres` afterwards. Not measured: speed and memory with large histories, and ClickHouse after a restart with events in it.
 
 ## Not checked
 - Behaviour under real load: memory against the 2Gi limit while ingesting and searching, merges and disk growth.
