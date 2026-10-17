@@ -18,7 +18,7 @@ deployment profiles, and entitlements — never a fork.
    Vector, content packs (residential), alert triage, regex-safety fix, CI.
 2. **Foundation for scale** — event envelope, event-store interface (Postgres adapter + ClickHouse
    adapter, one conformance suite), search/detections/IOC moved behind it (done), retention (done), parsers as
-   separate workers (next).
+   separate workers (done: worker threads, off by default; see below).
 3. **Enterprise data plane** — Kafka between broker and parser, ClickHouse cluster, S3 archive, HA
    control-plane DB, multi-node capacity dashboard.
 4. **Enterprise features** — multi-tenant hardening, sandboxed playbooks/integrations, marketplace
@@ -42,7 +42,7 @@ register themselves via a manifest instead of being hard-coded into the gateway 
 | Regex-safety fix | Done (see below) |
 | CI | Done: lint (`no-undef`) and unit tests on every push; database tests in `postgres` and `clickhouse` jobs (every step run locally; first GitHub run pending) |
 
-Every Phase 1 item is now done. Phase 2 (foundation for scale) has started: see "Status of Phase 2" below.
+Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: see "Status of Phase 2" below. Phase 3 (enterprise data plane) is next.
 
 ## Status of Phase 2 (updated this build)
 
@@ -58,7 +58,7 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) has started: see 
 | ClickHouse retention by partition drop and ClickHouse storage page | Done (see below and `docs/event-store.md`) |
 | `xql.compile` wrappers removed; ClickHouse table created on deploy | Done (see below and `docs/event-store.md`) |
 | ClickHouse adapter (same conformance suite) | Done — `src/events/clickhouse-store.js`; passes the conformance suites (store, search, rule match) against a real ClickHouse 24.8 and runs in its own CI job. XQL `search()` and detection rules run on it |
-| Parsers as separate workers | Not started |
+| Parsers as separate workers | Done as worker threads in the API, off by default (see below and `docs/parser-workers.md`) |
 
 ### Event envelope and event store (what exists)
 - **One shape:** every event is an envelope (`id`, `tenant_id`, `source_type`, `collector_id`, `received_at`,
@@ -101,7 +101,25 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) has started: see 
 - **The retention preview and row purge now go through the store** (`expiredCounts`, `deleteExpired`), with the same policy (default days, per-source overrides, keep forever), API and run log. Checked on in-memory, PostgreSQL 16 and ClickHouse 24.8 by one conformance block, and on the partitioned Postgres table against the old preview SQL (`tests/retention-db.test.js`); the job also runs with events in ClickHouse (`tests/retention-clickhouse.test.js`). Partition creation and whole-partition drops stay PostgreSQL housekeeping and are skipped on other engines.
 - **ClickHouse partition retention and storage sizes are done** (`dropPartitionsBefore`, `storageStats`): when every tenant has automatic purge on and no keep-forever rule, whole UTC days older than the longest retention are dropped (`ALTER TABLE ... DROP PARTITION ID` on ClickHouse, `DROP TABLE` of the daily partition on PostgreSQL), and the storage page's events numbers come from the store on any engine. A ClickHouse table TTL is deliberately not used (retention is per tenant and per source). ClickHouse refuses to drop a partition above its `max_partition_size_to_drop` (50 GB default); that day is reported as failed and the others still go.
 - **The ClickHouse table is created on deploy**: `store.init()` runs when the API starts (retrying while ClickHouse comes up) and the API exits if it cannot, instead of serving without a table. The database itself must exist.
-- Not built: parsers as separate workers, a ClickHouse server in `k8s/` (Phase 3), and any per-tenant choice of adapter (one adapter per process).
+- Not built: a ClickHouse server in `k8s/` (Phase 3), and any per-tenant choice of adapter (one adapter per process).
+
+### Parser workers (what exists)
+- The parse step of the HTTP ingest lane (parsing rules, then the data model pass) can run on `worker_threads` inside each API replica
+  instead of in the request handler: `ASIX_PARSER_WORKERS=N` (default `0` = inline, as before), `ASIX_PARSER_TIMEOUT_MS` (5000),
+  `ASIX_PARSER_QUEUE` (100). Inline and workers call one function (`src/ingestion/parse-batch.js`), so results are identical.
+- **Hard time limit and isolation:** a batch that runs too long or crashes (or exhausts a worker's 192 MB heap cap) costs one worker,
+  which is replaced; the API keeps serving. Its events are stored **unparsed** with `parsed._parse_error` (`PARSE_TIMEOUT`,
+  `PARSE_WORKER_CRASH`, `PARSE_FAILED`), never lost. A tenant whose rules fail 3 batches in a row is skipped for 60 s
+  (`PARSE_QUARANTINED`). This is the "worker with a hard timeout" that the regex-safety item listed as not built, for the HTTP lane.
+- **Back-pressure:** every worker busy and the queue full is `503 INGEST_BUSY` with `Retry-After: 2`; nothing is stored, the sender retries.
+- Workers are sent the tenant's rule text (a hash key identifies it) and compile it once; the first batch after saving new rules carries the new text.
+- Needs no schema change and no role change. Shipped **off**: `k8s/30-asix-api.yaml` has `ASIX_PARSER_WORKERS` at `"0"`; turn it on with
+  `"2"` and a higher memory limit (see `docs/parser-workers.md`).
+- Checked with real worker threads and a fake worker that hangs, crashes and runs out of memory (`tests/parser-pool.test.js`), and on real
+  PostgreSQL 16 through the real HTTP lane, inline and on 2 workers (`tests/parse-ingest-db.test.js`), plus the real `src/server.js` with 2
+  workers (parsed an sshd line, exited 0 on SIGTERM).
+- Not built: a portal view of the pool, re-parsing events stored unparsed, parser processes outside the API and Kafka between broker and
+  parser (Phase 3), a per-tenant share of the workers.
 
 ### Broker VM and collector heartbeat (what exists)
 - A broker VM runs Vector: syslog in on UDP and TCP, forwarded over HTTPS to the existing HTTP ingest lane with a
@@ -156,8 +174,8 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) has started: see 
 - **Detection rules and XQL `~=`** are matched by PostgreSQL (already under `statement_timeout`), so they get the
   length limit (500) and a back-reference ban only.
 - The check is conservative: it can refuse a harmless pattern, and the error message says what to change.
-- Not built: running user patterns on an RE2 engine or in a worker with a hard timeout (would remove the need for the
-  structural check).
+- Not built: running user patterns on an RE2 engine (would remove the need for the structural check). A hard timeout now exists for the
+  HTTP ingest lane when parser workers are on (see "Parser workers"); detection rules and XQL are still bounded by PostgreSQL's `statement_timeout`.
 
 ### Content packs (what exists)
 - A pack is one file in `src/packs/catalog/<id>.js` (file name = id): name, version, the log sources it expects, and a

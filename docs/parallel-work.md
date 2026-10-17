@@ -13,6 +13,8 @@ route handlers live in `src/gateway/routes/<domain>.js`, one file per feature ar
 `guarded()`, `apiError()`, `UUID_RE`, `SEVERITIES`, `ALERT_STATUSES`) live in `src/gateway/shared.js`
 and are imported, never redefined, by each route file.
 
+The parse step of the HTTP ingest lane lives in `src/ingestion/parse-service.js` (inline, or on worker threads when `ASIX_PARSER_WORKERS` is set); `http-ingest.js` only calls it. Change parsing behaviour in `parse-batch.js` (it is what the workers run too), not in `http-ingest.js`.
+
 **Rule going forward:** a new feature's routes go in a NEW file under `src/gateway/routes/`, not
 appended to an existing one unless they genuinely belong to that domain. Two sessions building
 unrelated features then touch different files and cannot collide.
@@ -71,7 +73,7 @@ Update the Status column in the same change that does the work, so the next sess
 | ClickHouse retention by partition drop, and ClickHouse storage sizes | done (real ClickHouse 24.8.14.39 and PostgreSQL 16; table TTL deliberately not used, see `docs/event-store.md`) | `storageStats`, `dropPartitionsBefore` in `src/events/{event-store,postgres-store,clickhouse-store,memory-store}.js`, `src/storage/retention.js` (`dropExpiredPartitions` and `summary` are engine-agnostic now), `tests/event-store-conformance.js` (second block, `prepareDay` hook), `tests/clickhouse-partitions.test.js` (stubbed HTTP, runs in the `test` job), `tests/retention-db.test.js`, `tests/retention-clickhouse.test.js` |
 | Remove the `xql.compile` / `compileCondition` wrappers; create the ClickHouse table on deploy | done (wrappers: `tests/xql-golden.test.js` and `tests/bioc-rules.test.js` call the parser and the Postgres emitter directly; init: real `src/server.js` started against an empty ClickHouse database and against an unreachable one) | `src/search/xql.js`, `src/search/xql-postgres.js` (`conditionToSql` kept only as the golden test's oracle), `init()` in `src/events/event-store.js` and `src/events/clickhouse-store.js`, `src/server.js` (calls `init()` before listening, exits if it fails), `tests/clickhouse-partitions.test.js` (init cases), `tests/event-store-conformance.js` (`init()` repeatable), `tests/event-store-clickhouse.test.js` (real-server init cases) |
 | ClickHouse adapter (same conformance suite) | done (verified against a real ClickHouse 24.8; an earlier version claimed this but never ran: it used an npm client that was not in `package.json`, lost milliseconds and miscounted inserts) | `src/events/clickhouse-store.js` (fetch, no new dependency), registered in `src/events/index.js`, `tests/event-store-clickhouse.test.js`, CI job `clickhouse` in `.github/workflows/ci.yml`; gated behind `ASIX_TEST_DB=1`. `search()` and `matchGroups()` are implemented and pass `tests/event-search-conformance.js` and `tests/event-match-conformance.js` on real ClickHouse 24.8 |
-| Parsers as separate workers | not started | `src/ingestion/*`, `src/ingest/http-ingest.js` |
+| Parsers as separate workers | done as worker threads in the API, off by default (see `docs/parser-workers.md`; checked with real workers, with a fake worker that hangs, crashes and runs out of memory, on PostgreSQL 16 through the real HTTP lane inline and on 2 workers, and with the real `src/server.js`) | `src/ingestion/{parse-batch,rule-sets,parser-worker,parser-pool,parse-service}.js` (new), `getRuleSources` in `src/ingestion/rules-store.js`, `src/ingest/http-ingest.js` (calls `parse-service`; 503 `INGEST_BUSY`; `parsed._parse_error`), `src/server.js` (starts and stops the pool), `k8s/30-asix-api.yaml` (`ASIX_PARSER_WORKERS="0"`, `ASIX_PARSER_TIMEOUT_MS`), `tests/parse-batch.test.js`, `tests/parser-pool.test.js`, `tests/parse-ingest-db.test.js`, `tests/fixtures/fake-parser-worker.js`, CI step "Ingest parsing on parser workers" |
 
 ## Checklist for any session picking up a task here
 1. Confirm which zip/version you're starting from; diff it against what's currently described as
@@ -82,7 +84,7 @@ Update the Status column in the same change that does the work, so the next sess
    `12-schema-init.yaml`) wherever the feature allows it.
 4. Run the in-repo tests before declaring a feature done: `node tests/modules.test.js`,
    `tests/alert-triage.test.js`, `tests/alert-dedupe.test.js`, `tests/bioc-rules.test.js`, `tests/data-model-rules.test.js`,
-   `tests/clickhouse-partitions.test.js`, `tests/parsing-rules.test.js`, `tests/regex-safety.test.js`, `tests/packs.test.js`, `tests/heartbeat.test.js`, `tests/event-envelope.test.js`, `tests/event-store-memory.test.js`, `tests/event-match-memory.test.js`, `tests/xql-golden.test.js`, `tests/event-search-memory.test.js`, `tests/search-route.test.js`, `tests/read-counts.test.js`, `tests/core-reads.test.js` (they need `npm ci` first; `modules.test.js` uses `jose`). CI (`.github/workflows/ci.yml`) now runs `npm run lint` (ESLint `no-undef`) and `npm test` (every `tests/*.test.js`, on Node 20 and 22) on each push; run both locally before packaging. New tests must be named `*.test.js` to be picked up. Tests that need a database stay gated behind `ASIX_TEST_DB=1` (they skip themselves without it); CI runs them in the `postgres` job (platform schema from `k8s/12-schema-init.yaml`) and the `clickhouse` job (a ClickHouse 24.8 service). New gated test files must be added to the list in those jobs in `.github/workflows/ci.yml`. (`tests/retention-db.test.js` and `tests/retention-clickhouse.test.js` (needs both Postgres and ClickHouse), `tests/packs-db.test.js`, `tests/heartbeat-db.test.js`, `tests/alert-dedupe-db.test.js`, `tests/event-store-postgres.test.js`, `tests/read-counts-db.test.js`, `tests/core-reads-db.test.js`, `tests/event-ingest-db.test.js` and `tests/detection-store-db.test.js` are the pattern: they skip themselves without that variable). A task is not "done" because a gated test exists: run it once against the real server before writing "done" in this table. Broker config changes: also run `vector test deploy/broker/vector.yaml deploy/broker/vector-tests.yaml` (needs the Vector binary; not in CI).
+   `tests/clickhouse-partitions.test.js`, `tests/parsing-rules.test.js`, `tests/regex-safety.test.js`, `tests/packs.test.js`, `tests/heartbeat.test.js`, `tests/event-envelope.test.js`, `tests/event-store-memory.test.js`, `tests/event-match-memory.test.js`, `tests/xql-golden.test.js`, `tests/event-search-memory.test.js`, `tests/search-route.test.js`, `tests/read-counts.test.js`, `tests/core-reads.test.js`, `tests/parse-batch.test.js`, `tests/parser-pool.test.js` (they need `npm ci` first; `modules.test.js` uses `jose`). CI (`.github/workflows/ci.yml`) now runs `npm run lint` (ESLint `no-undef`) and `npm test` (every `tests/*.test.js`, on Node 20 and 22) on each push; run both locally before packaging. New tests must be named `*.test.js` to be picked up. Tests that need a database stay gated behind `ASIX_TEST_DB=1` (they skip themselves without it); CI runs them in the `postgres` job (platform schema from `k8s/12-schema-init.yaml`) and the `clickhouse` job (a ClickHouse 24.8 service). New gated test files must be added to the list in those jobs in `.github/workflows/ci.yml`. (`tests/retention-db.test.js` and `tests/retention-clickhouse.test.js` (needs both Postgres and ClickHouse), `tests/packs-db.test.js`, `tests/heartbeat-db.test.js`, `tests/alert-dedupe-db.test.js`, `tests/event-store-postgres.test.js`, `tests/read-counts-db.test.js`, `tests/core-reads-db.test.js`, `tests/event-ingest-db.test.js`, `tests/parse-ingest-db.test.js` (CI also runs it a second time with `ASIX_PARSER_WORKERS=2`) and `tests/detection-store-db.test.js` are the pattern: they skip themselves without that variable). A task is not "done" because a gated test exists: run it once against the real server before writing "done" in this table. Broker config changes: also run `vector test deploy/broker/vector.yaml deploy/broker/vector-tests.yaml` (needs the Vector binary; not in CI).
 5. Route files must `require` everything they use. The route split once dropped the imports in
    `data-model.js` and `search.js`, which caused 500s in production. Before packaging, check for
    undefined names, for example `npx eslint --no-config-lookup --rule '{"no-undef":"error"}' src`
@@ -94,15 +96,12 @@ Update the Status column in the same change that does the work, so the next sess
    role in `scripts/deploy/bootstrap-portal.sh`, in both the INSERT and the UPDATE lists, and that
    script re-run, or the portal page will show a 403.
 
-## What to build next (Phase 2, in this order)
-Start from `docs/event-store.md` ("What is left"). Done so far: XQL search, the page counts, detection rules and the IOC matcher,
-the events list, data sources and Command Center reads, and now the retention preview and purge (`expiredCounts`, `deleteExpired`), ClickHouse partition retention and storage sizes (`dropPartitionsBefore`, `storageStats`), and now the removal of the `xql.compile` wrappers and the ClickHouse table created on deploy (`store.init()`).
-1. Parsers as separate workers: the last Phase 2 item in `docs/product-plan.md`. Everything else in Phase 2 is done (see the table above).
-2. Phase 3 starts after that: a ClickHouse server in `k8s/` (StatefulSet, volume, password Secret), then the broker and collector items.
-(Done and no longer in this list: the `xql.compile` wrappers, ClickHouse partition retention and storage page, the ClickHouse table
-created on deploy: see `docs/event-store.md`.)
-Smaller, independent items that were open before and still are: license-limit enforcement (`tenants`, `retention_days_max`),
-portal menu that follows module state, a "my open alerts" tile.
+## What to build next
+**Phase 2 is done** (every row in the Phase 2 table above). Phase 3 (enterprise data plane, see `docs/product-plan.md`) is next, in this order:
+1. A ClickHouse server in `k8s/` (StatefulSet, volume, password Secret), so `ASIX_EVENT_STORE=clickhouse` has something to point at without running ClickHouse by hand. The API already creates the table on start (`store.init()`); the database itself must exist.
+2. Then the broker and collector items, and Kafka between broker and parser (parser processes outside the API would replace the worker threads of `docs/parser-workers.md`).
+Before or alongside: turn parser workers on on the k3s box (`ASIX_PARSER_WORKERS` in `k8s/30-asix-api.yaml`, with a higher memory limit) and watch the API log for `[parser]` lines for a few days; this has only been run in tests and against a local server so far.
+Smaller, independent items that were open before and still are: license-limit enforcement (`tenants`, `retention_days_max`), portal menu that follows module state, a "my open alerts" tile, a portal view of the parser pool, re-parsing events stored with `parsed._parse_error`.
 
 ## How to run the database tests (repeat this before declaring a DB-touching change done)
 ```bash
@@ -114,7 +113,8 @@ for d in yaml.safe_load_all(open('k8s/12-schema-init.yaml')):
 PY
 sudo -u postgres psql -c "CREATE USER asix_admin SUPERUSER PASSWORD 'pw'" -c 'CREATE DATABASE asix_platform OWNER asix_admin'
 PGPASSWORD=pw psql -h 127.0.0.1 -U asix_admin -d asix_platform -f /tmp/schema.sql      # twice: must be idempotent
-for t in event-store-postgres event-search-postgres event-match-postgres search-route detection-store-db retention-db; do ASIX_TEST_DB=1 DB_HOST=127.0.0.1 DB_PASSWORD=pw node --test tests/$t.test.js; done
+for t in event-store-postgres event-search-postgres event-match-postgres search-route detection-store-db retention-db parse-ingest-db; do ASIX_TEST_DB=1 DB_HOST=127.0.0.1 DB_PASSWORD=pw node --test tests/$t.test.js; done
+ASIX_PARSER_WORKERS=2 ASIX_TEST_DB=1 DB_HOST=127.0.0.1 DB_PASSWORD=pw node --test tests/parse-ingest-db.test.js   # the same ingest test on the parser workers
 # ClickHouse: any 24.x server; create a database, then
 curl -s http://127.0.0.1:8123/ -d 'CREATE DATABASE IF NOT EXISTS asix'
 for t in event-store-clickhouse event-search-clickhouse event-match-clickhouse retention-clickhouse; do ASIX_TEST_DB=1 DB_HOST=127.0.0.1 DB_PASSWORD=pw ASIX_CLICKHOUSE_URL=http://default@127.0.0.1:8123/asix node --test tests/$t.test.js; done   # retention-clickhouse also needs the Postgres above
@@ -124,6 +124,7 @@ fixed ids collides with rows a crashed earlier run left behind (`tests/fixtures/
 run for that reason); and piping a test run into `head` kills it before its cleanup runs.
 
 ## Known gaps to check
+- The CI step "Ingest parsing on parser workers" and `parse-ingest-db` in the `postgres` job's list are new and have not run on GitHub. The same commands were run locally against PostgreSQL 16 (schema applied twice first), inline and with `ASIX_PARSER_WORKERS=2`, all green; `npm run lint` and `npm test` (153 tests) too.
 - `.github/workflows/ci.yml` in the zip this was built from had only the `test` job (earlier notes said the DB jobs existed; they
   did not). The `postgres` and `clickhouse` jobs are in it now. Every step script was extracted from the YAML and run locally against
   PostgreSQL 16 and ClickHouse 24.8.14.39 (schema applied twice with errors fatal; ClickHouse with a password on `default`), all

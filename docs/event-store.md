@@ -320,8 +320,8 @@ failure is visible instead of an API that accepts requests it cannot store.
   second call harmless, data kept; a monthly table is warned about and left alone), and by starting the real `src/server.js` against an
   empty ClickHouse database (the table appeared with `toYYYYMMDD(received_at)`) and against an unreachable one (exit code 1, nothing listening).
 
-## What is left (next in Phase 2)
+## What is left
 - A ClickHouse server in `k8s/` (a StatefulSet with a volume and a password Secret): Phase 3. Until then ClickHouse is run
   separately and `ASIX_CLICKHOUSE_URL` points at it; the API creates the table, not the server or the database.
-- Parsers as separate workers.
+- Parsers as separate workers: done, see `docs/parser-workers.md`. Phase 2 has no open items.
 - The syslog listener and the in-cluster collector reach the store through the HTTP lane, so they are covered.
