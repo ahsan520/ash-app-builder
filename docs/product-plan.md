@@ -42,7 +42,7 @@ register themselves via a manifest instead of being hard-coded into the gateway 
 | Regex-safety fix | Done (see below) |
 | CI | Done: lint (`no-undef`) and unit tests on every push; database tests in `postgres` and `clickhouse` jobs (every step run locally; first GitHub run pending) |
 
-Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: see "Status of Phase 2" below. Phase 3 (enterprise data plane) is next.
+Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: see "Status of Phase 2" below. Phase 3 (enterprise data plane) has started: see "Status of Phase 3" below.
 
 ## Status of Phase 2 (updated this build)
 
@@ -212,6 +212,29 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   is a placeholder until the licensing decision below is made.
 - **Not yet done:** the portal menu does not hide or grey out entries based on module state, and there
   is no per-tenant module toggle (that would need a schema change).
+
+## Status of Phase 3 (updated this build)
+
+| Item | State |
+|---|---|
+| ClickHouse server in `k8s/` (StatefulSet, volume, password Secret) | Done, optional and not used until `ASIX_EVENT_STORE=clickhouse` (see below and `docs/clickhouse-server.md`) |
+| Copy existing events from PostgreSQL to ClickHouse | Not started |
+| ClickHouse backup and restore test | Not started |
+| Kafka between broker and parser; parser processes outside the API | Not started |
+| S3 archive, HA control-plane DB, multi-node capacity dashboard | Not started |
+
+### ClickHouse server (what exists)
+- `k8s/11-clickhouse.yaml`: one `clickhouse/clickhouse-server:24.8` pod with a 20Gi volume, database and user `asix`, a password in the secret
+  `clickhouse-secret` made once by `deploy.sh`, reachable only inside the cluster as `clickhouse:8123`, memory capped at 75% of a 2Gi limit, and
+  ClickHouse's own diagnostic tables trimmed so they cannot outgrow the events.
+- **Optional:** `./sync-and-deploy.sh --with-clickhouse` (or `ASIX_DEPLOY_CLICKHOUSE=1`) deploys it; once it exists every deploy keeps it up to date.
+  A Home install that does not ask is unchanged. **Deploying it does not move events:** the API switches only when `ASIX_EVENT_STORE` is set to
+  `"clickhouse"` in `k8s/30-asix-api.yaml`, and that switch does not copy existing events and is not covered by the nightly backup. Read
+  `docs/clickhouse-server.md` before switching.
+- Checked on a real ClickHouse 24.8.14.39 with the manifest's own config file (store, search, rule-match and retention suites pass as user `asix`; the
+  real `src/server.js` ingested into it) and by validating every manifest against the Kubernetes schema (`scripts/ci/validate-k8s.py`, CI job
+  `k8s-manifests`). **Not run on a cluster:** the image's user and database creation, the probes, the volume and the new `deploy.sh` step.
+- Not built: the event copy tool, ClickHouse backup, anything beyond one node (replication, Keeper, TLS to the API, a NetworkPolicy).
 
 ## Open decisions (ask before committing)
 - Smallest Home machine to design against (assumed: 4 vCPU / 8 GB / 100 GB until told otherwise).

@@ -321,7 +321,7 @@ failure is visible instead of an API that accepts requests it cannot store.
   empty ClickHouse database (the table appeared with `toYYYYMMDD(received_at)`) and against an unreachable one (exit code 1, nothing listening).
 
 ## What is left
-- A ClickHouse server in `k8s/` (a StatefulSet with a volume and a password Secret): Phase 3. Until then ClickHouse is run
-  separately and `ASIX_CLICKHOUSE_URL` points at it; the API creates the table, not the server or the database.
+- A ClickHouse server in `k8s/`: done, optional (`k8s/11-clickhouse.yaml`, `docs/clickhouse-server.md`). The API creates the table; the server
+  creates the database. Switching `ASIX_EVENT_STORE` does not copy existing events, and ClickHouse is not in the nightly backup.
 - Parsers as separate workers: done, see `docs/parser-workers.md`. Phase 2 has no open items.
 - The syslog listener and the in-cluster collector reach the store through the HTTP lane, so they are covered.
