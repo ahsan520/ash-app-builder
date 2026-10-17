@@ -18,6 +18,9 @@
 #                                        healthy-pod selection menu
 #   ./sync-and-deploy.sh --restart-all   also rolling-restart every Deployment
 #                                        (PostgreSQL is never touched)
+#   ./sync-and-deploy.sh --with-clickhouse  also deploy the optional ClickHouse server
+#                                        (k8s/11-clickhouse.yaml; once it exists every
+#                                        later deploy keeps it up to date, flag or not)
 #   ./sync-and-deploy.sh --dry-run --yes  (pod step only) preview / auto-confirm
 # See scripts/pod-manager.sh for exactly what the pod step does.
 #
@@ -33,6 +36,7 @@ for arg in "$@"; do
   case "$arg" in
     --pods-only) PODS_ONLY=1 ;;
     --no-pods)   NO_PODS=1 ;;
+    --with-clickhouse) export ASIX_DEPLOY_CLICKHOUSE=1 ;;
     --no-menu|--restart-all|--dry-run|--yes|-y) POD_ARGS+=("$arg") ;;
     -h|--help)   sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "sync-and-deploy: unknown option '$arg' (try --help)" >&2; exit 2 ;;

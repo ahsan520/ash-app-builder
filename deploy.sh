@@ -5,8 +5,8 @@
 # What this actually deploys (see README notes at the bottom of the chat
 # response this shipped with): asix-api (Express skeleton) + PostgreSQL +
 # Keycloak + a syslog ingestion collector, on a single-node k3s cluster.
-# It does NOT deploy Kafka, OpenSearch, or ClickHouse — that code doesn't
-# exist in the repo yet.
+# It does NOT deploy Kafka or OpenSearch — that code doesn't exist in the repo.
+# ClickHouse is optional (ASIX_DEPLOY_CLICKHOUSE=1, k8s/11-clickhouse.yaml).
 #
 # Usage:
 #   sudo ./deploy.sh /path/to/ash-app-builder-main
@@ -176,6 +176,26 @@ echo "== 6/9: Deploying PostgreSQL =="
 $K kubectl apply -f "$K8S_DIR/10-postgresql.yaml"
 $K kubectl -n "$NAMESPACE" rollout status statefulset/postgresql --timeout=180s
 bash "$SCRIPT_DIR/scripts/deploy/protect-volumes.sh" "$NAMESPACE"      # Retain: deleting a claim no longer deletes the data
+
+echo "== 6-ch/9: ClickHouse server (optional) =="
+# Phase 3 data plane. Deployed when asked for (ASIX_DEPLOY_CLICKHOUSE=1, or ./sync-and-deploy.sh --with-clickhouse), and kept
+# up to date on every later deploy once it exists. It is NOT used by the API until ASIX_EVENT_STORE=clickhouse in
+# k8s/30-asix-api.yaml: see docs/clickhouse-server.md (switching does not copy events; backups cover PostgreSQL only).
+if [[ "${ASIX_DEPLOY_CLICKHOUSE:-0}" == "1" ]] || $K kubectl -n "$NAMESPACE" get statefulset clickhouse &>/dev/null; then
+  if ! $K kubectl -n "$NAMESPACE" get secret clickhouse-secret &>/dev/null; then
+    CH_PASSWORD="$(openssl rand -hex 24)"      # hex: it goes inside a URL (ASIX_CLICKHOUSE_URL)
+    $K kubectl -n "$NAMESPACE" create secret generic clickhouse-secret --from-literal=CLICKHOUSE_PASSWORD="$CH_PASSWORD"
+    echo "Generated ClickHouse password -> stored in k8s secret 'clickhouse-secret' (namespace $NAMESPACE)"
+    echo "$CH_PASSWORD" > /root/asix-clickhouse-password.txt
+    chmod 600 /root/asix-clickhouse-password.txt
+    echo "  (also saved to /root/asix-clickhouse-password.txt, root-only — move it to a real vault)"
+  fi
+  $K kubectl apply -f "$K8S_DIR/11-clickhouse.yaml"
+  $K kubectl -n "$NAMESPACE" rollout status statefulset/clickhouse --timeout=300s
+  bash "$SCRIPT_DIR/scripts/deploy/protect-volumes.sh" "$NAMESPACE"      # Retain, as for PostgreSQL
+else
+  echo "Not requested (set ASIX_DEPLOY_CLICKHOUSE=1 or use ./sync-and-deploy.sh --with-clickhouse) — skipping."
+fi
 
 echo "== 6a/9: Backing up PostgreSQL before schema changes =="
 BACKUP_DIR="/var/backups/asix/postgres"
