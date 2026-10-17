@@ -12,7 +12,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Lint and every test that needs no database (the in-memory event store runs the whole conformance suites).
+  # Lint and every test that needs no database (the in-memory event store runs the whole conformance suites,
+  # and tests/parser-pool.test.js runs real parser worker threads).
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -76,12 +77,19 @@ jobs:
       - name: Database tests
         run: |
           for t in event-store-postgres event-search-postgres event-match-postgres search-route detection-store-db \
-                   event-ingest-db read-counts-db core-reads-db alert-dedupe-db heartbeat-db retention-db; do
+                   event-ingest-db read-counts-db core-reads-db alert-dedupe-db heartbeat-db retention-db parse-ingest-db; do
             echo "::group::$t"
             node --test "tests/$t.test.js"
             echo "::endgroup::"
           done
           # New gated test files (*-db.test.js and friends) must be added to the list above.
+
+      # The HTTP ingest lane parses inline (run just above, with the default) and on the parser worker threads (here):
+      # same test, same expected events, ASIX_PARSER_WORKERS=2. See src/ingestion/parser-pool.js.
+      - name: Ingest parsing on parser workers
+        env:
+          ASIX_PARSER_WORKERS: "2"
+        run: node --test tests/parse-ingest-db.test.js
 
   # The event store on a real ClickHouse 24.8 (same conformance suites), plus the retention job with events in ClickHouse
   # and the control-plane data in PostgreSQL (so this job has both services).
