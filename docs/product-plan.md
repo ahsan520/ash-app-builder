@@ -139,7 +139,21 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   (handshake, both framings, mutual TLS accept and refuse, the bootstrap script with and without TLS); not yet tried on a real broker VM
   under systemd or with real devices. Details: `docs/broker-vm.md`.
 - Not built: managing brokers from the portal (config push, upgrades, capacity), TLS on the in-cluster Node collector, certificate renewal,
-  non-syslog sources on the broker, Kafka between broker and parser (Phase 3), a per-collector connected threshold (still 15 min).
+  non-syslog sources on the broker, Kafka between broker and parser (Phase 3). The connected threshold is per collector now (see "Collector connected threshold" below).
+
+### Collector connected threshold (what exists)
+- A collector is **Connected** if it was last seen within its threshold: 15 minutes unless the collector has its own. A slow sender (a nightly job) can be given a
+  longer one, a chatty one a shorter one. The rule is one small module, `src/collectors/status.js`, and `GET /v1/collectors` uses it for both the status column and
+  the `status=` filter. Each collector in the response now carries `connected_within_min` (the threshold in force) and `connected_custom` (it was set on purpose);
+  `connected_within_minutes` at the top is still the default.
+- **Set it:** Collectors page, **Threshold** button (empty goes back to the default), or `PUT /v1/collectors/:id/threshold` with `{ "minutes": 1..10080 }` or
+  `{ "minutes": null }`. Anything else is a 400; another tenant's collector is a 404. Uses `collectors:write`, so no role change.
+- **Schema:** `collectors.connected_within_min INTEGER` (NULL = default), added by the normal schema-init job and safe to re-run. A heartbeat or an event never
+  changes it. Nothing is ever deleted or hidden because of it: it only moves the line between Connected and Disconnected.
+- Checked on real PostgreSQL 16 with the schema applied twice (`tests/collector-threshold-db.test.js`, in the CI `postgres` job: default, custom, back to default,
+  other tenant refused, a heartbeat leaves it alone) and in unit and route tests (`tests/collector-status.test.js`, in `npm test`). The button has not been seen in a browser.
+- Not built: a default for the whole tenant (set per collector only), a threshold for sources that appear only in events (the in-cluster syslog collector keeps its
+  heartbeat row, so it can be set; a source with no row cannot), a "went Disconnected" alert or notification.
 
 ### Alert triage (what exists)
 - Each alert can be assigned to a user of the same tenant (or unassigned), and carries analyst notes

@@ -8,9 +8,7 @@ const {
 // ---- Collectors + ingestion keys (installers) ---------------------------------------------
 const { generateKey, hashKey, PLATFORMS: KEY_PLATFORMS } = require('../../ingest/http-ingest');
 const { getEventStore } = require('../../events');
-const CONNECTED_WITHIN_MIN = 15;
-// `timestamp` columns arrive as Date objects (or strings); NaN on anything unreadable, which compares false.
-const tsMs = (v) => (v instanceof Date ? v.getTime() : new Date(String(v).endsWith('Z') ? v : v + 'Z').getTime());
+const { DEFAULT_MINUTES, tsMs, effectiveMinutes, isCustom, statusOf } = require('../../collectors/status');
 
 // Registered senders (collectors table) plus built-in ones that only appear in events
 // (e.g. the in-cluster syslog collector), so the page shows everything that feeds the SIEM.
@@ -20,7 +18,7 @@ router.get('/v1/collectors', ...guarded('collectors:read'), async (req, res) => 
   try {
     const reg = await db.withTenant(req.tenant_id, (client) => client.query(
       `SELECT c.id, c.name, c.alias, c.platform, c.os, c.version, c.last_ip, c.first_seen, c.last_seen,
-              c.events_total::bigint AS events_total, k.name AS installer,
+              c.events_total::bigint AS events_total, c.connected_within_min, k.name AS installer,
               CASE WHEN c.key_id IS NULL THEN 'built-in' ELSE 'registered' END AS origin
        FROM collectors c LEFT JOIN ingestion_keys k ON k.id = c.key_id WHERE c.tenant_id = $1`, [req.tenant_id]));
     // Event counts come from the event store (one pass each): the last 7 days per collector, and the last 24 hours.
@@ -34,7 +32,7 @@ router.get('/v1/collectors', ...guarded('collectors:read'), async (req, res) => 
       id: null, name: g.key, alias: null, platform: 'syslog', os: null, version: null, last_ip: null,
       first_seen: g.first_seen, last_seen: g.last_seen, events_total: g.events, installer: null, origin: 'built-in' }));
     const d = new Map(dayCounts.map((g) => [g.key, g.events]));
-    const cutoff = Date.now() - CONNECTED_WITHIN_MIN * 60000;
+    const now = Date.now();
     // A built-in source (key-less row, kept alive by its heartbeat) also has event-derived stats:
     // merge them so an idle one stays Connected and still shows its event counts.
     const evByName = new Map(built.map((r) => [r.name, r]));
@@ -45,16 +43,19 @@ router.get('/v1/collectors', ...guarded('collectors:read'), async (req, res) => 
       return { ...c, events_total: e.events_total, first_seen: tsMs(e.first_seen) < tsMs(c.first_seen) ? e.first_seen : c.first_seen,
         last_seen: tsMs(e.last_seen) > tsMs(c.last_seen) ? e.last_seen : c.last_seen };
     });
+    // Each collector is judged against its own threshold (collectors.connected_within_min), else the default.
+    // Sources that only appear in events have no row to hold one, so they use the default.
     const all = merged.concat([...evByName.values()]).map((c) => ({
       ...c, events_total: Number(c.events_total), events_24h: d.get(c.name) || 0,
-      status: tsMs(c.last_seen) >= cutoff ? 'connected' : 'disconnected',
+      connected_within_min: effectiveMinutes(c.connected_within_min), connected_custom: isCustom(c.connected_within_min),
+      status: statusOf(c.last_seen, c.connected_within_min, now),
     }));
     const q = String(req.query.q || '').toLowerCase();
     const rows = all
       .filter((c) => (!req.query.status || c.status === req.query.status)
         && (!q || [c.name, c.alias, c.platform, c.os, c.last_ip, c.installer].some((v) => v && String(v).toLowerCase().includes(q))))
       .sort((a, b) => String(a.name).localeCompare(String(b.name)));
-    res.status(200).json({ success: true, total: rows.length, overall: all.length, connected_within_minutes: CONNECTED_WITHIN_MIN,
+    res.status(200).json({ success: true, total: rows.length, overall: all.length, connected_within_minutes: DEFAULT_MINUTES,
       collectors: rows.slice(offset, offset + limit) });
   } catch (error) {
     console.error('Collector listing failed:', error.message);

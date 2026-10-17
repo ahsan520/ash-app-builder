@@ -21,7 +21,7 @@ devices ──syslog over TLS 6514 (opt.)─┘
 - **Per-broker identity:** one ingestion key per broker (revocable, shown with its name on the Collectors page).
   This replaces the shared `BROKER_INGEST_TOKEN` for brokers outside the cluster.
 - **Heartbeat:** a one-minute timer tells ASIX the broker is alive, so a quiet broker stays **Connected**. It
-  sends nothing when Vector is not healthy, so a broken broker turns Disconnected (after 15 minutes).
+  sends nothing when Vector is not healthy, so a broken broker turns Disconnected (after 15 minutes, or the threshold set for that collector on the Collectors page).
 
 ## Install
 1. In the portal: **Settings > Collectors > Installers**, create an installer (platform `linux`), name it like the
@@ -100,4 +100,5 @@ Plain syslog is readable and forgeable by anyone on the path. For sources that c
   sees it as a collector. `src/brokers/broker-framework.js` is still the Phase 3 placeholder.
 - A 4xx other than 408/429 from ASIX (for example a revoked key) is not retried by Vector, so those events are
   dropped; fix the key and re-run the bootstrap script.
-- The connected/disconnected threshold is still 15 minutes for every collector.
+- The connected/disconnected threshold is 15 minutes unless you set one for that collector (Collectors page, **Threshold**; 1 to 10080 minutes). A broker
+  with a long quiet spell does not need it: the heartbeat keeps it Connected. It is for slow senders such as a nightly job.
