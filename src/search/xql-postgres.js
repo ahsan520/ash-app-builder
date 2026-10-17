@@ -96,7 +96,8 @@ function toSql(plan, tenantId) {
   return { sql, values: E.values, mode: plan.mode, columns: plan.columns, limit: lim };
 }
 
-// dataset / filter stages -> WHERE fragments that bind into `values` (BIOC rule conditions).
+// dataset / filter stages -> WHERE fragments that bind into `values`. No production code calls this any more (BIOC rules go
+// through matchToSql); tests/xql-golden.test.js keeps it as the oracle that pins how conditions were compiled before the plan.
 function conditionToSql(stages, values) {
   const E = new Emitter(values), out = [];
   for (const s of stages) out.push(s.op === 'dataset' ? `source_type = ${E.bind(String(s.names[0]))}` : `(${E.expr(s.expr)})`);

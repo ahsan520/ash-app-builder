@@ -2,7 +2,7 @@
 // A small, safe XQL-style query language over events.
 //
 // This file only PARSES: XQL text -> a query plan (src/search/xql-plan.js), with no SQL in it. Each
-// storage engine turns the plan into its own query: xql-postgres.js (compile() below), xql-clickhouse.js,
+// storage engine turns the plan into its own query: xql-postgres.js (toSql), xql-clickhouse.js,
 // or xql-eval.js (in memory). The event store runs plans: store.search(tenantId, plan).
 //
 //   dataset = syslog
@@ -222,12 +222,4 @@ function parseCondition(query) {
   return out;
 }
 
-// SQL for PostgreSQL (the default engine). Kept as the entry point existing callers use.
-function compile(query, { tenantId, from, to, limit }) {
-  return require('./xql-postgres').toSql(parse(query, { from, to, limit }), tenantId);
-}
-function compileCondition(query, values) {
-  return require('./xql-postgres').conditionToSql(parseCondition(query), values);
-}
-
-module.exports = { parse, parseCondition, compile, compileCondition, XqlError, MAX_LIMIT };
+module.exports = { parse, parseCondition, XqlError, MAX_LIMIT };

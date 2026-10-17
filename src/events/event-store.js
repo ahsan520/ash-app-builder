@@ -23,6 +23,7 @@
 //   listEvents(tenantId, { source_type?, collector_id?, from?, to?, q?, limit?, offset? }) -> envelope[]   (newest event time first, offset paging)
 //   dataSources(tenantId, { recentSince? }) -> [{ source_type, collector_id, events_total, events_recent, last_received }]
 //   ingestionStats(tenantId, { by?, now?, groups? }) -> { totals, hourly, groups }   (the Command Center numbers)
+//   init() -> void   (make the store ready, e.g. create its table; idempotent; src/server.js calls it once before listening)
 //   expiredCounts(tenantId, policy, { now? }) -> [{ source_type, events, oldest }]   (what a purge would delete, read-only)
 //   deleteExpired(tenantId, policy, { now?, deadline?, batch? }) -> { deleted, by_source, truncated }   (the retention purge)
 //   storageStats() -> { partitioned, events_rows, events_bytes, default_partition_rows, partitions }   (all tenants; the storage page)
@@ -411,6 +412,10 @@ class EventStore {
     const r = await this._dropPartitionsBefore(day);
     return { ...r, dropped: r.dropped || [], failed: r.failed || [] };
   }
+
+  // Makes the store ready to use: an engine that needs its table created on first start does it here. Safe to call any number of
+  // times, and a no-op for engines whose schema is applied elsewhere (PostgreSQL: k8s/12-schema-init.yaml) or that need none.
+  async init() { /* adapters that need set-up override this */ }
 
   async close() { /* adapters that own connections override this */ }
 

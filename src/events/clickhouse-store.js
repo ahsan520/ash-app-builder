@@ -73,8 +73,9 @@ function rowToEnvelope(r) {
 
 class ClickHouseEventStore extends EventStore {
   // `url` and `table` are injectable for tests; `fetch` too (a stub, or a different HTTP client).
-  constructor({ url, table, fetch: fetchImpl, timeoutMs } = {}) {
+  constructor({ url, table, fetch: fetchImpl, timeoutMs, initRetry } = {}) {
     super();
+    this._initRetry = { attempts: 10, delayMs: 3000, ...(initRetry || {}) };
     this._url = url || null;
     this._table = table || 'events';
     if (!TABLE_RE.test(this._table)) throw new Error('ClickHouse table name must match [A-Za-z_][A-Za-z0-9_]{0,63}');
@@ -133,6 +134,31 @@ class ClickHouseEventStore extends EventStore {
 
   // Creates the table if it is missing. Safe to run any number of times.
   async ensureSchema() { await this._exec(schemaSql(this._table)); }
+
+  // Called once when the API starts (src/server.js): creates the table if it is missing, retrying while ClickHouse is still
+  // coming up (a fresh install starts the API and the database together). Throws the last error once the attempts are used.
+  // The database named in ASIX_CLICKHOUSE_URL must exist (the official image makes it from CLICKHOUSE_DB).
+  async init() {
+    const { attempts, delayMs } = this._initRetry;
+    let last;
+    for (let i = 1; i <= attempts; i++) {
+      try { await this.ensureSchema(); await this._warnIfNotDaily(); return; }
+      catch (e) { last = e; if (i < attempts) await new Promise((r) => setTimeout(r, delayMs)); }
+    }
+    throw last;
+  }
+
+  // A table made by hand with another partition key still works, but whole-day retention only drops days that are
+  // partitions of the form YYYYMMDD, so it would drop nothing from it. Say so once at start instead of failing silently.
+  async _warnIfNotDaily() {
+    try {
+      const rows = await this._rows('SELECT partition_key FROM system.tables WHERE database = {d:String} AND name = {tb:String}', { params: { d: this.conn.database, tb: this._table } });
+      const key = rows[0] ? String(rows[0].partition_key) : null;
+      if (key !== null && key !== 'toYYYYMMDD(received_at)') {
+        console.warn(`[events] ClickHouse table ${this._table} is partitioned by "${key}", not by day: whole-day partition retention will not drop anything from it (row deletes still work)`);
+      }
+    } catch { /* only a courtesy check */ }
+  }
 
   async _insert(tenant, envelopes) {
     const now = new Date().toISOString();
