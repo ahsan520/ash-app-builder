@@ -218,7 +218,7 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
 | Item | State |
 |---|---|
 | ClickHouse server in `k8s/` (StatefulSet, volume, password Secret) | Done, optional and not used until `ASIX_EVENT_STORE=clickhouse` (see below and `docs/clickhouse-server.md`) |
-| Copy existing events from PostgreSQL to ClickHouse | Not started |
+| Copy existing events between PostgreSQL and ClickHouse | Done (see below and `docs/clickhouse-server.md`); not yet run on the k3s box |
 | ClickHouse backup and restore test | Not started |
 | Kafka between broker and parser; parser processes outside the API | Not started |
 | S3 archive, HA control-plane DB, multi-node capacity dashboard | Not started |
@@ -235,7 +235,17 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   real `src/server.js` ingested into it) and by validating every manifest against the Kubernetes schema (`scripts/ci/validate-k8s.py`, CI job
   `k8s-manifests`). Deployed on the k3s box: the pod came up Running, the image created user and database `asix`, the config file was loaded, the API
   pods reached it with the secret's password, and the volume is `Retain`. **Not yet tried:** load, and a restart with events in it.
-- Not built: the event copy tool, ClickHouse backup, anything beyond one node (replication, Keeper, TLS to the API, a NetworkPolicy).
+- Not built: ClickHouse backup, anything beyond one node (replication, Keeper, TLS to the API, a NetworkPolicy).
+
+### Event copy tool (what exists)
+- `node src/events/copy-events.js --from postgres --to clickhouse` (and the reverse) copies a tenant's events between the stores and reads every
+  copy back and compares it. It runs inside an API pod, per tenant, in batches, with `--tenant`, `--since`, `--until`, `--batch`, `--dry-run`, `--no-verify`.
+- It skips events **by id**, so it is safe to repeat and to run again after switching `ASIX_EVENT_STORE` to catch the events written in between. A copy back does
+  not duplicate events (ClickHouse keeps milliseconds, PostgreSQL microseconds, so the stores' `(id, received_at)` idempotency alone would). It deletes nothing and
+  never overwrites a different event that holds the same id (it reports it).
+- Checked on real PostgreSQL 16 and ClickHouse 24.8.14.39 through the real command line (`tests/copy-events-db.test.js`, run by the CI job `clickhouse`) and with
+  in-memory stores (`tests/copy-events.test.js`, in `npm test`). **Not yet run on the k3s box, and not measured at millions of events.**
+- Not built: copying anything but events, a progress file to resume (use `--since`), parallel tenants, a portal button.
 
 ## Open decisions (ask before committing)
 - Smallest Home machine to design against (assumed: 4 vCPU / 8 GB / 100 GB until told otherwise).

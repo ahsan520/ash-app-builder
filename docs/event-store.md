@@ -322,6 +322,6 @@ failure is visible instead of an API that accepts requests it cannot store.
 
 ## What is left
 - A ClickHouse server in `k8s/`: done, optional (`k8s/11-clickhouse.yaml`, `docs/clickhouse-server.md`). The API creates the table; the server
-  creates the database. Switching `ASIX_EVENT_STORE` does not copy existing events, and ClickHouse is not in the nightly backup.
+  creates the database. Switching `ASIX_EVENT_STORE` does not copy existing events by itself: run `src/events/copy-events.js` first (`docs/clickhouse-server.md`). ClickHouse is not in the nightly backup.
 - Parsers as separate workers: done, see `docs/parser-workers.md`. Phase 2 has no open items.
 - The syslog listener and the in-cluster collector reach the store through the HTTP lane, so they are covered.
