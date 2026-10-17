@@ -32,6 +32,16 @@ jobs:
       - name: Unit tests
         run: npm test
 
+  # Every manifest in k8s/ against the Kubernetes API schema (typos, wrong field names or types), the ClickHouse config
+  # embedded in k8s/11-clickhouse.yaml for well-formed XML, and the API's ASIX_CLICKHOUSE_URL against the ClickHouse service.
+  k8s-manifests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m pip install --quiet --break-system-packages kubernetes-validate pyyaml
+      - run: python3 scripts/ci/validate-k8s.py
+
   # The tests gated behind ASIX_TEST_DB=1, on a real PostgreSQL 16 with the platform schema.
   postgres:
     runs-on: ubuntu-latest
