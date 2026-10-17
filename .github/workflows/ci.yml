@@ -102,7 +102,7 @@ jobs:
         run: node --test tests/parse-ingest-db.test.js
 
   # The event store on a real ClickHouse 24.8 (same conformance suites), plus the retention job with events in ClickHouse
-  # and the event copy tool between PostgreSQL and ClickHouse (so this job has both services).
+  # the event copy tool between PostgreSQL and ClickHouse, and the ClickHouse backup with its test restore (so this job has both services).
   clickhouse:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -166,7 +166,7 @@ jobs:
           curl -fs --user default:ci http://127.0.0.1:8123/ -d 'CREATE DATABASE IF NOT EXISTS asix'
       - name: ClickHouse tests
         run: |
-          for t in event-store-clickhouse event-search-clickhouse event-match-clickhouse retention-clickhouse copy-events-db; do
+          for t in event-store-clickhouse event-search-clickhouse event-match-clickhouse retention-clickhouse copy-events-db clickhouse-backup-db; do
             echo "::group::$t"
             node --test "tests/$t.test.js"
             echo "::endgroup::"
