@@ -115,6 +115,17 @@ describe('retention job on PostgreSQL, through the event store', () => {
     assert.deepStrictEqual(runs.map((x) => x.status), ['completed']);
   });
 
+  it('the storage summary comes from the store: daily partitions with rows and sizes, plus the control-plane tables', async () => {
+    const sum = await storage.summary(T);
+    assert.strictEqual(sum.partitioned, true);
+    const name = 'events_p' + dayOf(agoDays(500)).replace(/-/g, '');            // the keep-forever r-forever event from 500 days ago is still there
+    const p = sum.partitions.find((x) => x.name === name);
+    assert.ok(p && p.rows >= 1 && p.bytes > 0 && p.from === dayOf(agoDays(500)) && p.to > p.from);
+    assert.ok(sum.partitions.every((x) => !x.is_default), 'the catch-all partition is reported separately');
+    assert.strictEqual(typeof sum.default_partition_rows, 'number');
+    assert.ok(sum.events_rows >= 1 && sum.events_bytes > 0 && sum.database_bytes > 0 && sum.tables.length >= 1 && sum.daily.length === 14);
+  });
+
   it('whole partitions older than every tenant\'s longest retention are still dropped (when this is the only data)', async (t) => {
     const others = Number((await db.query('SELECT COUNT(*)::int AS n FROM tenants WHERE id NOT IN ($1, $2)', [T, T2])).rows[0].n);
     if (others) return t.skip('other tenants exist in this database, so their policies decide what may be dropped');
@@ -127,6 +138,7 @@ describe('retention job on PostgreSQL, through the event store', () => {
     assert.ok(before.includes(name));
     const out = await storage.runScheduled();
     assert.ok(out.dropped.includes(name), 'the old partition is dropped');
+    assert.strictEqual(out.failed, undefined, 'nothing failed to drop');
     assert.ok(!(await storage.listPartitions(db)).map((p) => p.name).includes(name));
     assert.strictEqual(await left('r-drop', T2), 0);
   });

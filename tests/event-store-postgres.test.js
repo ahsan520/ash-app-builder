@@ -9,6 +9,7 @@ const { after } = require('node:test');
 const db = require('../src/db');
 const { runConformance } = require('./event-store-conformance');
 const { PostgresEventStore } = require('../src/events/postgres-store');
+const storage = require('../src/storage/retention');
 
 runConformance('postgres', async () => {
   const stamp = Date.now();
@@ -18,6 +19,7 @@ runConformance('postgres', async () => {
   return {
     store,
     tenants,
+    prepareDay: (day) => storage.ensurePartition(day),            // events for a day go to its own partition once it exists
     // events reference tenants, so remove them first (a far-future cutoff deletes everything of the tenant)
     cleanup: async () => {
       for (const t of tenants) await store.deleteBefore(t, '2999-01-01T00:00:00Z');

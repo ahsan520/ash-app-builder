@@ -2,9 +2,10 @@
 // The event-store contract as a test suite. Every adapter must pass it unchanged:
 //
 //   const { runConformance } = require('./event-store-conformance');
-//   runConformance('my-adapter', async () => ({ store, tenants: [uuidA, uuidB], cleanup: async () => {} }));
+//   runConformance('my-adapter', async () => ({ store, tenants: [uuidA, uuidB], cleanup: async () => {}, prepareDay: async (day) => {} }));
 //
-// `setup` returns a fresh store and two tenant ids the store accepts. See tests/event-store-memory.test.js
+// `setup` returns a fresh store and two tenant ids the store accepts. `prepareDay(day)` is optional: an engine that needs a
+// daily partition to exist before events for that day are stored in it (PostgreSQL) creates it there. See tests/event-store-memory.test.js
 // (runs in CI) and tests/event-store-postgres.test.js (needs ASIX_TEST_DB=1). Not named *.test.js on
 // purpose: it is a library, not a test file of its own.
 
@@ -25,8 +26,8 @@ const ev = (minutes, over = {}) => ({
 
 function runConformance(label, setup) {
   describe(`event store conformance: ${label}`, () => {
-    let store; let A; let B; let cleanup;
-    before(async () => { ({ store, tenants: [A, B], cleanup } = await setup()); });
+    let store; let A; let B; let cleanup; let prepareDay;
+    before(async () => { ({ store, tenants: [A, B], cleanup, prepareDay } = await setup()); });
     after(async () => { if (cleanup) await cleanup(); });
 
     it('round-trips every envelope field', async () => {
@@ -562,6 +563,62 @@ function runConformance(label, setup) {
         await bad(() => store.deleteExpired(A, { default_days: 30 }, { deadline: 'soon' }));
         await assert.rejects(store.deleteExpired('nope', { default_days: 30 }), (e) => e.code === 'INVALID_TENANT');
         await assert.rejects(store.expiredCounts('nope', { default_days: 30 }), (e) => e.code === 'INVALID_TENANT');
+      });
+    });
+
+    describe('storageStats and dropPartitionsBefore (whole-day partitions)', () => {
+      // days in 2001 that no other test uses, so dropping them cannot touch anything else
+      const D1 = '2001-03-04'; const D2 = '2001-03-05'; const D3 = '2001-03-06';
+      const old = (day, hour, over = {}) => ({ id: uuid(), received_at: `${day}T${hour}:00:00.000Z`, source_type: 'part-test', collector_id: 'p', raw: `old ${day} ${hour}`, parsed: { day }, ...over });
+      const e = { A1: old(D1, '01'), A1b: old(D1, '23'), A2: old(D2, '12'), B2: old(D2, '00'), B3: old(D3, '23') };
+      const nextDay = (d) => new Date(Date.parse(`${d}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+      const byDay = (st) => Object.fromEntries(st.partitions.map((p) => [p.from, p]));
+      const present = async (tenant, ...ev) => (await store.getByIds(tenant, ev.map((x) => x.id))).length;
+      let names;
+
+      it('storageStats reports whole UTC days, newest first, with rows and bytes', async () => {
+        if (prepareDay) for (const d of [D1, D2, D3]) await prepareDay(d);
+        await store.insertBatch(A, [e.A1, e.A1b, e.A2]);
+        await store.insertBatch(B, [e.B2, e.B3]);
+        const st = await store.storageStats();
+        assert.strictEqual(st.partitioned, true);
+        const days = byDay(st);
+        assert.deepStrictEqual([D1, D2, D3].map((d) => days[d] && days[d].rows), [2, 2, 1], 'rows per day, both tenants together');
+        for (const d of [D1, D2, D3]) {
+          assert.strictEqual(days[d].to, nextDay(d));
+          assert.ok(days[d].bytes > 0 && typeof days[d].name === 'string' && days[d].name);
+        }
+        assert.ok(st.partitions.every((p, i, a) => i === 0 || a[i - 1].from > p.from), 'newest first');
+        assert.ok(st.events_rows >= 5 && st.events_bytes >= days[D1].bytes + days[D2].bytes + days[D3].bytes);
+        assert.strictEqual(typeof st.default_partition_rows, 'number');
+        names = { D1: days[D1].name, D2: days[D2].name, D3: days[D3].name };
+      });
+
+      it('dropPartitionsBefore drops whole days before the cut-off, for every tenant, and nothing newer', async () => {
+        const total = await store.count(A, {});
+        const r = await store.dropPartitionsBefore(D2);                       // a partition for day D goes when D < the given day
+        assert.deepStrictEqual(r.dropped, [names.D1]);
+        assert.deepStrictEqual(r.failed, []);
+        assert.strictEqual(await present(A, e.A1, e.A1b), 0);
+        assert.strictEqual(await present(A, e.A2), 1, 'the cut-off day itself stays');
+        assert.strictEqual(await present(B, e.B2, e.B3), 2);
+        assert.strictEqual(await store.count(A, {}), total - 2, 'no other event of the tenant was touched');
+        assert.strictEqual(byDay(await store.storageStats())[D1], undefined);
+      });
+
+      it('drops several days at once, oldest first, and a second call has nothing to do', async () => {
+        const r = await store.dropPartitionsBefore(nextDay(D3));              // D2 and D3
+        assert.deepStrictEqual(r.dropped, [names.D2, names.D3]);
+        assert.strictEqual(await present(A, e.A2), 0);
+        assert.strictEqual(await present(B, e.B2, e.B3), 0);
+        assert.deepStrictEqual(await store.dropPartitionsBefore(nextDay(D3)), { dropped: [], failed: [] });
+        assert.deepStrictEqual(await store.dropPartitionsBefore('1999-01-01'), { dropped: [], failed: [] });
+      });
+
+      it('rejects a day that is not a calendar date', async () => {
+        for (const bad of [null, undefined, 20010304, 'yesterday', '2001-3-4', '2001-02-30', '2001-03-04T00:00:00Z', '']) {
+          await assert.rejects(store.dropPartitionsBefore(bad), (err) => err.code === 'INVALID_QUERY');
+        }
       });
     });
   });

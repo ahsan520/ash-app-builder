@@ -63,6 +63,15 @@ describe('retention job on ClickHouse', () => {
     assert.deepStrictEqual([run.status, run.n], ['completed', 3]);
   });
 
+  it('the storage summary comes from ClickHouse: its daily partitions, rows and sizes', async () => {
+    const sum = await storage.summary(T);
+    assert.strictEqual(sum.partitioned, true);
+    const day = new Date(Date.now() - 1 * DAY).toISOString().slice(0, 10);
+    const p = sum.partitions.find((x) => x.from === day);
+    assert.ok(p && p.rows >= 1 && p.bytes > 0 && /^\d{8}$/.test(p.name), 'yesterday has a partition (the c-default event from 1 day ago)');
+    assert.ok(sum.events_rows >= 3 && sum.events_bytes > 0 && sum.daily.length === 14 && sum.database_bytes > 0);
+  });
+
   it('the scheduled run purges, and skips the PostgreSQL partition work', async () => {
     await db.query('UPDATE retention_settings SET auto_purge = true WHERE tenant_id = $1', [T]);
     await store.insertBatch(T, [ev('c-default', 60), ev('c-short', 20)]);
@@ -73,5 +82,24 @@ describe('retention job on ClickHouse', () => {
     assert.deepStrictEqual(out.dropped, []);
     assert.strictEqual(await left('c-default'), 2);
     assert.strictEqual(await left('c-short'), 1);
+  });
+
+  it('whole days older than every tenant\'s longest retention are dropped as ClickHouse partitions', async (t) => {
+    const others = Number((await db.query('SELECT COUNT(*)::int AS n FROM tenants WHERE id <> $1', [T])).rows[0].n);
+    if (others) return t.skip('other tenants exist in this database, so their policies decide what may be dropped');
+    await db.query('DELETE FROM retention_policies WHERE tenant_id = $1', [T]);              // no keep-forever rule left
+    await db.query('UPDATE retention_settings SET auto_purge = true, default_days = 30 WHERE tenant_id = $1', [T]);
+    const oldDay = new Date(Date.now() - 500 * DAY).toISOString().slice(0, 10);
+    const oldEv = { ...ev('c-drop', 500), id: crypto.randomUUID() };
+    await store.insertBatch(T, [oldEv, ev('c-default', 2)]);
+    const name = oldDay.replace(/-/g, '');
+    assert.ok((await store.storageStats()).partitions.some((p) => p.name === name), 'the old day has a partition before the drop');
+    const d = await storage.dropExpiredPartitions();
+    assert.ok(d.dropped.includes(name), 'the old partition is dropped');
+    assert.deepStrictEqual(d.failed, []);
+    assert.strictEqual(d.max_retention_days, 30);
+    assert.ok(!(await store.storageStats()).partitions.some((p) => p.name === name));
+    assert.strictEqual((await store.getByIds(T, [oldEv.id])).length, 0);
+    assert.strictEqual(await left('c-default'), 3, 'recent events are untouched');
   });
 });
