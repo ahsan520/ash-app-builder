@@ -17,8 +17,8 @@ deployment profiles, and entitlements — never a fork.
 1. **Home edition, solid** — data safety (this build), module/profile skeleton, broker VM on
    Vector, content packs (residential), alert triage, regex-safety fix, CI.
 2. **Foundation for scale** — event envelope, event-store interface (Postgres adapter + ClickHouse
-   adapter, one conformance suite), search/detections/IOC moved behind it (done), retention and the dashboard reads (next), parsers as
-   separate workers.
+   adapter, one conformance suite), search/detections/IOC moved behind it (done), retention (done), parsers as
+   separate workers (next).
 3. **Enterprise data plane** — Kafka between broker and parser, ClickHouse cluster, S3 archive, HA
    control-plane DB, multi-node capacity dashboard.
 4. **Enterprise features** — multi-tenant hardening, sandboxed playbooks/integrations, marketplace
@@ -40,7 +40,7 @@ register themselves via a manifest instead of being hard-coded into the gateway 
 | Alert triage | Done (assign, notes, bulk acknowledge/close) |
 | Alert dedupe | Done (see below): find and merge repeat alerts, by hand or all at once |
 | Regex-safety fix | Done (see below) |
-| CI | Done: lint (`no-undef`) and unit tests on every push; DB tests not included yet |
+| CI | Done: lint (`no-undef`) and unit tests on every push; database tests in `postgres` and `clickhouse` jobs (every step run locally; first GitHub run pending) |
 
 Every Phase 1 item is now done. Phase 2 (foundation for scale) has started: see "Status of Phase 2" below.
 
@@ -54,7 +54,7 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) has started: see 
 | Page counts moved behind the store (collectors, storage, capacity, search fields) | Done (see `docs/event-store.md`, "Page counts behind the store") |
 | Detections, IOC matcher and alert sample events moved behind the store | Done (see below and `docs/event-store.md`, "Detection rules") |
 | Events list, data sources and Command Center reads in `routes/core.js` moved behind the store | Done (see `docs/event-store.md`) |
-| Retention job moved behind the store | Not started (next) |
+| Retention job moved behind the store | Done (see below and `docs/event-store.md`, "The retention job behind the store") |
 | ClickHouse adapter (same conformance suite) | Done — `src/events/clickhouse-store.js`; passes the conformance suites (store, search, rule match) against a real ClickHouse 24.8 and runs in its own CI job. XQL `search()` and detection rules run on it |
 | Parsers as separate workers | Not started |
 
@@ -96,8 +96,8 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) has started: see 
   now validated as a whole when it is saved. `querySQL` and `queryAggregated` are removed.
 - The events list (`/v1/search/events`), data sources and Command Center now read through `listEvents`, `dataSources` and
   `ingestionStats`, checked on in-memory, PostgreSQL and ClickHouse 24.8 and against the SQL they replaced.
-- Not built: the retention job still uses SQL directly; that is the
-  next part (`docs/parallel-work.md`, "What to build next"). Also not built: parsers as separate workers, a ClickHouse table
+- **The retention preview and row purge now go through the store** (`expiredCounts`, `deleteExpired`), with the same policy (default days, per-source overrides, keep forever), API and run log. Checked on in-memory, PostgreSQL 16 and ClickHouse 24.8 by one conformance block, and on the partitioned Postgres table against the old preview SQL (`tests/retention-db.test.js`); the job also runs with events in ClickHouse (`tests/retention-clickhouse.test.js`). Partition creation and whole-partition drops stay PostgreSQL housekeeping and are skipped on other engines.
+- Not built: ClickHouse retention by partition drop or table TTL (it purges with per-source `DELETE`s), storage page sizes for ClickHouse, parsers as separate workers, a ClickHouse table
   created on deploy (run `ensureSchema()`), and any per-tenant choice of adapter (one adapter per process).
 
 ### Broker VM and collector heartbeat (what exists)

@@ -20,8 +20,8 @@ unrelated features then touch different files and cannot collide.
 **Events go through the event store (Phase 2).** New code writes events with `getEventStore().insertBatch()` from
 `src/events` and does not run `INSERT INTO events` itself. **XQL search now reads through the store too**
 (`xql.parse()` makes a query plan, `getEventStore().search(tenantId, plan)` runs it on any engine; see
-`docs/event-store.md`). Detection rules, the IOC matcher, retention and the counts on the collectors, storage and
-capacity pages still use SQL directly: do not add new raw `events` queries where a store method already does the job.
+`docs/event-store.md`). Detection rules, the IOC matcher, the counts on the collectors, storage and capacity pages and the retention preview and row purge
+all go through the store now. What still uses SQL directly is PostgreSQL housekeeping (daily partitions, partition drops, table sizes on the storage page): do not add new raw `events` queries where a store method already does the job.
 
 ## Modules: one manifest file per module
 Modules register themselves by dropping a file in `src/modules/manifests/<id>.js` (the file name
@@ -67,7 +67,7 @@ Update the Status column in the same change that does the work, so the next sess
 | Move the counts on the collectors, storage and capacity pages and `/v1/search/fields` behind the store | done | `groupCounts`, `timeRange`, `fieldStats` in `src/events/{event-store,postgres-store,clickhouse-store,memory-store}.js`; callers `src/gateway/routes/{collectors,search,storage}.js`, `src/storage/retention.js` (`summary`), `src/capacity/capacity.js`; `tests/event-store-conformance.js` (new block), `tests/read-counts.test.js`, `tests/read-counts-db.test.js`. Run on real PostgreSQL 16 and ClickHouse 24.8.14.39 |
 | Move detection rules, the IOC matcher and the alert sample events behind the store | done (see `docs/event-store.md` "Detection rules"; checked on in-memory, PostgreSQL and ClickHouse 24.8, and against the old SQL builder on 1,914 rule definitions) | `src/search/match-spec.js` (new), `matchGroups` in `src/events/*`, `matchToSql` / `matchToClickHouse` / `runMatch` in `src/search/xql-{postgres,clickhouse,eval}.js`, `@path` fields in `xql-plan.js`, `src/detection/{rule-query,rule-runner,ioc-matcher}.js`, `routes/{detections,alerts}.js`, `tests/event-match-*.js`, `tests/detection-store-db.test.js`; `querySQL` and `queryAggregated` removed |
 | Move the events list, data sources and Command Center reads in `routes/core.js` behind the store | done (see `docs/event-store.md`, "The events list, data sources and Command Center behind the store") | `listEvents`, `dataSources`, `ingestionStats` in `src/events/{event-store,postgres-store,clickhouse-store,memory-store}.js`; `src/gateway/routes/core.js`; `tests/event-store-conformance.js` (new block), `tests/core-reads.test.js`, `tests/core-reads-db.test.js`. Run on real PostgreSQL 16 and ClickHouse 24.8.14.39 |
-| Move the retention job behind the store | not started (see `docs/event-store.md` "What is left") | `src/storage/retention.js` (`preview`, partition housekeeping) |
+| Move the retention job behind the store | done (see `docs/event-store.md`, "The retention job behind the store"; run on in-memory, PostgreSQL 16 and ClickHouse 24.8.14.39) | `expiredCounts`, `deleteExpired` in `src/events/{event-store,postgres-store,clickhouse-store,memory-store}.js`, `src/events/pg-partitions.js` (new, shared partition reader), `src/storage/retention.js` (preview and purge ask the store; partition housekeeping skipped unless the engine is postgres), `tests/event-store-conformance.js` (new block), `tests/retention-db.test.js`, `tests/retention-clickhouse.test.js`, CI jobs `postgres` and `clickhouse` |
 | ClickHouse adapter (same conformance suite) | done (verified against a real ClickHouse 24.8; an earlier version claimed this but never ran: it used an npm client that was not in `package.json`, lost milliseconds and miscounted inserts) | `src/events/clickhouse-store.js` (fetch, no new dependency), registered in `src/events/index.js`, `tests/event-store-clickhouse.test.js`, CI job `clickhouse` in `.github/workflows/ci.yml`; gated behind `ASIX_TEST_DB=1`. `search()` and `matchGroups()` are implemented and pass `tests/event-search-conformance.js` and `tests/event-match-conformance.js` on real ClickHouse 24.8 |
 | Parsers as separate workers | not started | `src/ingestion/*`, `src/ingest/http-ingest.js` |
 
@@ -80,7 +80,7 @@ Update the Status column in the same change that does the work, so the next sess
    `12-schema-init.yaml`) wherever the feature allows it.
 4. Run the in-repo tests before declaring a feature done: `node tests/modules.test.js`,
    `tests/alert-triage.test.js`, `tests/alert-dedupe.test.js`, `tests/bioc-rules.test.js`, `tests/data-model-rules.test.js`,
-   `tests/parsing-rules.test.js`, `tests/regex-safety.test.js`, `tests/packs.test.js`, `tests/heartbeat.test.js`, `tests/event-envelope.test.js`, `tests/event-store-memory.test.js`, `tests/event-match-memory.test.js`, `tests/xql-golden.test.js`, `tests/event-search-memory.test.js`, `tests/search-route.test.js`, `tests/read-counts.test.js`, `tests/core-reads.test.js` (they need `npm ci` first; `modules.test.js` uses `jose`). CI (`.github/workflows/ci.yml`) now runs `npm run lint` (ESLint `no-undef`) and `npm test` (every `tests/*.test.js`, on Node 20 and 22) on each push; run both locally before packaging. New tests must be named `*.test.js` to be picked up. Tests that need a database stay gated behind `ASIX_TEST_DB=1` (they skip themselves without it); CI runs them in the `postgres` job (platform schema from `k8s/12-schema-init.yaml`) and the `clickhouse` job (a ClickHouse 24.8 service). New gated test files must be added to the list in those jobs in `.github/workflows/ci.yml`. (`tests/packs-db.test.js`, `tests/heartbeat-db.test.js`, `tests/alert-dedupe-db.test.js`, `tests/event-store-postgres.test.js`, `tests/read-counts-db.test.js`, `tests/core-reads-db.test.js`, `tests/event-ingest-db.test.js` and `tests/detection-store-db.test.js` are the pattern: they skip themselves without that variable). A task is not "done" because a gated test exists: run it once against the real server before writing "done" in this table. Broker config changes: also run `vector test deploy/broker/vector.yaml deploy/broker/vector-tests.yaml` (needs the Vector binary; not in CI).
+   `tests/parsing-rules.test.js`, `tests/regex-safety.test.js`, `tests/packs.test.js`, `tests/heartbeat.test.js`, `tests/event-envelope.test.js`, `tests/event-store-memory.test.js`, `tests/event-match-memory.test.js`, `tests/xql-golden.test.js`, `tests/event-search-memory.test.js`, `tests/search-route.test.js`, `tests/read-counts.test.js`, `tests/core-reads.test.js` (they need `npm ci` first; `modules.test.js` uses `jose`). CI (`.github/workflows/ci.yml`) now runs `npm run lint` (ESLint `no-undef`) and `npm test` (every `tests/*.test.js`, on Node 20 and 22) on each push; run both locally before packaging. New tests must be named `*.test.js` to be picked up. Tests that need a database stay gated behind `ASIX_TEST_DB=1` (they skip themselves without it); CI runs them in the `postgres` job (platform schema from `k8s/12-schema-init.yaml`) and the `clickhouse` job (a ClickHouse 24.8 service). New gated test files must be added to the list in those jobs in `.github/workflows/ci.yml`. (`tests/retention-db.test.js` and `tests/retention-clickhouse.test.js` (needs both Postgres and ClickHouse), `tests/packs-db.test.js`, `tests/heartbeat-db.test.js`, `tests/alert-dedupe-db.test.js`, `tests/event-store-postgres.test.js`, `tests/read-counts-db.test.js`, `tests/core-reads-db.test.js`, `tests/event-ingest-db.test.js` and `tests/detection-store-db.test.js` are the pattern: they skip themselves without that variable). A task is not "done" because a gated test exists: run it once against the real server before writing "done" in this table. Broker config changes: also run `vector test deploy/broker/vector.yaml deploy/broker/vector-tests.yaml` (needs the Vector binary; not in CI).
 5. Route files must `require` everything they use. The route split once dropped the imports in
    `data-model.js` and `search.js`, which caused 500s in production. Before packaging, check for
    undefined names, for example `npx eslint --no-config-lookup --rule '{"no-undef":"error"}' src`
@@ -93,15 +93,12 @@ Update the Status column in the same change that does the work, so the next sess
    script re-run, or the portal page will show a 403.
 
 ## What to build next (Phase 2, in this order)
-Start from `docs/event-store.md` ("XQL search", "Page counts behind the store", "Detection rules" and "What is left"). Done so far: XQL search,
-the counts on the collectors, storage, retention-page and capacity pages plus `/v1/search/fields`, and detection rules, the IOC
-matcher and the alert sample events (`matchGroups`, `scan` checkpoints, `getByIds`), and the events list, data sources and
-Command Center reads in `routes/core.js` (`listEvents`, `dataSources`, `ingestionStats`).
-1. **Retention** (`src/storage/retention.js`): `deleteBefore` exists on every adapter. The partition-drop optimisation is
-   Postgres housekeeping and stays there; on ClickHouse retention should become table TTL or `DROP PARTITION`. `preview`
-   counts events past their retention per source: a per-source `groupCounts` with an age cut-off per source.
-2. When no caller is left, delete the `xql.compile` / `compileCondition` wrappers (only `tests/xql-golden.test.js` calls them
+Start from `docs/event-store.md` ("What is left"). Done so far: XQL search, the page counts, detection rules and the IOC matcher,
+the events list, data sources and Command Center reads, and now the retention preview and purge (`expiredCounts`, `deleteExpired`).
+1. When no caller is left, delete the `xql.compile` / `compileCondition` wrappers (only `tests/xql-golden.test.js` calls them
    now; it pins the old compiler's SQL, so rework or retire it together with them).
+2. ClickHouse retention by partition: `DROP PARTITION` once a day is older than every tenant's longest retention, or a table TTL
+   (today ClickHouse purges with per-source `DELETE`s: correct, but heavy on big tables). Also the storage page sizes for ClickHouse.
 3. Then the other Phase 2 items in `docs/product-plan.md`: parsers as separate workers, a ClickHouse table created on deploy.
 Smaller, independent items that were open before and still are: license-limit enforcement (`tenants`, `retention_days_max`),
 portal menu that follows module state, a "my open alerts" tile.
@@ -116,19 +113,21 @@ for d in yaml.safe_load_all(open('k8s/12-schema-init.yaml')):
 PY
 sudo -u postgres psql -c "CREATE USER asix_admin SUPERUSER PASSWORD 'pw'" -c 'CREATE DATABASE asix_platform OWNER asix_admin'
 PGPASSWORD=pw psql -h 127.0.0.1 -U asix_admin -d asix_platform -f /tmp/schema.sql      # twice: must be idempotent
-for t in event-store-postgres event-search-postgres event-match-postgres search-route detection-store-db; do ASIX_TEST_DB=1 DB_HOST=127.0.0.1 DB_PASSWORD=pw node --test tests/$t.test.js; done
+for t in event-store-postgres event-search-postgres event-match-postgres search-route detection-store-db retention-db; do ASIX_TEST_DB=1 DB_HOST=127.0.0.1 DB_PASSWORD=pw node --test tests/$t.test.js; done
 # ClickHouse: any 24.x server; create a database, then
 curl -s http://127.0.0.1:8123/ -d 'CREATE DATABASE IF NOT EXISTS asix'
-for t in event-store-clickhouse event-search-clickhouse event-match-clickhouse; do ASIX_TEST_DB=1 ASIX_CLICKHOUSE_URL=http://default@127.0.0.1:8123/asix node --test tests/$t.test.js; done
+for t in event-store-clickhouse event-search-clickhouse event-match-clickhouse retention-clickhouse; do ASIX_TEST_DB=1 DB_HOST=127.0.0.1 DB_PASSWORD=pw ASIX_CLICKHOUSE_URL=http://default@127.0.0.1:8123/asix node --test tests/$t.test.js; done   # retention-clickhouse also needs the Postgres above
 ```
 Two traps seen while building this: an event is identified by `(id, received_at)` across ALL tenants, so test data with
 fixed ids collides with rows a crashed earlier run left behind (`tests/fixtures/xql-dataset.js` generates fresh ids per
 run for that reason); and piping a test run into `head` kills it before its cleanup runs.
 
 ## Known gaps to check
-- `.github/workflows/ci.yml` in the zip this was built from had only the `test` job. The `postgres` and `clickhouse` jobs were
-  added with the rules/IOC work. The Postgres job's steps were run locally on a fresh database; neither job has run on GitHub
-  yet, and the ClickHouse job's password path (`http://default:ci@...`) is untested. If a separate workflow in the repo already
+- `.github/workflows/ci.yml` in the zip this was built from had only the `test` job (earlier notes said the DB jobs existed; they
+  did not). The `postgres` and `clickhouse` jobs are in it now. Every step script was extracted from the YAML and run locally against
+  PostgreSQL 16 and ClickHouse 24.8.14.39 (schema applied twice with errors fatal; ClickHouse with a password on `default`), all
+  green. The workflow has not run on GitHub: the service-container health checks and the ClickHouse image's `CLICKHOUSE_*` variables
+  are untested there. If a separate workflow in the repo already
   runs these tests, keep one of the two.
 - `ASIX_EVENT_STORE=clickhouse` was documented but not registered in `src/events/index.js` in that zip; it is now.
 - Several tests listed above (`modules`, `regex-safety`, `packs`, `alert-triage`, `alert-dedupe`) were not in the zip

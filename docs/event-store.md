@@ -49,6 +49,8 @@ await store.insertBatch(tenantId, [{ source_type: 'syslog', raw: '...', parsed: 
 | `dataSources(tenantId, { recentSince? })` | `[{ source_type, collector_id, events_total, events_recent, last_received }]`: one row per source type and collector over ALL the tenant's events; `events_recent` counts those with an event time (else received time) after `recentSince` (default 24 hours ago). Most recently received first, ties by source type then collector (none last); at most 1,000 rows. |
 | `ingestionStats(tenantId, { by?, now?, groups? })` | The Command Center numbers: `{ totals, hourly, groups }`. `totals` `{ events, bytes, events_1h, source_types, collectors, last_received }` cover the 24 hours before `now` by event time (received time when none; no upper bound; strictly after the start), `bytes` is the UTF-8 size of `raw`, `events_1h` those also received in the last hour. `hourly` is 24 `{ hour, n }`, whole UTC hours ending with the current one, zero-filled, oldest first. `groups` is the window grouped by `by` (`source_type`, or `collector_id` with `(none)` for no collector), most events first, ties by key, at most `groups` (default 12, max 100). |
 | `fieldStats(tenantId, { sample?, xdmSample? })` | `{ fields, xdm }`, each `[{ name, events }]`. `fields`: top-level keys of `parsed` over the newest `sample` events (default 2,000, max 10,000). `xdm`: leaf paths under `parsed.xdm` (as `xdm.a.b`; arrays are leaves, empty objects have none) over the newest `xdmSample` events (default 500, max 5,000) whose `parsed.xdm` is an object. Most events first, ties by name, at most 200 and 500 names. Newest means `(received_at, id)` descending. |
+| `expiredCounts(tenantId, policy, { now? })` | `[{ source_type, events, oldest }]`: what a purge would delete right now, read-only. `policy` is `{ default_days, overrides: [{ source_type, retention_days }] }` (see "The retention job behind the store" below). Source types with nothing expired are left out; most events first, ties by source type. `oldest` is an ISO `received_at`. |
+| `deleteExpired(tenantId, policy, { now?, deadline?, batch? })` | `{ deleted, by_source, truncated }`: permanently deletes this tenant's events that are past their retention. `deadline` (epoch milliseconds) stops it before the next batch or statement; `truncated` is then true and running it again carries on. `batch` (1 to 100,000, default 10,000) is the row count per `DELETE` on engines that delete in batches. The PostgreSQL adapter also reports `partitions_scanned`. |
 | `matchGroups(tenantId, spec, opts?)` | `[{ key, n, first_at, last_at, sample_ids, sample_raw }]`. What a detection rule asks: which groups of events inside a time frame match a filter, and how many in each (see "Detection rules" below). Works on every adapter. |
 
 Every method needs a tenant id and only ever sees that tenant's events. Errors: `EventStoreError` with `code`
@@ -65,6 +67,9 @@ That is what a queue that delivers at least once (Kafka, Phase 3) needs. Events 
   commit together.
 - Inserts are one `INSERT ... SELECT unnest(...) ON CONFLICT DO NOTHING` per batch.
 - `timestamp` columns are treated as UTC, as everywhere else in ASIX. Keep PostgreSQL's timezone on UTC.
+- `deleteExpired` deletes in batches per daily partition (`ctid` is only unique inside one table), visiting only the
+  partitions that can hold an expired row (and `events_default`). Dropping whole partitions is PostgreSQL housekeeping and
+  stays in `src/storage/retention.js`. The partition layout is read by `src/events/pg-partitions.js`, shared by both.
 
 ### XQL search (`store.search`)
 XQL text is parsed once into a **query plan**, and the store runs the plan. The plan holds no SQL, so an engine that is
@@ -129,8 +134,10 @@ Node's built-in `fetch`, so there is **no extra npm dependency**.
 - **Tenant isolation** is the explicit `tenant_id = {t:UUID}` condition on every statement (ClickHouse has no
   row-level security here). Tenant and event ids and timestamps are validated before they reach the SQL; free-text filters
   and cursor values travel as ClickHouse query parameters, never spliced into the statement.
-- **Deletes.** `deleteBefore` counts, then runs a lightweight `DELETE` that finishes before it returns. Dropping whole day
-  partitions is still the cheaper way for the retention job to expire large tables.
+- **Deletes.** `deleteBefore` counts, then runs a lightweight `DELETE` that finishes before it returns. `deleteExpired`
+  does the same once per source type that has expired events (scalar query parameters only), so a per-source policy works;
+  see "The retention job behind the store". Dropping whole day partitions, or a table TTL, would be cheaper for big tables
+  and is not built yet.
 - **Known limits.** One `INSERT` that spans several days writes several parts and is not atomic across them (validation
   happens first, so a failure after that point means a backend outage; re-sending the batch is safe because inserts are
   idempotent). Detection rules run here too (`matchGroups`). One adapter per process.
@@ -236,11 +243,52 @@ PostgreSQL. Deliberate differences from the old SQL:
   1,000 (source type, collector) rows.
 - Windows are measured on the application's clock, not the database's.
 
+## The retention job behind the store (done)
+`src/storage/retention.js` asks the store for the two things that touch events: the preview ("Check what would be
+deleted") is `expiredCounts()`, and the row purge (manual **Purge now** and the scheduled run) is `deleteExpired()`. The
+policy, the advisory lock, the run log, the time limit and the result shape of the API are unchanged.
+
+**The policy.** `{ default_days, overrides: [{ source_type, retention_days }] }`, which is what `loadPolicy()` already returns.
+An event is expired when `received_at` is older than `now` minus the days that apply to its source type: the override's days
+when it has one, `null` meaning keep forever, else `default_days`. Days are whole numbers from 1 to 3,650. The base class
+validates the policy before any adapter sees it (a bad one is `INVALID_QUERY`, nothing is deleted): at most 1,000 overrides,
+source types of 1 to 255 characters, no duplicates.
+
+**How each adapter does it**
+- *PostgreSQL:* the preview is the query that used to be in `retention.js` (one pass, partition pruning on the shortest
+  retention). The purge is the same batched `DELETE ... ctid = ANY(ARRAY(SELECT ctid ... LIMIT batch))` per partition and per rule.
+- *ClickHouse:* first the source types that have anything older than the shortest retention (with the oldest event of each),
+  then, for each one whose own cut-off is passed, a count and a lightweight `DELETE`. At most 1,000 source types are looked at in
+  one call; `truncated` is true if there were more, and the next run continues.
+- *Memory:* a filter over the rows.
+
+**Still PostgreSQL-only, and skipped on other engines.** Creating daily partitions ahead of time, dropping whole partitions older
+than every tenant's longest retention (when every tenant has automatic purge on and no keep-forever rule) and the sizes on the
+storage page read the PostgreSQL `events` table. When `ASIX_EVENT_STORE` is not `postgres` the first two are skipped (the
+scheduled run reports `partitioned: false` and no drops) instead of touching the wrong table. The storage page's size and
+partition numbers still describe the PostgreSQL table, so they are not meaningful with events in ClickHouse yet.
+
+**Checked by.** One conformance block (`tests/event-store-conformance.js`: exact cut-offs, per-source rules, keep forever, batches, a
+passed deadline, tenant isolation, awkward source type names, bad input), run on in-memory, PostgreSQL 16 and ClickHouse 24.8.
+`tests/retention-db.test.js` runs the whole job on the partitioned table: the preview must equal the old SQL (written out in the
+test), a purge must delete exactly what the preview counted from daily partitions and from `events_default`, the scheduled run
+must skip tenants with automatic purge off, and an expired partition is still dropped. `tests/retention-clickhouse.test.js` runs the
+job with events in ClickHouse and the policy and run log in PostgreSQL.
+
+**Deliberate differences from before**
+- The cut-off is computed on the application's clock, not the database's (`localtimestamp`), as in the other store reads.
+- `oldest` in the preview is an ISO time with `Z`; it was a database timestamp that serialised the same way on a UTC host.
+- Preview ties on the count are ordered by source type (before: undefined).
+- A policy is validated as a whole first: more than 1,000 overrides, a source type over 255 characters or a duplicate is refused.
+  (The API already limited an update to 50 overrides and 100 characters.)
+
 ## What is left (next in Phase 2)
-- Reads that still use SQL directly: the retention job (`preview`, partition drops, the all-tenant row count). Express it
-  as a plan where the plan can say it (`preview` is a per-source `groupCounts` with an age cut-off per source), and add a
-  store method only for engine-specific housekeeping. Then remove the `xql.compile` / `compileCondition` wrappers (nothing but `tests/xql-golden.test.js` calls them now;
+- Retention on ClickHouse by partition: `DROP PARTITION` once a day is older than every tenant's longest retention, or a table
+  TTL. Today ClickHouse purges by per-source `DELETE`, which is correct but heavy on big tables.
+- Storage page sizes and partitions for ClickHouse (today they describe the PostgreSQL table).
+- Remove the `xql.compile` / `compileCondition` wrappers (nothing but `tests/xql-golden.test.js` calls them now;
   that test pins the old compiler's SQL and has to be reworked or retired with them). Order and starting points:
   `docs/parallel-work.md`, "What to build next".
+- A ClickHouse table created on deploy (run `ensureSchema()` until then).
 - Parsers as separate workers.
 - The syslog listener and the in-cluster collector reach the store through the HTTP lane, so they are covered.
