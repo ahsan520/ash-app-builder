@@ -80,6 +80,11 @@ writes that line into `broker.env` (the service reads it through the systemd dro
 `sources.syslog_udp: Must be a valid IPv4/IPv6 address with port`. On a broker set up before this, add that line to `/etc/asix-broker/broker.env` and re-run the bootstrap
 with `--no-install`. The heartbeat's health check (`http://127.0.0.1:8686/health`) still answers on 0.59.
 
+**The IP column.** It shows the address ASIX sees the broker connect from. The platform's two NodePort Services (`nginx-control`, `asix-syslog-collector`) use
+`externalTrafficPolicy: Local` so that is the broker's real address; with the Kubernetes default (`Cluster`) it was the cluster gateway, `10.42.0.1`, for every collector.
+`Local` needs the pod on the node that receives the traffic, which is true on the single-node k3s box. To apply it without redeploying:
+`kubectl -n asix-platform patch svc nginx-control asix-syslog-collector -p '{"spec":{"externalTrafficPolicy":"Local"}}'` (back: `Cluster`). The column updates at the broker's next heartbeat.
+
 ## Syslog over TLS (optional)
 Plain syslog is readable and forgeable by anyone on the path. For sources that cross a network you do not control, add the TLS listener:
 ```bash

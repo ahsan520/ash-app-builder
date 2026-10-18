@@ -120,6 +120,9 @@ spec:
   selector:
     app: asix-syslog-collector
   type: NodePort
+  # Local keeps the sending device's address as remote_address (the default rewrites it to the cluster gateway, 10.42.0.1).
+  # Needs the collector pod on the node that receives the traffic: true on this single-node k3s box.
+  externalTrafficPolicy: Local
   ports:
     - name: syslog-udp
       port: 5514

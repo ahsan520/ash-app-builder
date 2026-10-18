@@ -46,5 +46,13 @@ else:
         if ok: print(f'ok   API URL and k8s/11-clickhouse.yaml agree on the {what}')
         else: failures += 1; print(f'FAIL API URL and k8s/11-clickhouse.yaml disagree on the {what}')
 
+# Client addresses: the two NodePort Services that receive traffic from outside must keep the real source address, or collectors, events and
+# rate limits all see the cluster gateway (10.42.0.1). (Single-node cluster: the pod is always on the node that gets the traffic.)
+for path, svc in [('k8s/40-nginx.yaml', 'nginx-control'), ('k8s/35-syslog-collector.yaml', 'asix-syslog-collector')]:
+    found = [d for d in docs(path) if d.get('kind') == 'Service' and d['metadata']['name'] == svc]
+    pol = found[0]['spec'].get('externalTrafficPolicy') if found else None
+    if pol == 'Local': print(f'ok   {path}: Service/{svc} keeps the client address (externalTrafficPolicy Local)')
+    else: failures += 1; print(f'FAIL {path}: Service/{svc} has externalTrafficPolicy {pol!r}, expected Local')
+
 print('failures:', failures)
 sys.exit(1 if failures else 0)
