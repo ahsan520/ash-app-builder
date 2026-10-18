@@ -14,6 +14,7 @@
 const db = require('../db');
 const { isBroker, BROKER_VERSION_SQL } = require('../brokers/broker-view');
 const { severity } = require('./watchdog');
+const watchAll = require('./watch-all');
 
 const RULE_NAME = 'Broker installer key unusable';
 const keyOf = (id) => `brokerkey:${id}`;
@@ -60,13 +61,17 @@ const raiseText = (r) => ({
   summary: `${r.name} cannot send to ASIX: ${r.why}. On the Brokers page press Rotate key, then re-run the bootstrap script on the broker with the new key.`,
 });
 
-async function runTenant(tenantId, { raiseAllowed = true, sev = severity() } = {}) {
+async function runTenant(tenantId, { now = Date.now(), raiseAllowed = true, sev = severity() } = {}) {
   return db.withTenant(tenantId, async (client) => {
     await client.query("SET LOCAL statement_timeout = '15s'");
+    // Watched = "Alert if down" on by hand, or the tenant-wide "watch everything" switch is on and the broker is not retired.
+    const all = await watchAll.read(client, tenantId);
     const brokers = (await client.query(
       `SELECT c.id, c.name, c.version, c.key_id, k.status AS key_status, k.name AS key_name, k.key_prefix
          FROM collectors c LEFT JOIN ingestion_keys k ON k.id = c.key_id
-        WHERE c.tenant_id = $1 AND c.watch_disconnect AND c.version ILIKE $2`, [tenantId, BROKER_VERSION_SQL])).rows;
+        WHERE c.tenant_id = $1 AND c.version ILIKE $2
+          AND (c.watch_disconnect OR ($3::boolean AND c.last_seen >= $4::timestamp))`,
+      [tenantId, BROKER_VERSION_SQL, all.disconnect, watchAll.cutoffOf(now)])).rows;
     const active = (await client.query(
       "SELECT id, group_key FROM alerts WHERE tenant_id = $1 AND rule_name = $2 AND status IN ('open','acknowledged')", [tenantId, RULE_NAME])).rows;
     const latest = (await client.query(

@@ -18,6 +18,7 @@ const db = require('../db');
 const { getEventStore } = require('../events');
 const { statusOf, tsMs } = require('./status');
 const { severity } = require('./watchdog');
+const watchAll = require('./watch-all');
 
 const RULE_NAME = 'Collector sending no events';
 const MIN_MINUTES = 5;
@@ -81,8 +82,12 @@ const raiseText = (r) => ({
 async function runTenant(tenantId, { now = Date.now(), raiseAllowed = true, sev = severity(), store = null } = {}) {
   return db.withTenant(tenantId, async (client) => {
     await client.query("SET LOCAL statement_timeout = '15s'");
+    // The collector's own limit wins; one without a limit uses the tenant-wide "watch everything" limit unless it is retired (src/collectors/watch-all.js).
+    const all = await watchAll.read(client, tenantId);
     const collectors = (await client.query(
-      'SELECT id, name, last_seen, connected_within_min, watch_silent_min FROM collectors WHERE tenant_id = $1 AND watch_silent_min IS NOT NULL', [tenantId])).rows;
+      `SELECT id, name, last_seen, connected_within_min, ${watchAll.SILENT_MIN_SQL} AS watch_silent_min FROM collectors
+        WHERE tenant_id = $1 AND ${watchAll.SILENT_MIN_SQL} IS NOT NULL`,
+      [tenantId, all.silent_min, watchAll.cutoffOf(now)])).rows;
     const active = (await client.query(
       "SELECT id, group_key FROM alerts WHERE tenant_id = $1 AND rule_name = $2 AND status IN ('open','acknowledged')", [tenantId, RULE_NAME])).rows;
     if (!collectors.length && !active.length) return { raised: 0, closed: 0 };      // nothing watched, nothing to close: skip the event store

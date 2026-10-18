@@ -13,6 +13,7 @@
 
 const db = require('../db');
 const { statusOf, effectiveMinutes, tsMs } = require('./status');
+const watchAll = require('./watch-all');
 
 const RULE_NAME = 'Collector disconnected';
 const LOCK_KEY = 7412004;
@@ -64,8 +65,11 @@ const raiseText = (r) => ({
 async function runTenant(tenantId, { now = Date.now(), raiseAllowed = true, sev = severity() } = {}) {
   return db.withTenant(tenantId, async (client) => {
     await client.query("SET LOCAL statement_timeout = '15s'");
+    // Watched = switched on by hand, or the tenant-wide "watch everything" switch is on and the collector is not retired (src/collectors/watch-all.js).
+    const all = await watchAll.read(client, tenantId);
     const collectors = (await client.query(
-      'SELECT id, name, last_seen, connected_within_min FROM collectors WHERE tenant_id = $1 AND watch_disconnect', [tenantId])).rows;
+      `SELECT id, name, last_seen, connected_within_min FROM collectors WHERE tenant_id = $1 AND ${watchAll.WHERE_DISCONNECT}`,
+      [tenantId, all.disconnect, watchAll.cutoffOf(now)])).rows;
     const active = (await client.query(
       "SELECT id, group_key FROM alerts WHERE tenant_id = $1 AND rule_name = $2 AND status IN ('open','acknowledged')", [tenantId, RULE_NAME])).rows;
     const latest = (await client.query(

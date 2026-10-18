@@ -485,6 +485,21 @@ data:
     GRANT SELECT, INSERT, UPDATE, DELETE ON ingestion_keys TO asix_admin;
     GRANT SELECT, INSERT, UPDATE, DELETE ON collectors TO asix_admin;
 
+    -- Tenant-wide "watch everything" for the collector alerts (src/collectors/watch-all.js). One row per tenant; no row = off.
+    CREATE TABLE IF NOT EXISTS collector_watch_defaults (
+        tenant_id UUID PRIMARY KEY REFERENCES tenants(id),
+        watch_disconnect BOOLEAN NOT NULL DEFAULT false,
+        watch_silent_min INTEGER CHECK (watch_silent_min IS NULL OR watch_silent_min BETWEEN 5 AND 4320),
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_by TEXT
+    );
+    ALTER TABLE collector_watch_defaults ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS collector_watch_defaults_tenant_isolation ON collector_watch_defaults;
+    CREATE POLICY collector_watch_defaults_tenant_isolation ON collector_watch_defaults FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+    GRANT SELECT, INSERT, UPDATE, DELETE ON collector_watch_defaults TO asix_admin;
+
     -- ============================================================
     -- Alert notifications: channels (email / Slack / webhook) and the delivery outbox
     -- ============================================================

@@ -9,6 +9,7 @@ const {
 const { generateKey, hashKey, PLATFORMS: KEY_PLATFORMS } = require('../../ingest/http-ingest');
 const { getEventStore } = require('../../events');
 const { DEFAULT_MINUTES, tsMs, effectiveMinutes, isCustom, statusOf } = require('../../collectors/status');
+const watchAll = require('../../collectors/watch-all');
 
 // Registered senders (collectors table) plus built-in ones that only appear in events
 // (e.g. the in-cluster syslog collector), so the page shows everything that feeds the SIEM.
@@ -22,6 +23,9 @@ router.get('/v1/collectors', ...guarded('collectors:read'), async (req, res) => 
               CASE WHEN c.key_id IS NULL THEN 'built-in' ELSE 'registered' END AS origin
        FROM collectors c LEFT JOIN ingestion_keys k ON k.id = c.key_id WHERE c.tenant_id = $1`, [req.tenant_id]));
     // Event counts come from the event store (one pass each): the last 7 days per collector, and the last 24 hours.
+    // The tenant-wide "watch everything" switch; if it cannot be read the page still loads, showing only the per-collector settings.
+    let wd = { ...watchAll.OFF };
+    try { wd = await db.withTenant(req.tenant_id, (client) => watchAll.read(client, req.tenant_id)); } catch (e) { console.error('Watch defaults read failed:', e.message); }
     const store = getEventStore();
     const [week, dayCounts] = await Promise.all([
       store.groupCounts(req.tenant_id, { by: 'collector_id', since: new Date(Date.now() - 7 * 86400000).toISOString() }),
@@ -36,6 +40,7 @@ router.get('/v1/collectors', ...guarded('collectors:read'), async (req, res) => 
     // A built-in source (key-less row, kept alive by its heartbeat) also has event-derived stats:
     // merge them so an idle one stays Connected and still shows its event counts.
     const evByName = new Map(built.map((r) => [r.name, r]));
+    const storedSeen = new Map(reg.rows.map((r) => [r.id, r.last_seen]));
     const merged = reg.rows.map((c) => {
       const e = c.origin === 'built-in' ? evByName.get(c.name) : null;
       if (!e) return c;
@@ -50,6 +55,10 @@ router.get('/v1/collectors', ...guarded('collectors:read'), async (req, res) => 
       watch_silent_min: Number.isInteger(c.watch_silent_min) ? c.watch_silent_min : null,
       connected_within_min: effectiveMinutes(c.connected_within_min), connected_custom: isCustom(c.connected_within_min),
       status: statusOf(c.last_seen, c.connected_within_min, now),
+      // Covered by the tenant-wide switch rather than by this collector's own setting (rows with no id cannot be watched).
+      // The rules read the stored last_seen (what the watchdogs read), not the newer one merged in from events above.
+      watch_disconnect_by_default: !!c.id && watchAll.disconnectByDefault({ ...c, last_seen: storedSeen.get(c.id) }, wd, now),
+      watch_silent_by_default: !!c.id && watchAll.silentByDefault({ ...c, last_seen: storedSeen.get(c.id) }, wd, now),
     }));
     const q = String(req.query.q || '').toLowerCase();
     const rows = all
@@ -57,6 +66,7 @@ router.get('/v1/collectors', ...guarded('collectors:read'), async (req, res) => 
         && (!q || [c.name, c.alias, c.platform, c.os, c.last_ip, c.installer].some((v) => v && String(v).toLowerCase().includes(q))))
       .sort((a, b) => String(a.name).localeCompare(String(b.name)));
     res.status(200).json({ success: true, total: rows.length, overall: all.length, connected_within_minutes: DEFAULT_MINUTES,
+      watch_defaults: { disconnect: wd.disconnect, silent_min: wd.silent_min, max_age_days: watchAll.maxAgeDays() },
       collectors: rows.slice(offset, offset + limit) });
   } catch (error) {
     console.error('Collector listing failed:', error.message);

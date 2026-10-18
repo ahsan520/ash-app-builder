@@ -570,6 +570,31 @@ function collectorSilent(c, act) {
   if (t !== '') { minutes = Number(t); if (!Number.isInteger(minutes)) { alert('Enter a whole number of minutes, or leave it empty.'); return; } }
   act(() => api('/v1/collectors/' + c.id + '/silent-watch', { method: 'PUT', body: { minutes } }));
 }
+// ---- Collector watch everything ---------------------------------------------------------------
+// Tenant-wide switch for the two collector alerts (GET/PUT /v1/collector-watch-defaults). It only adds to the per-collector buttons.
+// Collectors not seen for more than max_age_days are left out. Off by default; see docs/product-plan.md.
+function watchEverythingCard(wd, act) {
+  const d = wd || { disconnect: false, silent_min: null, max_age_days: 7 };
+  const put = (body) => act(() => api('/v1/collector-watch-defaults', { method: 'PUT', body }));
+  const toggleDown = () => {
+    if (!d.disconnect && !confirm('Raise an alert when ANY collector or broker goes Disconnected, including ones you add later?\nCollectors not seen for ' + d.max_age_days + ' days or more are left out. Alerts go through your notification channels (Settings, Notifications). It does not change the Alert if down buttons on each row.')) return;
+    put({ disconnect: !d.disconnect });
+  };
+  const setSilent = () => {
+    const a = prompt('Raise an alert when ANY collector is still reporting in but sends no events for this many minutes (5 to 4320).\nA collector with its own Alert if silent limit keeps it. Leave empty to turn it off.', d.silent_min ? String(d.silent_min) : '60');
+    if (a === null) return;
+    const t = a.trim(); let minutes = null;
+    if (t !== '') { minutes = Number(t); if (!Number.isInteger(minutes)) { alert('Enter a whole number of minutes, or leave it empty.'); return; } }
+    put({ silent_min: minutes });
+  };
+  return card('Watch everything', el('p', { className: 'desc', textContent: 'Alert on every collector without pressing the buttons row by row. New collectors and brokers are covered as soon as they appear; ones not seen for ' + d.max_age_days + ' days are left out. The buttons on each row still work and always win for the silent limit.' }),
+    el('div', { style: 'display:flex;gap:12px;align-items:center;flex-wrap:wrap' },
+      el('span', {}, 'If any collector goes Disconnected: ', pill(d.disconnect ? 'On' : 'Off', d.disconnect ? 'ok' : 'off')),
+      el('button', { className: 'btn', textContent: d.disconnect ? 'Turn off' : 'Turn on', onclick: toggleDown }),
+      el('span', { style: 'margin-left:16px' }, 'If any collector sends no events: ', pill(d.silent_min ? 'After ' + d.silent_min + ' min' : 'Off', d.silent_min ? 'ok' : 'off')),
+      el('button', { className: 'btn', textContent: d.silent_min ? 'Change' : 'Turn on', onclick: setSilent }),
+      d.silent_min ? el('button', { className: 'btn', textContent: 'Turn off', onclick: () => put({ silent_min: null }) }) : '')); 
+}
 let colF = { status: '', q: '' };
 async function pgCollectors() {
   const p = new URLSearchParams({ limit: 200 }); if (colF.status) p.set('status', colF.status); if (colF.q) p.set('q', colF.q);
@@ -583,10 +608,11 @@ async function pgCollectors() {
   return [el('div', { style: 'display:flex;align-items:baseline;gap:12px' }, el('h2', { textContent: 'Collectors' }), el('span', { className: 'mute', textContent: 'Found ' + r.total + ' out of ' + r.overall + ' results' }),
       el('button', { className: 'btn pri', style: 'margin-left:auto', textContent: 'Create installer', onclick: () => { location.hash = '#/settings/installers'; } })),
     el('p', { className: 'desc', textContent: 'Everything that sends events to ASIX. A collector counts as Connected if it sent data within its threshold, ' + r.connected_within_minutes + ' minutes unless you set one for it (Threshold button).' }),
+    watchEverythingCard(r.watch_defaults, act),
     card('', el('div', { style: 'display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap' }, st, q, go, el('button', { className: 'btn', textContent: 'Refresh', onclick: () => route() })),
       table([
         { h: 'Name', f: (c) => c.name }, { h: 'Status', f: (c) => pill((c.status === 'connected' ? '\u2713 Connected' : '\u2715 Disconnected'), c.status === 'connected' ? 'ok' : 'off') },
-        { h: 'Connected if seen within', f: (c) => c.connected_within_min + ' min' + (c.connected_custom ? ' (custom)' : '') }, { h: 'Alert if down', f: (c) => (c.id ? pill(c.watch_disconnect ? 'On' : 'Off', c.watch_disconnect ? 'ok' : 'off') : '-') }, { h: 'Alert if silent', f: (c) => (c.id ? (c.watch_silent_min ? pill('After ' + c.watch_silent_min + ' min', 'ok') : pill('Off', 'off')) : '-') }, { h: 'Operating system', f: osOf }, { h: 'Collector version', f: (c) => c.version || '-' }, { h: 'IP address', f: (c) => c.last_ip || '-' }, { h: 'Collector alias', f: (c) => c.alias || '' },
+        { h: 'Connected if seen within', f: (c) => c.connected_within_min + ' min' + (c.connected_custom ? ' (custom)' : '') }, { h: 'Alert if down', f: (c) => (c.id ? (c.watch_disconnect ? pill('On', 'ok') : c.watch_disconnect_by_default ? pill('On (all)', 'ok') : pill('Off', 'off')) : '-') }, { h: 'Alert if silent', f: (c) => (c.id ? (c.watch_silent_min ? pill('After ' + c.watch_silent_min + ' min', 'ok') : c.watch_silent_by_default ? pill('After ' + r.watch_defaults.silent_min + ' min (all)', 'ok') : pill('Off', 'off')) : '-') }, { h: 'Operating system', f: osOf }, { h: 'Collector version', f: (c) => c.version || '-' }, { h: 'IP address', f: (c) => c.last_ip || '-' }, { h: 'Collector alias', f: (c) => c.alias || '' },
         { h: 'Last seen (UTC)', f: (c) => when(c.last_seen) }, { h: 'Events (24h)', f: (c) => c.events_24h.toLocaleString() }, { h: 'Installer', f: (c) => c.installer || (c.origin === 'built-in' ? 'built-in' : '-') },
         { h: '', f: (c) => (c.id ? el('span', { style: 'white-space:nowrap' },
           el('button', { className: 'btn', textContent: 'Threshold', onclick: () => collectorThreshold(c, r.connected_within_minutes, act) }), ' ',

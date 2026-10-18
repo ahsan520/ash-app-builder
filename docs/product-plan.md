@@ -186,7 +186,7 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   one alert for the down collector and none for the connected, unwatched or other tenant's, no duplicate while open or acknowledged, no repeat after a manual close,
   closed with a note on reconnect, a new outage raises a new alert, custom threshold, watching off, collector deleted, and the real notification dispatcher sending it
   once) and in unit and route tests (`tests/collector-watchdog.test.js`, in `npm test`). **Not yet run on the k3s box or seen in a browser.**
-- Not built: a tenant-wide "watch everything" switch, a per-collector severity, a separate "recovered" notification (the alert closes with a note, nothing is sent),
+- Not built: a per-collector severity, a separate "recovered" notification (the alert closes with a note, nothing is sent), (the tenant-wide "watch everything" switch is done: see "Collector watch everything" below),
   (An alert when a broker's installer key is revoked or deleted is done: see "Broker key alerts" below. An alert for a collector that stops sending events while its heartbeat keeps arriving is done: see "Collector silence alerts" below.)
 
 ### Collector silence alerts (what exists)
@@ -212,7 +212,7 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   no repeat after a manual close, closed with a note when events return, a new silence raises a new alert, limit raised, Disconnected collector left to the other alert until it counts as Connected, watch off, collector deleted,
   and the list route returning the setting) and in unit and route tests (`tests/collector-silence.test.js`, in `npm test`). **Not run on ClickHouse (the only store call is `groupCounts`, which the conformance suites already
   cover on both engines), not yet run on the k3s box, the new button and column not seen in a browser, the new CI line not run on GitHub.**
-- Not built: a tenant-wide "watch everything" switch, a per-collector severity, a limit above 3 days, a "recovered" notification (the alert closes with a note, nothing is sent), silence per source type or per
+- Not built: a per-collector severity, a limit above 3 days, (the tenant-wide "watch everything" limit is done: see "Collector watch everything" below), a "recovered" notification (the alert closes with a note, nothing is sent), silence per source type or per
   device behind a broker (it is per collector, so a broker with ten devices is silent only when all ten are), a watch for sources that appear only in events.
 
 ### Broker key alerts (what exists)
@@ -231,6 +231,29 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   raises a new alert; watch off and broker deleted close it; the watchdog's real `runOnce` runs it without error) and in unit tests (`tests/broker-key-watch.test.js`, in `npm test`).
   **Not yet run on the k3s box or a real broker, the new CI line has not run on GitHub.**
 - Not built: an alert for a key that is about to expire (keys do not expire), a separate alert for a key revoked on a collector that is not a broker, a "recovered" notification.
+
+### Collector watch everything (what exists)
+- **The gap it closes:** "Alert if down" and "Alert if silent" were per collector, so a new collector or broker was not watched until someone pressed the button on its row. One tenant-wide switch now covers every collector,
+  including ones that appear later.
+- **Two settings, both off until chosen** (Collectors page, **Watch everything** card; `GET` and `PUT /v1/collector-watch-defaults`, uses `collectors:read` / `collectors:write`, no role change; body `{ "disconnect": true|false, "silent_min": 5..4320|null }`, at
+  least one, what is left out is kept):
+  - `disconnect`: every collector gets the "Collector disconnected" alert, and every broker the "Broker installer key unusable" alert, as if "Alert if down" were on for it.
+  - `silent_min`: every collector with no limit of its own gets the "Collector sending no events" alert after that many minutes. **A collector's own "Alert if silent" limit always wins**, longer or shorter.
+- **It only adds.** It never changes the per-collector settings, and turning it off leaves anything switched on by hand switched on. It cannot exclude one collector (not built).
+- **Retired collectors are left out.** A collector not seen for more than `ASIX_WATCH_ALL_MAX_AGE_DAYS` days (default 7, 1 to 90) is treated as gone; otherwise turning the switch on would raise one alert for every machine ever decommissioned.
+  A collector switched on by hand is never left out. If a collector ages out while its alert is open, the watchdog closes the alert with an "ASIX" note ("no longer watched"). The card says how many collectors are left out.
+- **Turning it off** closes, on the next watchdog cycle, the alerts that only the switch was holding up (note: "no longer watched"), and leaves the hand-switched collectors' alerts alone. Turning it on again for the same outage does not raise a
+  second alert (the same rule as for a collector switched on by hand: one alert per outage).
+- **Where the rules live:** `src/collectors/watch-all.js`. The watchdogs send the rule to PostgreSQL as part of their existing collector query (`WHERE_DISCONNECT`, `SILENT_MIN_SQL`), so `plan()` in `watchdog.js`, `silence.js` and `key-watch.js` is unchanged. The same
+  rules exist in plain code (`watchesDisconnect`, `silentMinutes`) for the Collectors page, which shows **On (all)** / **After N min (all)** on rows covered by the switch (the stored last-seen time is used, as the watchdogs do).
+  `tests/collector-watch-all-db.test.js` runs the SQL and the plain code on the same rows.
+- **Schema:** table `collector_watch_defaults` (one row per tenant, row-level security like the other tenant tables; no row = off), created by the normal schema-init job and safe to re-run.
+- Checked on real PostgreSQL 16 with the schema applied twice (`tests/collector-watch-all-db.test.js`, in the CI `postgres` job: off by default, bad requests refused and nothing stored, a Disconnected collector covered and a connected, retired or other-tenant one not,
+  a hand-switched old collector kept, the broker on a revoked key alerted, the silent limit with a collector's own longer limit winning, the list showing what covers each row, SQL and plain-code rules equal, turning each off closing only its own alerts, a new outage after
+  turning back on) and in unit and route tests (`tests/collector-watch-all.test.js`, in `npm test`). `collector-silence-db`, `collector-watch-db`, `collector-threshold-db`, `broker-key-watch-db`, `brokers-db`, `heartbeat-db` still pass; `npm run lint` clean;
+  `scripts/ci/validate-k8s.py` 0 failures; portal script parses. **Not yet run on the k3s box, the card and the "(all)" pills have not been seen in a browser, the new CI line has not run on GitHub, not run on ClickHouse (the silent check's only store call is `groupCounts`, which the
+  conformance suites cover).**
+- Not built: leaving one collector out of the switch, a severity per setting, a switch for sources that appear only in events (they have no row), a count of how many alerts the switch would raise before it is turned on, the Brokers page showing the switch (it shows only what was set on the broker).
 
 ### Alert triage (what exists)
 - Each alert can be assigned to a user of the same tenant (or unassigned), and carries analyst notes
