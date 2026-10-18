@@ -8,7 +8,8 @@
 //                        (src/collectors/silence.js) after that many minutes. A collector's own "Alert if silent" limit always wins.
 //
 // It only ADDS to the per-collector settings: a collector that was switched on by hand stays on when this is off, and this switch
-// cannot exclude one collector. Settings live in collector_watch_defaults (one row per tenant); no row means everything is off, so
+// can be told to leave one collector out (collectors.watch_exclude, "Leave out of all" on the Collectors page; it does not turn off
+// what was switched on by hand for that collector). Settings live in collector_watch_defaults (one row per tenant); no row means everything is off, so
 // deploying this changes nothing by itself.
 //
 // Retired collectors are left out: a collector not seen for more than ASIX_WATCH_ALL_MAX_AGE_DAYS (default 7) is treated as gone, or
@@ -47,18 +48,18 @@ const retired = (lastSeen, now, days = maxAgeDays()) => {
 
 // The rules in plain code. c: { watch_disconnect, watch_silent_min, last_seen }; s: settings (fromRow shape).
 const watchesDisconnect = (c, s, now = Date.now(), days = maxAgeDays()) =>
-  c.watch_disconnect === true || (s.disconnect === true && !retired(c.last_seen, now, days));
+  c.watch_disconnect === true || (s.disconnect === true && c.watch_exclude !== true && !retired(c.last_seen, now, days));
 const silentMinutes = (c, s, now = Date.now(), days = maxAgeDays()) => {
   if (Number.isInteger(c.watch_silent_min)) return c.watch_silent_min;
-  return Number.isInteger(s.silent_min) && !retired(c.last_seen, now, days) ? s.silent_min : null;
+  return Number.isInteger(s.silent_min) && c.watch_exclude !== true && !retired(c.last_seen, now, days) ? s.silent_min : null;
 };
 // True when the switch, not the collector's own setting, is what covers it (the Collectors page says so).
 const disconnectByDefault = (c, s, now, days) => c.watch_disconnect !== true && watchesDisconnect(c, s, now, days);
 const silentByDefault = (c, s, now, days) => !Number.isInteger(c.watch_silent_min) && silentMinutes(c, s, now, days) !== null;
 
 // The same rules as SQL. Parameters (after the tenant id): disconnect flag, silent minutes (or NULL), cutoff timestamp.
-const WHERE_DISCONNECT = '(watch_disconnect OR ($2::boolean AND last_seen >= $3::timestamp))';
-const SILENT_MIN_SQL = 'COALESCE(watch_silent_min, CASE WHEN last_seen >= $3::timestamp THEN $2::integer END)';
+const WHERE_DISCONNECT = '(watch_disconnect OR ($2::boolean AND NOT watch_exclude AND last_seen >= $3::timestamp))';
+const SILENT_MIN_SQL = 'COALESCE(watch_silent_min, CASE WHEN NOT watch_exclude AND last_seen >= $3::timestamp THEN $2::integer END)';
 
 async function read(client, tenantId) {
   const r = await client.query('SELECT watch_disconnect, watch_silent_min FROM collector_watch_defaults WHERE tenant_id = $1', [tenantId]);

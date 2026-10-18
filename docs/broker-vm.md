@@ -174,3 +174,9 @@ ASIX never runs anything on a broker, so an upgrade is a command you run on the 
 4. It refuses a version older than the one installed, and a version the repository does not have. It does not touch `broker.env`, the keys, the certificates or the disk buffer.
 
 Upgrade one broker first and watch it on the Brokers page before doing the rest. Debian and Ubuntu only (it uses `apt`).
+
+If `apt-get update` fails with "Release file ... is not valid yet", the broker's clock is behind (found on vm1 2026-10-18: `chronyc tracking` showed the system clock 35006 seconds slow although
+`timedatectl` said the NTP service was active, because chrony only steps a big error in its first updates after start). Fix it with `sudo chronyc makestep`, then `sudo hwclock --systohc`; to make it
+self-correct, add the line `makestep 1 -1` to `/etc/chrony/chrony.conf` (`/etc/chrony/conf.d/` is not read on every install: check with `grep -n 'confdir\|conf.d' /etc/chrony/chrony.conf`) and restart chrony.
+A wrong clock also puts wrong times on what the broker sends, so check `date -u` against another machine first. The package repository can lag behind a Vector release for one architecture
+(`apt-cache madison vector` lists what this machine can install; arm64 had only 0.58.0 and 0.59.0 when this was written), and the script refuses a `--version` that is not in that list.

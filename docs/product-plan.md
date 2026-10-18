@@ -170,8 +170,9 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   `updated_by` column, the states `behind` / `current` / `unknown` from real collector rows, another tenant does not see it, the database refuses a malformed value;
   `brokers-db`, `broker-rotate-key-db`, `heartbeat-db`, `collector-watch-all-db` still pass), in unit and route tests (`tests/broker-upgrade.test.js`) and with every system command
   stubbed for the script (`tests/upgrade-broker-script.test.js`: order of the steps, no restart on a bad config, refusals, dry run, TLS file included, unhealthy restart). `npm test` (356
-  tests) and `npm run lint` clean; `scripts/ci/validate-k8s.py` 0 failures; portal script parses. **Not run on a real broker VM (the script has only run against stubs: `apt`, `vector`
-  and `systemctl` are not real), the card and the Upgrade column have not been seen in a browser, the new CI line has not run on GitHub, not yet run on the k3s box.**
+  tests) and `npm run lint` clean; `scripts/ci/validate-k8s.py` 0 failures; portal script parses. **Run on the first real broker VM (vm1, 2026-10-18, arm64, Vector 0.59.0): `--dry-run`, `--version 0.60.0` (refused cleanly: the repository has no such version and nothing changed) and no
+  argument ("already the newest version", nothing restarted). The real install, config check, restart and heartbeat path has not run: the Vector repository offers only 0.58.0 and 0.59.0 for arm64, so there was nothing newer to install. The
+  card and the Upgrade column have not been seen in a browser, the new CI line has not run on GitHub, not yet run on the k3s box.**
 - Not built: running the upgrade from the portal (it needs an agent or a pull on the broker and a decision on how that is authenticated and signed), a per-broker target, a rollback
   command that undoes a restart that failed (the script prints the way back, it does not run it), non-apt systems, config push.
 
@@ -261,7 +262,7 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   least one, what is left out is kept):
   - `disconnect`: every collector gets the "Collector disconnected" alert, and every broker the "Broker installer key unusable" alert, as if "Alert if down" were on for it.
   - `silent_min`: every collector with no limit of its own gets the "Collector sending no events" alert after that many minutes. **A collector's own "Alert if silent" limit always wins**, longer or shorter.
-- **It only adds.** It never changes the per-collector settings, and turning it off leaves anything switched on by hand switched on. It cannot exclude one collector (not built).
+- **It only adds.** It never changes the per-collector settings, and turning it off leaves anything switched on by hand switched on. One collector can be left out of it (see "Leave one collector out" below).
 - **Retired collectors are left out.** A collector not seen for more than `ASIX_WATCH_ALL_MAX_AGE_DAYS` days (default 7, 1 to 90) is treated as gone; otherwise turning the switch on would raise one alert for every machine ever decommissioned.
   A collector switched on by hand is never left out. If a collector ages out while its alert is open, the watchdog closes the alert with an "ASIX" note ("no longer watched"). The card says how many collectors are left out.
 - **Turning it off** closes, on the next watchdog cycle, the alerts that only the switch was holding up (note: "no longer watched"), and leaves the hand-switched collectors' alerts alone. Turning it on again for the same outage does not raise a
@@ -275,7 +276,19 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   turning back on) and in unit and route tests (`tests/collector-watch-all.test.js`, in `npm test`). `collector-silence-db`, `collector-watch-db`, `collector-threshold-db`, `broker-key-watch-db`, `brokers-db`, `heartbeat-db` still pass; `npm run lint` clean;
   `scripts/ci/validate-k8s.py` 0 failures; portal script parses. **Not yet run on the k3s box, the card and the "(all)" pills have not been seen in a browser, the new CI line has not run on GitHub, not run on ClickHouse (the silent check's only store call is `groupCounts`, which the
   conformance suites cover).**
-- Not built: leaving one collector out of the switch, a severity per setting, a switch for sources that appear only in events (they have no row), a count of how many alerts the switch would raise before it is turned on, the Brokers page showing the switch (it shows only what was set on the broker).
+- **Leave one collector out (done):** Collectors page, **Leave out of all** button (shown while a switch is on, and on a collector already left out, where it reads **Include in all**), or
+  `PUT /v1/collectors/:id/watch-exclude` with `{ "exclude": true | false }` (uses `collectors:write`, no role change; a non-boolean is a 400, another tenant's collector a 404). A collector left out is
+  not covered by either switch setting (no "Collector disconnected", no "Collector sending no events" from the silent limit, no "Broker installer key unusable" for a broker). **It only leaves the switch:**
+  "Alert if down" and a limit under "Alert if silent" set by hand on that collector still apply, as before. An alert that only the switch was holding open for it is closed on the next watchdog cycle with an
+  "ASIX" note ("no longer watched"); putting it back covers it again. The list shows `watch_exclude` and the rows say **Left out** instead of **Off**. Schema: `collectors.watch_exclude BOOLEAN NOT NULL DEFAULT false`
+  (schema-init job, safe to re-run). The rule is one more condition in the same shared SQL (`WHERE_DISCONNECT`, `SILENT_MIN_SQL`) and in `key-watch.js`'s query, and in the plain-code rules.
+  Checked on real PostgreSQL 16 with the schema applied twice (`tests/collector-watch-exclude-db.test.js`, in the CI `postgres` job: left-out collectors raise nothing for any of the three alerts, a hand-set
+  one and one with its own limit still do, the list and the plain-code rules agree with the SQL, leaving one out closes its alert with a note, putting one back raises it again, another tenant's collector is
+  refused; the test was also run with the SQL change removed and fails there) and in unit and route tests (`tests/collector-watch-exclude.test.js`). `collector-watch-all-db`, `collector-silence-db`, `collector-watch-db`,
+  `broker-key-watch-db`, `collector-threshold-db`, `brokers-db`, `heartbeat-db`, `core-reads-db` still pass; `npm test` (365 tests), `npm run lint` and `scripts/ci/validate-k8s.py` clean; portal script parses.
+  **Not run on the k3s box, the button and the "Left out" pills have not been seen in a browser, the new CI line has not run on GitHub.** Not built: leaving a collector out of one alert only (it is both), a bulk
+  "leave out" for several collectors.
+- Not built: a severity per setting, a switch for sources that appear only in events (they have no row), a count of how many alerts the switch would raise before it is turned on, the Brokers page showing the switch (it shows only what was set on the broker).
 
 ### Alert triage (what exists)
 - Each alert can be assigned to a user of the same tenant (or unassigned), and carries analyst notes

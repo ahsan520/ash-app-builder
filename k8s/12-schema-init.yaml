@@ -479,6 +479,8 @@ data:
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS connected_within_min INTEGER;
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS watch_disconnect BOOLEAN NOT NULL DEFAULT false;
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS watch_silent_min INTEGER;
+    -- Left out of the tenant-wide "watch everything" switch (src/collectors/watch-all.js). Does not turn off what was switched on by hand.
+    ALTER TABLE collectors ADD COLUMN IF NOT EXISTS watch_exclude BOOLEAN NOT NULL DEFAULT false;
     CREATE INDEX IF NOT EXISTS idx_collectors_tenant_seen ON collectors(tenant_id, last_seen);
     CREATE INDEX IF NOT EXISTS idx_collectors_key ON collectors(key_id);
 

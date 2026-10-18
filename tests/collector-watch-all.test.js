@@ -82,7 +82,7 @@ describe('the watchdogs send the switch to the database (database replaced by a 
   it('disconnect check: switch off sends false, switch on sends true, with the age cutoff', async () => {
     const wd = require('../src/collectors/watchdog');
     calls = []; defaults = null; await wd.runTenant('t1', { now: NOW });
-    assert.deepStrictEqual(sel().args, ['t1', false, cutoff]); assert.match(sel().sql, /watch_disconnect OR \(\$2::boolean AND last_seen >= \$3::timestamp\)/);
+    assert.deepStrictEqual(sel().args, ['t1', false, cutoff]); assert.match(sel().sql, /watch_disconnect OR \(\$2::boolean AND NOT watch_exclude AND last_seen >= \$3::timestamp\)/);
     calls = []; defaults = { watch_disconnect: true, watch_silent_min: null }; await wd.runTenant('t1', { now: NOW });
     assert.deepStrictEqual(sel().args, ['t1', true, cutoff]);
   });
@@ -90,7 +90,7 @@ describe('the watchdogs send the switch to the database (database replaced by a 
     const sl = require('../src/collectors/silence');
     const store = { groupCounts: async () => [] };
     calls = []; defaults = { watch_disconnect: false, watch_silent_min: 45 }; await sl.runTenant('t1', { now: NOW, store });
-    assert.deepStrictEqual(sel().args, ['t1', 45, cutoff]); assert.match(sel().sql, /COALESCE\(watch_silent_min, CASE WHEN last_seen >= \$3::timestamp THEN \$2::integer END\)/);
+    assert.deepStrictEqual(sel().args, ['t1', 45, cutoff]); assert.match(sel().sql, /COALESCE\(watch_silent_min, CASE WHEN NOT watch_exclude AND last_seen >= \$3::timestamp THEN \$2::integer END\)/);
     calls = []; defaults = null; await sl.runTenant('t1', { now: NOW, store });
     assert.deepStrictEqual(sel().args, ['t1', null, cutoff]);
   });

@@ -70,7 +70,7 @@ async function runTenant(tenantId, { now = Date.now(), raiseAllowed = true, sev 
       `SELECT c.id, c.name, c.version, c.key_id, k.status AS key_status, k.name AS key_name, k.key_prefix
          FROM collectors c LEFT JOIN ingestion_keys k ON k.id = c.key_id
         WHERE c.tenant_id = $1 AND c.version ILIKE $2
-          AND (c.watch_disconnect OR ($3::boolean AND c.last_seen >= $4::timestamp))`,
+          AND (c.watch_disconnect OR ($3::boolean AND NOT c.watch_exclude AND c.last_seen >= $4::timestamp))`,
       [tenantId, BROKER_VERSION_SQL, all.disconnect, watchAll.cutoffOf(now)])).rows;
     const active = (await client.query(
       "SELECT id, group_key FROM alerts WHERE tenant_id = $1 AND rule_name = $2 AND status IN ('open','acknowledged')", [tenantId, RULE_NAME])).rows;
