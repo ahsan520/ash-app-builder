@@ -29,7 +29,7 @@ devices ──syslog over TLS 6514 (opt.)─┘
 2. Copy the repo's `deploy/broker/` and `scripts/deploy/bootstrap-broker.sh` to the broker VM (Debian or Ubuntu),
    then as root:
    ```bash
-   ./scripts/deploy/bootstrap-broker.sh --url https://asix1/v1/ingest/http --key asix_ik_... --name broker-1
+   ./scripts/deploy/bootstrap-broker.sh --url https://asix1:30443/v1/ingest/http --key asix_ik_... --name broker-1
    ```
    For the self-signed nginx certificate add `--ca /path/to/that-certificate.pem`. If Vector is already
    installed (offline or pinned version) add `--no-install`.
@@ -40,10 +40,20 @@ devices ──syslog over TLS 6514 (opt.)─┘
 
 The script validates the Vector config before restarting, and is safe to re-run (for example to change the key).
 
+**The URL needs the port.** The platform's nginx listens on **30443** (the same port as the portal); plain 443 on the k3s box is k3s's own Traefik, which
+answers every request with `404 page not found`. The ASIX certificate also lists the box's addresses, so an IP works in the URL as well as `asix1`. Test the path
+before the bootstrap: `curl -sk -X POST -H 'Authorization: Bearer asix_ik_fake' https://<asix-host>:30443/v1/ingest/http` must answer `401 INGEST_AUTH_INVALID`.
+
+**Vector versions.** The broker config is checked with Vector 0.47 and 0.59.0 (`vector validate` on the shipped files, `vector test` on `vector-tests.yaml`, and a real start
+that listens on UDP and TCP). Vector 0.59 stopped substituting `${VAR}` in its config unless `VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION=true` is set, so the bootstrap
+writes that line into `broker.env` (the service reads it through the systemd drop-in; older Vector ignores it). Without it, validation fails with
+`sources.syslog_udp: Must be a valid IPv4/IPv6 address with port`. On a broker set up before this, add that line to `/etc/asix-broker/broker.env` and re-run the bootstrap
+with `--no-install`. The heartbeat's health check (`http://127.0.0.1:8686/health`) still answers on 0.59.
+
 ## Syslog over TLS (optional)
 Plain syslog is readable and forgeable by anyone on the path. For sources that cross a network you do not control, add the TLS listener:
 ```bash
-./scripts/deploy/bootstrap-broker.sh --url https://asix1/v1/ingest/http --key asix_ik_... --name broker-1 \
+./scripts/deploy/bootstrap-broker.sh --url https://asix1:30443/v1/ingest/http --key asix_ik_... --name broker-1 \
     --tls-cert /path/server.crt --tls-key /path/server.key [--tls-port 6514] [--tls-client-ca /path/client-ca.pem]
 ```
 - The certificate is the broker's own. Devices must trust whoever issued it, and its name or IP must match what they connect to. The

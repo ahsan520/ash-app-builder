@@ -3,7 +3,7 @@
 # one-minute heartbeat. Debian/Ubuntu. Safe to re-run: it only rewrites its own files.
 #
 # Usage (as root):
-#   ./scripts/deploy/bootstrap-broker.sh --url https://asix1/v1/ingest/http --key asix_ik_... \
+#   ./scripts/deploy/bootstrap-broker.sh --url https://asix1:30443/v1/ingest/http --key asix_ik_... \
 #       --name broker-1 [--port 514] [--ca /path/to/cert.pem] [--no-install]
 #       [--tls-cert server.crt --tls-key server.key [--tls-port 6514] [--tls-client-ca ca.pem]]
 #
@@ -71,6 +71,9 @@ install -d -m 750 -o root -g vector /etc/asix-broker
   echo "ASIX_INGEST_KEY=$KEY"
   echo "ASIX_BROKER_NAME=$NAME"
   echo "ASIX_SYSLOG_PORT=$PORT"
+  # Vector 0.59 and newer leave ${VAR} in the config as plain text unless this is set (older versions ignore it and always substitute).
+  # The substituted values are this file's own settings, readable only by root and the vector user.
+  echo "VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION=true"
   if [ -n "$CA" ]; then
     install -m 644 "$CA" /etc/asix-broker/ca.pem
     echo "ASIX_CA_FILE=/etc/asix-broker/ca.pem"
