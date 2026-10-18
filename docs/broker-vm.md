@@ -170,6 +170,7 @@ The broker asks with `GET /v1/ingest/broker-config` and its own ingestion key an
 4. If validation, the restart or the health check fails, it puts the old `broker.env` back, restarts Vector on it, and remembers the rejected port in `/var/lib/asix-broker/config-rejected`, so it does not retry every 5 minutes. A different port from ASIX is tried again.
 
 **It does not open the firewall and does not move your devices:** after a change, open the new port (UDP and TCP) on the broker VM and point the senders at it; until they are changed they send to a port nobody listens on. Check what happened with `journalctl -u asix-broker-config -n 20`.
+Seen working on broker-1 (vm1, Ubuntu aarch64, Vector 0.59.0, 2026-10-18): after the port was set to 1514 one pull applied it, Vector was healthy, and it listened on 1514 UDP and TCP with nothing on 514; with no port set the pull changes nothing. The way back (setting 514 again) and the failure paths have only run against stubs. Under systemd the service runs as root with `StateDirectory=asix-broker`; the journal shows its lines under `asix-broker-config.sh`.
 Not seen on the Brokers page yet: whether a broker applied the port (the page shows the setting, not each broker's state). The TLS port, the key, the certificates and the ASIX URL are never changed this way.
 
 ## Getting an alert when a broker goes quiet
