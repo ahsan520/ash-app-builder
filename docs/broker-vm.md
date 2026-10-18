@@ -164,8 +164,33 @@ A broker installed before this existed can be switched on by re-running the boot
 The broker asks with `GET /v1/ingest/broker-config` and its own ingestion key and gets `{ "config": { "syslog_port": 1514 | null }, "interval_seconds": 300 }` (read only, no audit row, same rate limit and key rules as the heartbeat; a revoked key gets nothing).
 After every pull the broker also tells ASIX what it is listening on: `POST /v1/ingest/broker-config/report` with `{ "collector": "broker-1", "syslog_port": 1514, "rejected_port": null }` and the same key (see "What the Brokers page shows" below). That is information only; it changes no setting.
 
+**Updating a broker after an ASIX deploy (the commands used on broker-1):** on the broker VM, pull the repo, make the scripts executable, then re-run the bootstrap with the broker's own settings read back from `broker.env`. The bootstrap rewrites `broker.env` from the flags you give it, so the port and CA are passed again; **add `--tls-cert`, `--tls-key` (and `--tls-port`, `--tls-client-ca`) as well if the broker takes syslog over TLS, or the TLS listener is removed.** Run the bootstrap as root (`sudo`).
+```bash
+cd /home/ash/ash-app-builder
+git pull && find . -name '*.sh' -not -path './node_modules/*' -exec chmod +x {} +
+
+. /etc/asix-broker/broker.env
+cp /etc/asix-broker/ca.pem /tmp/asix-ca.pem 2>/dev/null
+
+./scripts/deploy/bootstrap-broker.sh \
+  --url "$ASIX_INGEST_URL" --key "$ASIX_INGEST_KEY" --name "$ASIX_BROKER_NAME" \
+  --port "${ASIX_SYSLOG_PORT:-514}" ${ASIX_CA_FILE:+--ca /tmp/asix-ca.pem} \
+  --no-install --accept-config
+```
+(`--no-install` because Vector is already there; `--accept-config` keeps the config pull on.) It validates the Vector config before restarting and ends with "ASIX may now change this broker's syslog port".
+
+**Changing a port and checking it at once:** in the ASIX GUI, Brokers page, set the tenant-wide port on the card or press **Port** on one broker's row. The broker asks every 5 minutes; to not wait, on the broker VM:
+```bash
+sudo systemctl start asix-broker-config.service
+sudo journalctl -u asix-broker-config -n 15 --no-pager
+ss -lunt | grep <port>
+logger -n 127.0.0.1 -P <port> -T 'port test'
+```
+The journal shows "ASIX asks for syslog port N (now M). Applying." then "Done: syslog port M -> N, Vector healthy". No journal lines at all means ASIX asked for no port or the one already in use. Open the port (UDP and TCP) on the VM's firewall for real devices; the script never does.
+
 **A port for one broker (done 2026-10-18):** the tenant-wide port is one value for every broker that opted in. To give ONE broker a different port, press **Port** on its row on the Brokers page (`PUT /v1/brokers/:id/syslog-port`, body `{ "syslog_port": 2514 | null }`; `collectors:write`, no role change; empty or `null` puts the broker back on the tenant-wide port). It is stored on that broker's own row (`collectors.syslog_port_override`, a new nullable column with a 1 to 65535 CHECK, added by the normal schema job and safe to re-run) and **wins over the tenant-wide port for that broker only**; it works with no tenant-wide port set. The same port rules apply (22, 443, 8686 and 30443 are refused with a reason).
 The broker now asks with its name, `GET /v1/ingest/broker-config?collector=broker-1`, and gets its effective port in the same `{ "config": { "syslog_port": ... } }` shape (the row is found by the sending key AND the name, so one key cannot read another broker's port; a name with no row, or no name, gets the tenant-wide port). **The script on the broker must be the current `asix-broker-config.sh`**: re-run `bootstrap-broker.sh` from the updated checkout with the broker's usual options plus `--accept-config`. A broker still on the older script sends no name, is told the tenant-wide port, and its row will show **Pending** for the port it was given. The Syslog port column judges each broker against the port it is asked for and shows `(own)` next to one set for that broker alone.
+**Run on broker-1 (vm1, 2026-10-18):** the bootstrap re-run installed the new script; after the port was set in the GUI one pull logged "ASIX asks for syslog port 2514 (now 1514). Applying." and "Done: syslog port 1514 -> 2514, Vector healthy", and `ss` showed Vector listening on 2514 UDP and TCP. Not yet confirmed: the test line arriving in Events, the column showing Applied (own), and clearing the port to go back.
 
 **What the broker does with it, in order, stopping at the first failure:**
 1. Does nothing for `null`, or when the port is already the one in use.
