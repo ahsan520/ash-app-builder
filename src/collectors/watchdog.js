@@ -93,9 +93,13 @@ async function runOnce(opts = {}) {
   try {
     if (!(await lock.query('SELECT pg_try_advisory_lock($1) AS ok', [LOCK_KEY])).rows[0].ok) return { skipped: true };
     const total = { tenants: 0, raised: 0, closed: 0, errors: 0 };
+    const silence = require('./silence');        // required here, not at the top: silence.js reads severity() from this file
     for (const t of (await lock.query("SELECT id FROM tenants WHERE status = 'active'")).rows) {
       try { const r = await runTenant(t.id, opts); total.tenants += 1; total.raised += r.raised; total.closed += r.closed; }
       catch (e) { total.errors += 1; console.error(`[watchdog] tenant ${t.id} failed: ${e.message}`); }
+      // Silent collectors (events stopped, heartbeat alive). Separate, so a failing event store never stops the disconnect alerts above.
+      try { const r = await silence.runTenant(t.id, opts); total.raised += r.raised; total.closed += r.closed; }
+      catch (e) { total.errors += 1; console.error(`[watchdog] silence check for tenant ${t.id} failed: ${e.message}`); }
     }
     return total;
   } finally {

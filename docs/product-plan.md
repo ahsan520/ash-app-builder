@@ -187,7 +187,33 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   closed with a note on reconnect, a new outage raises a new alert, custom threshold, watching off, collector deleted, and the real notification dispatcher sending it
   once) and in unit and route tests (`tests/collector-watchdog.test.js`, in `npm test`). **Not yet run on the k3s box or seen in a browser.**
 - Not built: a tenant-wide "watch everything" switch, a per-collector severity, a separate "recovered" notification (the alert closes with a note, nothing is sent),
-  an alert for a collector that stops sending events while its heartbeat keeps arriving, an alert when a broker's installer key is revoked.
+  an alert when a broker's installer key is revoked. (An alert for a collector that stops sending events while its heartbeat keeps arriving is done: see "Collector silence alerts" below.)
+
+### Collector silence alerts (what exists)
+- **The gap it closes:** the heartbeat keeps an idle broker or the built-in syslog collector Connected, so "Collector disconnected" cannot see a device that quietly stopped sending
+  behind a healthy broker. This alert looks at the newest *event* instead.
+- **Opt in per collector:** Collectors page, **Alert if silent** button (asks for minutes, 5 to 4320; empty turns it off), or `PUT /v1/collectors/:id/silent-watch` with
+  `{ "minutes": 5..4320 }` or `{ "minutes": null }` (uses `collectors:write`, so no role change). Every collector starts off, so deploying this raises nothing by itself.
+  The Collectors list returns `watch_silent_min` and shows an "Alert if silent" column. A source that only appears in events has no row to hold the setting, so it cannot be watched (same as the threshold).
+- **What it does:** the same watchdog cycle that checks for Disconnected collectors (every 60 s, one replica at a time, same start-up grace, same `ASIX_WATCHDOG_*` settings) now also
+  runs `src/collectors/silence.js`. It asks the event store for the newest event per collector over the last 7 days (`groupCounts`, so it works on PostgreSQL and ClickHouse; events are matched
+  to the collector by name) and raises one alert when that is older than the collector's limit: rule `Collector sending no events`, title `Collector sending no events: <name>`, severity `high`
+  (`ASIX_WATCHDOG_SEVERITY` applies), group `silent:<id>`, no detection rule behind it. It goes through the existing notification channels; nothing was added there.
+- **Not raised for a Disconnected collector:** if the collector itself is past its connected threshold, the "Collector disconnected" alert is the right one and this stays quiet (so one outage does not
+  raise two alerts). A silent alert that is already open stays open if the collector then goes Disconnected.
+- **One alert per silence:** a collector that stays silent keeps its one alert (open or acknowledged). If an analyst closes it while the collector is still silent, no new alert is raised for that
+  same silence (the alert remembers the newest event it was raised for). When events arrive again the alert is closed with an "ASIX" note; the next silence raises a new alert. It is also closed (with a
+  note) when the watch is turned off, the collector is deleted, or the limit is raised above the gap.
+- **Limits of the look-back:** a collector with no event at all in the last 7 days is skipped (nothing to measure from), and an alert already open for it stays open. That is why the limit tops out at 3 days.
+  A watched collector that has never sent an event raises nothing.
+- **Schema:** `collectors.watch_silent_min INTEGER` (NULL = off), added by the normal schema-init job and safe to re-run. Nothing is deleted or hidden.
+- Checked on real PostgreSQL 16 with the schema applied twice and the real PostgreSQL event store (`tests/collector-silence-db.test.js`, in the CI `postgres` job: nothing watched raises nothing, one alert for the
+  silent collector and none for the flowing, unwatched, Disconnected, no-events or other tenant's, raised for the newest event, the real notification dispatcher sending it once, no duplicate while open or acknowledged,
+  no repeat after a manual close, closed with a note when events return, a new silence raises a new alert, limit raised, Disconnected collector left to the other alert until it counts as Connected, watch off, collector deleted,
+  and the list route returning the setting) and in unit and route tests (`tests/collector-silence.test.js`, in `npm test`). **Not run on ClickHouse (the only store call is `groupCounts`, which the conformance suites already
+  cover on both engines), not yet run on the k3s box, the new button and column not seen in a browser, the new CI line not run on GitHub.**
+- Not built: a tenant-wide "watch everything" switch, a per-collector severity, a limit above 3 days, a "recovered" notification (the alert closes with a note, nothing is sent), silence per source type or per
+  device behind a broker (it is per collector, so a broker with ten devices is silent only when all ten are), a watch for sources that appear only in events.
 
 ### Alert triage (what exists)
 - Each alert can be assigned to a user of the same tenant (or unassigned), and carries analyst notes
