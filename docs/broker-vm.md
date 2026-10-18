@@ -26,12 +26,42 @@ devices ──syslog over TLS 6514 (opt.)─┘
 ## Install
 1. In the portal: **Settings > Collectors > Installers**, create an installer (platform `linux`), name it like the
    broker (for example `broker-1`), and copy the key. It is shown once.
-2. Copy the repo's `deploy/broker/` and `scripts/deploy/bootstrap-broker.sh` to the broker VM (Debian or Ubuntu),
-   then as root:
+2. Get the repo's `deploy/broker/` and `scripts/deploy/bootstrap-broker.sh` onto the broker VM (Debian or Ubuntu). The repo is public, so no login is needed.
+   The script finds the files next to it, so keep the `scripts/` and `deploy/` folders side by side.
+
+   **Option A, clone the repo** (simplest; `git pull` updates it later):
    ```bash
-   ./scripts/deploy/bootstrap-broker.sh --url https://asix1:30443/v1/ingest/http --key asix_ik_... --name broker-1
+   sudo apt-get update && sudo apt-get install -y git
+   git clone https://github.com/ahsan520/ash-app-builder.git
+   cd ash-app-builder
    ```
-   For the self-signed nginx certificate add `--ca /path/to/that-certificate.pem`. If Vector is already
+
+   **Option B, download only the broker files** (no git, no full clone):
+   ```bash
+   mkdir -p ~/asix-broker/scripts/deploy ~/asix-broker/deploy/broker && cd ~/asix-broker
+   B=https://raw.githubusercontent.com/ahsan520/ash-app-builder/main
+   curl -fsSL --output-dir scripts/deploy -O $B/scripts/deploy/bootstrap-broker.sh
+   for f in vector.yaml vector-tls.yaml vector-asix.conf broker.env.example \
+            asix-broker-heartbeat.sh asix-broker-heartbeat.service asix-broker-heartbeat.timer; do
+     curl -fsSL --output-dir deploy/broker -O $B/deploy/broker/$f
+   done
+   ```
+
+   **Option C, copy from your own machine** (a private fork, or a VM with no internet):
+   ```bash
+   # run on your machine, from the repo folder; the VM needs scripts/ and deploy/ side by side
+   ssh user@broker-vm 'mkdir -p ~/asix-broker/scripts ~/asix-broker/deploy'
+   scp -r scripts/deploy user@broker-vm:~/asix-broker/scripts/
+   scp -r deploy/broker  user@broker-vm:~/asix-broker/deploy/
+   ```
+
+   Then, as root, in the folder that holds `scripts/` and `deploy/` (for the CA option, copy the nginx certificate to the VM first, see below):
+   ```bash
+   bash scripts/deploy/bootstrap-broker.sh --url https://asix1:30443/v1/ingest/http --key asix_ik_... --name broker-1
+   ```
+   Run it with `bash`, so it works even if the file lost its executable bit.
+   For the self-signed nginx certificate add `--ca /path/to/that-certificate.pem`; fetch it from the VM with
+   `echo | openssl s_client -connect <asix-host>:30443 2>/dev/null | openssl x509 > /root/asix-cert.pem`. If Vector is already
    installed (offline or pinned version) add `--no-install`.
 3. Open port 514 (UDP and TCP) on the broker VM's firewall for the devices that send syslog, and point those
    devices at the broker VM.
