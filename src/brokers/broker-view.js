@@ -4,7 +4,7 @@
 // This file recognises those rows and shapes them for the Brokers page. Pure functions, no database.
 const { effectiveMinutes, isCustom, statusOf, tsMs } = require('../collectors/status');
 const { upgradeState } = require('./upgrade');
-const { configState } = require('./config');
+const { configState, effectivePort, portSource } = require('./config');
 
 const BROKER_VERSION_SQL = 'vector-%';              // the same rule as isBroker(), for the query
 const isBroker = (row) => !!row && /^vector-/i.test(String(row.version || ''));
@@ -34,7 +34,9 @@ function shape(row, { now = Date.now(), events24h = 0, target = null, syslogPort
   };
   b.problems = problemsOf(b, now);
   b.upgrade = upgradeState(b.vector_version, target);   // none | unknown | current | behind | ahead (src/brokers/upgrade.js); not a problem
-  b.config = configState(syslogPort, row, now);          // none | unknown | applied | rejected | pending | stale (src/brokers/config.js); not a problem
+  // The port asked of THIS broker: its own if one was set on the Brokers page, else the tenant-wide one (src/brokers/config.js).
+  const own = row.syslog_port_override != null ? Number(row.syslog_port_override) : null;
+  b.config = { ...configState(effectivePort(syslogPort, own), row, now), source: portSource(syslogPort, own), override_port: own };   // state: none | unknown | applied | rejected | pending | stale; not a problem
   return b;
 }
 
@@ -50,6 +52,7 @@ function summarize(brokers) {
     behind_target: brokers.filter((b) => b.upgrade === 'behind').length,
     config_applied: brokers.filter((b) => b.config && b.config.state === 'applied').length,
     config_not_applied: brokers.filter((b) => b.config && ['unknown', 'rejected', 'pending', 'stale'].includes(b.config.state)).length,
+    port_overrides: brokers.filter((b) => b.config && b.config.source === 'broker').length,
     events_24h: brokers.reduce((n, b) => n + b.events_24h, 0),
     versions, mixed_versions: Object.keys(versions).length > 1,
   };

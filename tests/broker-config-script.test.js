@@ -152,4 +152,20 @@ esac`);
     assert.match(b, /--accept-config\) ACCEPT_CONFIG=1/); assert.match(b, /\[ "\$ACCEPT_CONFIG" -eq 0 \] \|\| echo "ASIX_ACCEPT_CONFIG=true"/);
     assert.match(b, /if \[ "\$ACCEPT_CONFIG" -eq 1 \]; then\n\s+install -m 755 "\$SRC\/asix-broker-config\.sh"/); assert.match(b, /systemctl disable --now asix-broker-config\.timer/);
   });
+  it('names itself in the request, so ASIX can answer with this broker\'s own port; an odd name is left out of the URL', () => {
+    run(); let f = calls().find((c) => c.startsWith('fetch'));
+    assert.match(f, /https:\/\/asix1:30443\/v1\/ingest\/broker-config\?collector=broker-1(\s|$)/);
+    for (const odd of ["'bro ker'", "'a&b=c'", "'a/b'", "'x?y'"]) {
+      fs.rmSync(log, { force: true }); fs.writeFileSync(envFile, BASE.replace('ASIX_BROKER_NAME=broker-1', 'ASIX_BROKER_NAME=' + odd)); run();
+      f = calls().find((c) => c.startsWith('fetch')); assert.ok(f, odd); assert.ok(!/\?collector/.test(f), 'no name in the URL for ' + odd); assert.match(f, /broker-config(\s|$)/);
+    }
+    fs.rmSync(log, { force: true }); fs.writeFileSync(envFile, BASE.replace('ASIX_BROKER_NAME=broker-1\n', '')); run();
+    assert.ok(!/\?collector/.test(calls().find((c) => c.startsWith('fetch'))), 'no name set, none sent');
+  });
+  it('a port for this broker alone is applied like any other: same checks, same order, same way back', () => {
+    asks(2514); let r = run(); assert.strictEqual(r.status, 0, r.stderr); assert.match(env(), /^ASIX_SYSLOG_PORT=2514$/m);
+    const c = calls().filter((x) => !x.startsWith('fetch')); assert.match(c[0], /^validate port=2514/); assert.match(c[1], /^systemctl restart vector port=2514/);
+    fs.writeFileSync(envFile, BASE); state('validate', 'bad'); r = run(); assert.strictEqual(r.status, 1); assert.strictEqual(env(), BASE, 'a failed check puts the old file back');
+    assert.strictEqual(fs.readFileSync(path.join(stateDir, 'config-rejected'), 'utf8').trim(), '2514');
+  });
 });

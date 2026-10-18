@@ -485,6 +485,8 @@ data:
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS config_syslog_port INTEGER CHECK (config_syslog_port IS NULL OR config_syslog_port BETWEEN 1 AND 65535);
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS config_rejected_port INTEGER CHECK (config_rejected_port IS NULL OR config_rejected_port BETWEEN 1 AND 65535);
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS config_reported_at TIMESTAMP;
+    -- A syslog port for ONE broker, set from the Brokers page; it wins over the tenant-wide broker_settings.syslog_port (src/brokers/config.js). NULL = use the tenant-wide value.
+    ALTER TABLE collectors ADD COLUMN IF NOT EXISTS syslog_port_override INTEGER CHECK (syslog_port_override IS NULL OR syslog_port_override BETWEEN 1 AND 65535);
     CREATE INDEX IF NOT EXISTS idx_collectors_tenant_seen ON collectors(tenant_id, last_seen);
     CREATE INDEX IF NOT EXISTS idx_collectors_key ON collectors(key_id);
 

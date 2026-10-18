@@ -87,6 +87,32 @@ function configState(configured, row, now = Date.now()) {
   return { ...out, state: Number.isFinite(at) && now - at > REPORT_FRESH_MS ? 'stale' : 'pending' };
 }
 
+// ---- One broker's own port ------------------------------------------------------------------------------------------------
+// The tenant-wide port is one value for every broker that opted in. A broker can also be given ITS OWN port (collectors.syslog_port_override,
+// set from the Brokers page); it wins over the tenant-wide value for that broker only. Same port rules, same pull: the broker asks with
+// GET /v1/ingest/broker-config?collector=<its name> and its own key, and is told its effective port. A broker whose script does not send the
+// name (older than this) is told the tenant-wide value, so an override needs the new script on that broker.
+const COLLECTOR_NAME_RE = /^[A-Za-z0-9._:-]{1,100}$/;   // the same rule checkReport applies; every character is safe in a URL
+const nameOrNull = (v) => (typeof v === 'string' && COLLECTOR_NAME_RE.test(v) ? v : null);
+
+// The port this broker is asked for: its own if it has one, else the tenant-wide one, else null (no opinion).
+const effectivePort = (tenantPort, overridePort) => (overridePort != null ? Number(overridePort) : tenantPort != null ? Number(tenantPort) : null);
+const portSource = (tenantPort, overridePort) => (overridePort != null ? 'broker' : tenantPort != null ? 'tenant' : 'none');
+
+// Found by key AND name, so one key cannot read another broker's override. No such row = no override.
+async function readOverride(client, tenantId, keyId, name) {
+  const r = await client.query('SELECT syslog_port_override FROM collectors WHERE tenant_id = $1 AND key_id = $2 AND name = $3', [tenantId, keyId, name]);
+  return r.rows[0] && r.rows[0].syslog_port_override != null ? Number(r.rows[0].syslog_port_override) : null;
+}
+
+// Sets or clears one broker's override (a broker = a collector whose version reads vector-<version>). Returns { id, name } or null if there is no such broker.
+async function writeOverride(client, tenantId, brokerId, port) {
+  const r = await client.query(
+    "UPDATE collectors SET syslog_port_override = $3 WHERE id = $1 AND tenant_id = $2 AND version ILIKE 'vector-%' RETURNING id, name", [brokerId, tenantId, port]);
+  return r.rows[0] ? { id: r.rows[0].id, name: r.rows[0].name } : null;
+}
+
 const view = (port) => ({ syslog_port: port, reserved_ports: Object.keys(RESERVED).map(Number) });
 
-module.exports = { RESERVED, REPORT_FRESH_MS, checkSyslogPort, readSyslogPort, writeSyslogPort, view, checkReport, recordReport, configState };
+module.exports = { RESERVED, REPORT_FRESH_MS, checkSyslogPort, readSyslogPort, writeSyslogPort, view, checkReport, recordReport, configState,
+  nameOrNull, effectivePort, portSource, readOverride, writeOverride };

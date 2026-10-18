@@ -2,6 +2,7 @@
 // The lane a broker uses to ask what it should be configured with (broker config pull, src/brokers/config.js).
 //   GET /v1/ingest/broker-config     Authorization: Bearer asix_ik_...   (the broker's own ingestion key, same as the heartbeat)
 //   -> { success: true, config: { syslog_port: 1514 | null }, interval_seconds: 300 }
+//   Optional ?collector=broker-1: the broker's own port (set on the Brokers page) wins over the tenant-wide one; found by this key AND that name.
 //   POST /v1/ingest/broker-config/report   { collector: "broker-1", syslog_port: 1514, rejected_port: null }   (same key)
 //   -> { success: true, recorded: true }   The broker says which port it listens on and which it rejected, so the Brokers page can show
 //   Applied / Pending / Rejected. It is information only: it changes no setting, writes no audit row, and lands on the collector row that
@@ -19,7 +20,12 @@ const router = express.Router();
 
 router.get('/v1/ingest/broker-config', authKey, async (req, res) => {
   try {
-    const port = await db.withTenant(req.ingestKey.tenant_id, (client) => config.readSyslogPort(client, req.ingestKey.tenant_id));
+    const tenantId = req.ingestKey.tenant_id;
+    const name = config.nameOrNull(req.query.collector);   // sent by brokers with the per-broker script; without it the tenant-wide value is the answer
+    const tenantPort = await db.withTenant(tenantId, (client) => config.readSyslogPort(client, tenantId));
+    let own = null;   // its own transaction: if the column is missing (schema job not run) the tenant-wide value still answers
+    if (name) { try { own = await db.withTenant(tenantId, (client) => config.readOverride(client, tenantId, req.ingestKey.id, name)); } catch (e) { console.error('Broker port override read failed:', e.message); } }
+    const port = config.effectivePort(tenantPort, own);
     res.set('Cache-Control', 'no-store');
     res.status(200).json({ success: true, config: { syslog_port: port }, interval_seconds: INTERVAL_S });
   } catch (e) {

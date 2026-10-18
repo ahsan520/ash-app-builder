@@ -1204,19 +1204,29 @@ function brokerConfigCard(cfg, sum) {
       el('button', { className: 'btn pri', textContent: 'Set port', onclick: () => save(inp.value.trim() === '' ? null : inp.value.trim()) }),
       cfg.syslog_port ? el('button', { className: 'btn', textContent: 'Clear', onclick: () => save(null) }) : '',
       cfg.syslog_port ? pill('Asking brokers for ' + cfg.syslog_port, 'ok') : el('span', { className: 'mute', textContent: 'No port set: brokers keep what they have.' }),
-      cfg.syslog_port && sum && sum.total ? (sum.config_not_applied ? pill(sum.config_applied + ' of ' + sum.total + ' applied', 'bad') : pill('All ' + sum.total + ' applied', 'ok')) : ''),
-    el('div', { className: 'mute', style: 'margin:10px 0 0;font-size:13px', textContent: 'Only brokers installed with --accept-config ask for this. Each checks the port itself, validates its Vector config, restarts Vector, and goes back to its old settings if that fails. It does not open the firewall: open the new port on the broker VM, and point the devices at it. Reserved: ' + cfg.reserved_ports.join(', ') + '. See the broker\'s journal: journalctl -u asix-broker-config.' }));
+      (cfg.syslog_port || (sum && sum.port_overrides)) && sum && sum.total ? (sum.config_not_applied ? pill(sum.config_applied + ' of ' + sum.total + ' applied', 'bad') : pill('All ' + sum.total + ' applied', 'ok')) : ''),
+    el('div', { className: 'mute', style: 'margin:10px 0 0;font-size:13px', textContent: 'A broker can have its own port instead (Port button on its row); that one wins for it alone. Only brokers installed with --accept-config ask for this. Each checks the port itself, validates its Vector config, restarts Vector, and goes back to its old settings if that fails. It does not open the firewall: open the new port on the broker VM, and point the devices at it. Reserved: ' + cfg.reserved_ports.join(', ') + '. See the broker\'s journal: journalctl -u asix-broker-config.' }));
 }
 // What a broker says about the syslog port (b.config from GET /v1/brokers; src/brokers/config.js). Brokers that opted in report after every pull.
 function brokerConfigCell(b) {
   const c = b.config || {}, now = c.reported_port != null ? ' (now ' + c.reported_port + ')' : '';
   const tip = (t, ...kids) => el('span', { title: t }, ...kids);
-  if (c.state === 'applied') return pill('Applied ' + c.configured_port, 'ok');
-  if (c.state === 'pending') return tip('Reported ' + when(c.reported_at) + ' UTC. It asks every 5 minutes.', pill('Pending ' + c.configured_port, 'off'), el('span', { className: 'mute', textContent: now }));
-  if (c.state === 'rejected') return tip('This broker tried port ' + c.rejected_port + ' and put its old settings back. See journalctl -u asix-broker-config on the broker.', pill('Rejected ' + c.configured_port, 'bad'), el('span', { className: 'mute', textContent: now }));
+  const own = c.source === 'broker' ? el('span', { className: 'mute', title: 'Set for this broker alone; the tenant-wide port does not apply to it.', textContent: ' (own)' }) : '';
+  if (c.state === 'applied') return tip('', pill('Applied ' + c.configured_port, 'ok'), own);
+  if (c.state === 'pending') return tip('Reported ' + when(c.reported_at) + ' UTC. It asks every 5 minutes.', pill('Pending ' + c.configured_port, 'off'), el('span', { className: 'mute', textContent: now }), own);
+  if (c.state === 'rejected') return tip('This broker tried port ' + c.rejected_port + ' and put its old settings back. See journalctl -u asix-broker-config on the broker.', pill('Rejected ' + c.configured_port, 'bad'), el('span', { className: 'mute', textContent: now }), own);
   if (c.state === 'stale') return tip('Last report ' + when(c.reported_at) + ' UTC. Check the timer and Vector on the broker.', pill('Not asking', 'bad'), el('span', { className: 'mute', textContent: now }));
   if (c.state === 'unknown') return tip('ASIX asks for port ' + c.configured_port + ' but this broker has not reported. It was not set up with --accept-config, or its config script is older than reporting. Re-run the bootstrap script with --accept-config.', pill('Not reporting', 'off'));
   return c.reported_port != null ? String(c.reported_port) : '-';
+}
+// ---- Broker own syslog port ----
+// A syslog port for ONE broker (PUT /v1/brokers/:id/syslog-port). It wins over the tenant-wide port on the card above for that broker only;
+// empty goes back to following the tenant-wide port. The broker must have been installed with --accept-config and have the current config script.
+async function brokerPortEdit(b) {
+  const c = b.config || {};
+  const v = prompt('Syslog port for ' + b.name + ' alone (1-65535).\nEmpty: follow the tenant-wide port again.', c.override_port != null ? String(c.override_port) : '');
+  if (v === null) return;
+  try { await api('/v1/brokers/' + b.id + '/syslog-port', { method: 'PUT', body: { syslog_port: v.trim() === '' ? null : v.trim() } }); route(); } catch (e) { alert(e.message); }
 }
 // Read-only: the broker VMs that report to this install (docs/broker-vm.md), and the command to add one.
 async function pgBrokers() {
@@ -1242,7 +1252,7 @@ async function pgBrokers() {
       { h: 'Alert if down', f: (b) => pill(b.watch_disconnect ? 'On' : 'Off', b.watch_disconnect ? 'ok' : 'off') },
       { h: 'Installer', f: (b) => (b.installer ? b.installer.name + (b.installer.status === 'revoked' ? ' (revoked)' : '') : 'deleted') },
       { h: 'Needs attention', f: (b) => (b.problems.length ? el('span', { style: 'color:var(--bad,#c33)', textContent: b.problems.join(' ') }) : '') },
-      { h: '', f: (b) => el('button', { className: 'btn', textContent: 'Rotate key', onclick: () => rotateBrokerKey(b) }) },
+      { h: '', f: (b) => el('span', {}, el('button', { className: 'btn', textContent: 'Port', title: 'Set a syslog port for this broker alone', onclick: () => brokerPortEdit(b) }), ' ', el('button', { className: 'btn', textContent: 'Rotate key', onclick: () => rotateBrokerKey(b) })) },
     ], r.brokers, 'No brokers yet. Create an installer, then run the command below on the broker VM.')),
     el('h3', { style: 'margin-top:18px', textContent: 'Add a broker' }),
     card('', el('p', { className: 'desc', textContent: 'Create an installer first (Settings, Installers) and copy its key: it is shown once. Then on the new VM, as root:' }),

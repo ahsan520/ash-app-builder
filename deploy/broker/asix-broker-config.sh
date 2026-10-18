@@ -3,8 +3,8 @@
 # asix-broker-config.timer, which scripts/deploy/bootstrap-broker.sh installs ONLY when given --accept-config (ASIX_ACCEPT_CONFIG=true
 # in broker.env). A broker set up without that flag never runs this and ASIX cannot change it.
 #
-# One setting so far: the syslog port. What it does, in this order, and stops at the first failure:
-#   1. fetches GET <ingest URL>/../broker-config with this broker's own ingestion key (nothing is sent but the key)
+# One setting so far: the syslog port (one value for the tenant, or a port set for this broker alone). What it does, in this order, and stops at the first failure:
+#   1. fetches GET <ingest URL>/../broker-config?collector=<this broker's name> with this broker's own ingestion key (nothing is sent but the key and the name)
 #   2. null or the port already in use: does nothing
 #   3. checks the port itself, whatever ASIX sent: 1-65535, not SSH (22), HTTPS (443), Vector's health API (8686) or ASIX's HTTPS (30443),
 #      not the syslog-over-TLS port of this broker
@@ -48,7 +48,10 @@ report() {  # EXIT trap: what this broker listens on now (read from broker.env A
   curl "${ARGS[@]}" -X POST -H "Content-Type: application/json" --data "$body" "$URL/report" >/dev/null 2>&1 || true
 }
 trap report EXIT
-BODY="$(curl "${ARGS[@]}" "$URL")" || { echo "Could not fetch the config from ASIX; nothing changed." >&2; exit 1; }
+# Say which broker this is, so ASIX can answer with THIS broker's own port if one was set on the Brokers page (otherwise the tenant-wide port).
+# Only a plain name goes in the URL; anything else is left out and ASIX answers with the tenant-wide port.
+FETCH_URL="$URL"; [[ "${ASIX_BROKER_NAME:-}" =~ ^[A-Za-z0-9._:-]{1,100}$ ]] && FETCH_URL="$URL?collector=${ASIX_BROKER_NAME}"
+BODY="$(curl "${ARGS[@]}" "$FETCH_URL")" || { echo "Could not fetch the config from ASIX; nothing changed." >&2; exit 1; }
 FLAT="$(printf '%s' "$BODY" | tr -d ' \t\r\n')"
 if printf '%s' "$FLAT" | grep -q '"syslog_port":null'; then exit 0; fi
 PORT="$(printf '%s' "$FLAT" | sed -n 's/.*"syslog_port":\([0-9]\{1,5\}\)[,}].*/\1/p')"
