@@ -7,13 +7,18 @@
 #   sudo bash scripts/offsite-backup.sh           --target user@host:/path [--key FILE] [--port N]   copy now
 #   sudo bash scripts/offsite-backup.sh --install-timer --target user@host:/path [--key FILE] [--port N]   save the settings and copy every night at 03:30
 #   sudo bash scripts/offsite-backup.sh                                                                   copy now with the saved settings (/etc/asix-offsite.env)
+#   sudo bash scripts/offsite-backup.sh --prune-preview --keep-days 60 [--target ...]                     list what pruning would delete on the other machine, delete nothing
+#   ... --install-timer --keep-days 60 ...                                                                also prune the other machine after each good copy (--keep-days off turns it off)
 #
 # The files are AES-256-GCM encrypted already (src/backup/crypto.js), so the other machine learns nothing from them. They are USELESS without the
 # backup passphrase (Kubernetes secret asix-backup-secret): keep a copy of that passphrase somewhere that is not this VM, for example a password manager.
 #
-# What it does: rsync over SSH (new and changed files only; it never deletes anything on the other machine, so the copy keeps files this VM has
-# already pruned: clean the other machine yourself, for example `find /path -type f -mtime +60 -delete`), then a second rsync in dry-run mode that must
-# find nothing left to send (same names and sizes), then one row in backup_runs (kind 'offsite').
+# What it does: rsync over SSH (new and changed files only; the copy itself never deletes anything on the other machine, so it keeps files this VM has
+# already pruned), then a second rsync in dry-run mode that must find nothing left to send (same names and sizes), then one row in backup_runs (kind 'offsite').
+# Pruning is OFF unless you give --keep-days N (N of at least 7). Then, only after a copy that was checked and recorded, it deletes on the other machine the
+# asix-* files that are BOTH older than N days (by file date, which rsync keeps from this VM) AND no longer on this VM. A file that is still in the backup
+# folder here is never deleted there. It never touches other file names, refuses to run with no asix-* files here, and refuses to delete more than half of
+# the other machine's asix-* files in one run unless --allow-large-prune is given (use --prune-preview first). A prune failure is a warning, not a failed copy.
 # Needs rsync and ssh on both machines, and an SSH key for this VM's root that the other machine accepts (ssh-keygen -t ed25519 -f /root/.ssh/asix-offsite;
 # then add the .pub line to ~/.ssh/authorized_keys of the user on the other machine). A first connection trusts the other machine's host key (accept-new).
 # --target also accepts a local folder (a mounted disk or share): /mnt/usb/asix-backups.
@@ -22,13 +27,15 @@ ENV_FILE="${ASIX_OFFSITE_ENV:-/etc/asix-offsite.env}"
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/asix/scheduled}"
 die() { echo "$*" >&2; exit 2; }
 
-TARGET="" KEY="" PORT="" MODE="run" INSTALL=0
+TARGET="" KEY="" PORT="" KEEP="" MODE="run" INSTALL=0 BIGPRUNE=0
 [ -r "$ENV_FILE" ] && . "$ENV_FILE"                       # saved settings: OFFSITE_TARGET, OFFSITE_SSH_KEY, OFFSITE_SSH_PORT
-TARGET="${OFFSITE_TARGET:-}" KEY="${OFFSITE_SSH_KEY:-}" PORT="${OFFSITE_SSH_PORT:-}"
+TARGET="${OFFSITE_TARGET:-}" KEY="${OFFSITE_SSH_KEY:-}" PORT="${OFFSITE_SSH_PORT:-}" KEEP="${OFFSITE_KEEP_DAYS:-}"
 while (( $# )); do case "$1" in
   --target) TARGET="${2:-}"; shift 2 ;; --key) KEY="${2:-}"; shift 2 ;; --port) PORT="${2:-}"; shift 2 ;;
+  --keep-days) KEEP="${2:-}"; [ "$KEEP" != off ] || KEEP=""; [ -n "${2:-}" ] || die "--keep-days needs a number (at least 7) or off"; shift 2 ;;
+  --prune-preview) MODE="prune-preview"; shift ;; --allow-large-prune) BIGPRUNE=1; shift ;;
   --check) MODE="check"; shift ;; --install-timer) INSTALL=1; shift ;;
-  -h|--help) sed -n 2,22p "$0"; exit 0 ;;
+  -h|--help) sed -n 2,28p "$0"; exit 0 ;;
   *) die "unknown option: $1 (see --help)" ;;
 esac; done
 
@@ -41,6 +48,8 @@ else
   REMOTE=0; RPATH="$TARGET"
 fi
 [ -z "$PORT" ] || [[ "$PORT" =~ ^[0-9]{1,5}$ ]] || die "--port must be a number"
+[ -z "$KEEP" ] || { [[ "$KEEP" =~ ^[0-9]{1,4}$ ]] && [ "$KEEP" -ge 7 ]; } || die "--keep-days must be a number of at least 7 (or off)"
+[ "$MODE" != prune-preview ] || [ -n "$KEEP" ] || die "--prune-preview needs --keep-days N (or OFFSITE_KEEP_DAYS in the saved settings)"
 [ -z "$KEY" ] || [ -r "$KEY" ] || die "SSH key not readable: $KEY"
 command -v rsync >/dev/null || die "rsync is not installed (apt-get install rsync)"
 [ "$REMOTE" = 0 ] || command -v ssh >/dev/null || die "ssh is not installed (apt-get install openssh-client)"
@@ -63,11 +72,40 @@ if [ "$MODE" = check ]; then
   echo "ok: $TARGET is reachable and writable"; exit 0
 fi
 
+# ---- pruning the other machine (only with --keep-days) -------------------------------------------
+# asix-* files on the other machine older than KEEP days that are no longer in BACKUP_DIR. Prints relative paths, one per line. Odd names are left alone.
+remote_find() {  # $1 = extra find tests; prints ./relative paths
+  if [ "$REMOTE" = 1 ]; then "${SSH[@]}" "$RHOST" "cd '$RPATH' && find . -maxdepth 2 -type f -name 'asix-*' $1"
+  else ( cd "$RPATH" && find . -maxdepth 2 -type f -name 'asix-*' $1 ); fi
+}
+prune_candidates() {
+  local f
+  remote_find "-mtime +$KEEP" | sed 's|^\./||' | while IFS= read -r f; do
+    [[ "$f" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?$ ]] || continue
+    [[ "$f" != *..* ]] || continue
+    [ ! -e "$BACKUP_DIR/$f" ] || continue
+    echo "$f"
+  done
+}
+need_local_files() {
+  [ -d "$BACKUP_DIR" ] && [ -n "$(find "$BACKUP_DIR" -maxdepth 2 -type f -name 'asix-*' -print -quit)" ] || die "no asix-* files in $BACKUP_DIR: pruning needs them to know what is still wanted, so nothing is pruned"
+}
+if [ "$MODE" = prune-preview ]; then
+  need_local_files
+  if [ "$REMOTE" = 1 ]; then "${SSH[@]}" "$RHOST" "test -d '$RPATH'" || die "cannot read $TARGET over ssh"; else [ -d "$RPATH" ] || die "no folder $RPATH"; fi
+  LIST="$(prune_candidates)" || die "could not list $TARGET"
+  TOTAL="$(remote_find '' | wc -l | tr -d ' ')"; N="$(printf '%s' "$LIST" | grep -c .)"
+  echo "$TARGET holds $TOTAL asix-* files; $N are older than $KEEP days and no longer on this VM:"
+  [ "$N" = 0 ] || printf '%s\n' "$LIST" | sed 's/^/  /'
+  if [ "$N" -gt 0 ] && [ $((N * 2)) -gt "$TOTAL" ]; then echo "That is more than half of them: a real run would refuse unless --allow-large-prune is given."; fi
+  echo "Nothing was deleted (preview)."; exit 0
+fi
+
 if [ "$INSTALL" = 1 ]; then
   [ "$(id -u)" = 0 ] || die "--install-timer must run as root"
   install -d /usr/local/lib/asix-offsite
   install -m 755 "$0" /usr/local/lib/asix-offsite/offsite-backup.sh
-  { echo "OFFSITE_TARGET='$TARGET'"; [ -z "$KEY" ] || echo "OFFSITE_SSH_KEY='$KEY'"; [ -z "$PORT" ] || echo "OFFSITE_SSH_PORT='$PORT'"; } > "$ENV_FILE"
+  { echo "OFFSITE_TARGET='$TARGET'"; [ -z "$KEY" ] || echo "OFFSITE_SSH_KEY='$KEY'"; [ -z "$PORT" ] || echo "OFFSITE_SSH_PORT='$PORT'"; [ -z "$KEEP" ] || echo "OFFSITE_KEEP_DAYS='$KEEP'"; } > "$ENV_FILE"
   chmod 600 "$ENV_FILE"
   cat > /etc/systemd/system/asix-offsite-backup.service <<UNIT
 [Unit]
@@ -122,6 +160,27 @@ record() {
   "${K[@]}" exec -i postgresql-0 -- env PGPASSWORD="$pw" psql -U asix_admin -d asix_platform -v ON_ERROR_STOP=1 -q
 }
 echo "$SQL" | record >/dev/null 2>&1 || echo "warning: could not record the result in the database, so the Data safety page will not show this copy" >&2
+
+# ---- prune the other machine: only after a copy that was checked and recorded; trouble here is a warning, never a failed copy ----
+if [ "$OK" = 1 ] && [ -n "$KEEP" ]; then
+  prune() {
+    local LIST TOTAL N DEL
+    LIST="$(prune_candidates)" || { echo "warning: could not list the other machine for pruning; nothing pruned" >&2; return 0; }
+    TOTAL="$(remote_find '' | wc -l | tr -d ' ')"; N="$(printf '%s' "$LIST" | grep -c .)"
+    [ "$N" -gt 0 ] || { echo "Pruning: nothing older than $KEEP days that this VM no longer has."; return 0; }
+    if [ $((N * 2)) -gt "$TOTAL" ] && [ "$BIGPRUNE" != 1 ]; then
+      echo "warning: pruning would delete $N of $TOTAL files on the other machine (more than half), so nothing was pruned. Check with --prune-preview, then run once with --allow-large-prune." >&2; return 0
+    fi
+    if [ "$REMOTE" = 1 ]; then
+      DEL="$(printf '%s\n' "$LIST" | "${SSH[@]}" "$RHOST" "cd '$RPATH' && while IFS= read -r f; do rm -f -- \"\$f\" && echo \"\$f\"; done" | grep -c .)"
+    else
+      DEL="$(printf '%s\n' "$LIST" | ( cd "$RPATH" && while IFS= read -r f; do rm -f -- "$f" && echo "$f"; done ) | grep -c .)"
+    fi
+    echo "Pruned $DEL of $N old file(s) on the other machine (older than $KEEP days and no longer on this VM)."
+    [ "$DEL" = "$N" ] || echo "warning: $((N - DEL)) file(s) could not be deleted on the other machine" >&2
+  }
+  prune
+fi
 
 if [ "$OK" = 1 ]; then echo "Done: $FILES files copied and checked (same names and sizes) at $TARGET"; exit 0; fi
 echo "FAILED: $ERR" >&2; exit 1
