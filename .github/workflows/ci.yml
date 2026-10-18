@@ -87,7 +87,7 @@ jobs:
       - name: Database tests
         run: |
           for t in event-store-postgres event-search-postgres event-match-postgres search-route detection-store-db \
-                   event-ingest-db read-counts-db core-reads-db alert-dedupe-db my-alerts-db heartbeat-db collector-threshold-db collector-watch-db collector-silence-db collector-watch-all-db collector-watch-exclude-db broker-key-watch-db brokers-db broker-rotate-key-db broker-upgrade-db offsite-backup-db retention-db parse-ingest-db parser-status-db; do
+                   event-ingest-db read-counts-db core-reads-db alert-dedupe-db my-alerts-db heartbeat-db collector-threshold-db collector-watch-db collector-silence-db collector-watch-all-db collector-watch-exclude-db broker-key-watch-db brokers-db broker-rotate-key-db broker-upgrade-db broker-config-db offsite-backup-db retention-db parse-ingest-db parser-status-db; do
             echo "::group::$t"
             node --test "tests/$t.test.js"
             echo "::endgroup::"
