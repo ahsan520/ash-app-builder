@@ -18,6 +18,7 @@ app.disable('x-powered-by');
 // first and then parses with its own, larger body limit.
 app.use(require('../ingest/http-ingest').router);
 app.use(require('../ingest/heartbeat').router);
+app.use(require('../ingest/broker-config').router);
 
 app.use(express.json());
 
@@ -58,6 +59,7 @@ app.use(require('./routes/collector-watch-all'));
 app.use(require('./routes/collector-watch-exclude'));
 app.use(require('./routes/brokers'));
 app.use(require('./routes/broker-settings'));
+app.use(require('./routes/broker-config'));
 app.use(require('./routes/notifications'));
 app.use(require('./routes/storage'));
 app.use(require('./routes/capacity'));

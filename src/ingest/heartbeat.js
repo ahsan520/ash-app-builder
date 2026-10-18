@@ -138,4 +138,4 @@ router.use('/v1/ingest/heartbeat', (e, req, res, next) => {
   next(e);
 });
 
-module.exports = { router, describeBeat, INTERVAL_S };
+module.exports = { router, describeBeat, INTERVAL_S, authKey };

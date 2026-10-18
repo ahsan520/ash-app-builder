@@ -5,16 +5,19 @@
 # Usage (as root):
 #   ./scripts/deploy/bootstrap-broker.sh --url https://asix1:30443/v1/ingest/http --key asix_ik_... \
 #       --name broker-1 [--port 514] [--ca /path/to/cert.pem] [--no-install]
-#       [--tls-cert server.crt --tls-key server.key [--tls-port 6514] [--tls-client-ca ca.pem]]
+#       [--tls-cert server.crt --tls-key server.key [--tls-port 6514] [--tls-client-ca ca.pem]] [--accept-config]
 #
 # --no-install     Vector is already installed (offline or pinned install); skip the package repo.
 # --tls-cert/key   Also accept syslog over TLS (RFC 5425) on --tls-port (default 6514), with this server certificate.
 #                  Both are needed together. Re-running without them turns the TLS listener off again.
 # --tls-client-ca  Require every sender to present a certificate issued by this CA (mutual TLS).
+# --accept-config  Let ASIX change this broker's syslog port (Brokers page, Syslog port): installs a root timer that asks ASIX every 5
+#                  minutes and applies the port only after its own checks (see deploy/broker/asix-broker-config.sh). Without this flag
+#                  ASIX cannot change the broker; re-running without it turns the timer off again.
 
 set -euo pipefail
 
-URL=""; KEY=""; NAME=""; PORT="514"; CA=""; INSTALL=1; TLS_CERT=""; TLS_KEY=""; TLS_PORT="6514"; TLS_CLIENT_CA=""
+URL=""; KEY=""; NAME=""; PORT="514"; CA=""; INSTALL=1; TLS_CERT=""; TLS_KEY=""; TLS_PORT="6514"; TLS_CLIENT_CA=""; ACCEPT_CONFIG=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --url) URL="$2"; shift 2;;
@@ -27,6 +30,7 @@ while [ $# -gt 0 ]; do
     --tls-key) TLS_KEY="$2"; shift 2;;
     --tls-port) TLS_PORT="$2"; shift 2;;
     --tls-client-ca) TLS_CLIENT_CA="$2"; shift 2;;
+    --accept-config) ACCEPT_CONFIG=1; shift;;
     *) echo "Unknown option: $1" >&2; exit 2;;
   esac
 done
@@ -74,6 +78,7 @@ install -d -m 750 -o root -g vector /etc/asix-broker
   # Vector 0.59 and newer leave ${VAR} in the config as plain text unless this is set (older versions ignore it and always substitute).
   # The substituted values are this file's own settings, readable only by root and the vector user.
   echo "VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION=true"
+  [ "$ACCEPT_CONFIG" -eq 0 ] || echo "ASIX_ACCEPT_CONFIG=true"
   if [ -n "$CA" ]; then
     install -m 644 "$CA" /etc/asix-broker/ca.pem
     echo "ASIX_CA_FILE=/etc/asix-broker/ca.pem"
@@ -117,9 +122,20 @@ install -m 755 "$SRC/asix-broker-heartbeat.sh" /usr/local/lib/asix-broker/asix-b
 install -m 644 "$SRC/asix-broker-heartbeat.service" /etc/systemd/system/asix-broker-heartbeat.service
 install -m 644 "$SRC/asix-broker-heartbeat.timer" /etc/systemd/system/asix-broker-heartbeat.timer
 
+if [ "$ACCEPT_CONFIG" -eq 1 ]; then
+  install -m 755 "$SRC/asix-broker-config.sh" /usr/local/lib/asix-broker/asix-broker-config.sh
+  install -m 644 "$SRC/asix-broker-config.service" /etc/systemd/system/asix-broker-config.service
+  install -m 644 "$SRC/asix-broker-config.timer" /etc/systemd/system/asix-broker-config.timer
+else
+  # Re-run without --accept-config: ASIX can no longer change this broker.
+  systemctl disable --now asix-broker-config.timer >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/asix-broker-config.timer /etc/systemd/system/asix-broker-config.service /usr/local/lib/asix-broker/asix-broker-config.sh
+fi
+
 echo "-- 6. Starting services --"
 systemctl daemon-reload
 systemctl enable vector asix-broker-heartbeat.timer >/dev/null
+[ "$ACCEPT_CONFIG" -eq 0 ] || systemctl enable --now asix-broker-config.timer >/dev/null
 systemctl restart vector
 sleep 3
 systemctl is-active --quiet vector || { echo "Vector did not start: journalctl -u vector -n 50" >&2; exit 1; }
@@ -130,4 +146,5 @@ echo
 echo "Done. Send a test line:   logger -n 127.0.0.1 -P $PORT -T 'asix broker test'"
 echo "Then check Settings > Collectors for '$NAME' (Connected)."
 echo "Open $PORT/udp and $PORT/tcp on this VM's firewall for the devices that will send syslog."
+[ "$ACCEPT_CONFIG" -eq 0 ] || echo "ASIX may now change this broker's syslog port (Brokers page). Watch it: journalctl -u asix-broker-config -n 20"
 [ -z "$TLS_CERT" ] || echo "Syslog over TLS is on $TLS_PORT/tcp$([ -n "$TLS_CLIENT_CA" ] && echo ' (senders must present a certificate from the client CA)'): open it too. Check: openssl s_client -connect 127.0.0.1:$TLS_PORT"

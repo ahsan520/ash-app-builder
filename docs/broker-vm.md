@@ -124,8 +124,10 @@ Plain syslog is readable and forgeable by anyone on the path. For sources that c
 | `deploy/broker/broker.env.example` | Settings (`/etc/asix-broker/broker.env` on the VM, mode 640) |
 | `deploy/broker/vector-asix.conf` | systemd drop-in: loads the env file, lets Vector bind port 514 |
 | `deploy/broker/asix-broker-heartbeat.{sh,service,timer}` | The one-minute heartbeat |
+| `deploy/broker/asix-broker-config.{sh,service,timer}` | Optional (`--accept-config`): asks ASIX every 5 minutes for the syslog port and applies it after its own checks |
 | `scripts/deploy/bootstrap-broker.sh` | Installs and starts everything |
 | `src/ingest/heartbeat.js` | Server side: `POST /v1/ingest/heartbeat` (ingestion key) |
+| `src/ingest/broker-config.js`, `src/brokers/config.js` | Server side of the config pull: `GET /v1/ingest/broker-config` (ingestion key) |
 
 ## Heartbeat API
 - `POST /v1/ingest/heartbeat` with `Authorization: Bearer asix_ik_...`. Optional JSON
@@ -142,12 +144,33 @@ Plain syslog is readable and forgeable by anyone on the path. For sources that c
 - One syslog port for UDP and TCP, plus the optional TLS port. No non-syslog sources (files, Windows events, Kafka) on the broker yet.
   TLS certificates are not renewed or reloaded for you (re-run the script after replacing them).
 - The portal has a read-only **Brokers** page (Settings, Brokers: status, Vector version, events in 24 hours, installer key state, what needs attention, and the
-  command to add a broker). It cannot change a broker: there is no remote config push, no remote upgrade (it shows which brokers are behind a target Vector version and gives the command, see "Upgrading Vector" below) and no capacity view. A broker is recognised by its heartbeat's
+  command to add a broker). It cannot push a change to a broker: the only config is the syslog port brokers can pull (see "Config from ASIX" below), there is no remote upgrade (it shows which brokers are behind a target Vector version and gives the command, see "Upgrading Vector" below) and no capacity view. A broker is recognised by its heartbeat's
   version text (`vector-<version>`), so a broker that has never sent a heartbeat does not appear. `src/brokers/broker-framework.js` is still the Phase 3 placeholder.
 - A 4xx other than 408/429 from ASIX (for example a revoked key) is not retried by Vector, so those events are
   dropped; fix the key and re-run the bootstrap script.
 - The connected/disconnected threshold is 15 minutes unless you set one for that collector (Collectors page, **Threshold**; 1 to 10080 minutes). A broker
   with a long quiet spell does not need it: the heartbeat keeps it Connected. It is for slow senders such as a nightly job.
+
+## Config from ASIX (optional, syslog port only)
+ASIX never connects to a broker. A broker that was installed with `--accept-config` asks ASIX for its config instead, and only that kind of broker:
+```bash
+sudo ./scripts/deploy/bootstrap-broker.sh --url https://asix1:30443/v1/ingest/http --key asix_ik_... --name broker-1 --accept-config
+```
+This writes `ASIX_ACCEPT_CONFIG=true` to `broker.env` and installs `asix-broker-config.timer`, which runs `asix-broker-config.sh` as root two minutes after boot and then every 5 minutes. Re-running the bootstrap script **without** `--accept-config` turns it off again
+(and, as always, rewrites `broker.env` from the flags you give it, so give `--port` again if the broker was told to use another one).
+A broker installed before this existed can be switched on by re-running the bootstrap script with the same options plus `--accept-config`.
+
+**Setting it:** Brokers page, **Syslog port for brokers** card (`GET` and `PUT /v1/broker-config`, body `{ "syslog_port": 1514 | null }`; `collectors:read` / `collectors:write`, no role change). One value for the whole tenant; empty means "no opinion": brokers keep what they have.
+The broker asks with `GET /v1/ingest/broker-config` and its own ingestion key and gets `{ "config": { "syslog_port": 1514 | null }, "interval_seconds": 300 }` (read only, no audit row, same rate limit and key rules as the heartbeat; a revoked key gets nothing).
+
+**What the broker does with it, in order, stopping at the first failure:**
+1. Does nothing for `null`, or when the port is already the one in use.
+2. Checks the port itself, whatever ASIX sent: 1 to 65535, not 22, 443, 8686 (Vector's health API) or 30443, and not this broker's own syslog-over-TLS port.
+3. Edits only the `ASIX_SYSLOG_PORT` line of `broker.env` (the previous file is kept as `broker.env.before-config`), runs `vector validate` on the result, restarts Vector and waits up to 30 seconds for its health check.
+4. If validation, the restart or the health check fails, it puts the old `broker.env` back, restarts Vector on it, and remembers the rejected port in `/var/lib/asix-broker/config-rejected`, so it does not retry every 5 minutes. A different port from ASIX is tried again.
+
+**It does not open the firewall and does not move your devices:** after a change, open the new port (UDP and TCP) on the broker VM and point the senders at it; until they are changed they send to a port nobody listens on. Check what happened with `journalctl -u asix-broker-config -n 20`.
+Not seen on the Brokers page yet: whether a broker applied the port (the page shows the setting, not each broker's state). The TLS port, the key, the certificates and the ASIX URL are never changed this way.
 
 ## Getting an alert when a broker goes quiet
 A broker that stops (Vector down, VM off, network cut) shows as Disconnected on the Collectors and Brokers pages, but nothing tells you unless you look. On the

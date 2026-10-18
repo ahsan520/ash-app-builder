@@ -1,0 +1,13 @@
+[Unit]
+Description=ASIX broker config pull (applies the settings ASIX asks for, after its own checks)
+After=network-online.target vector.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/asix-broker/asix-broker-config.sh
+# Runs as root: it edits /etc/asix-broker/broker.env and restarts Vector.
+StateDirectory=asix-broker
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
