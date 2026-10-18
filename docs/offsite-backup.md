@@ -46,7 +46,7 @@ For a whole-VM loss you also need the passphrase and, for the Postgres roles, `r
 - `scripts/offsite-backup.sh` against a local folder and over real SSH (OpenSSH server on this machine, a second user, key login, a folder that did not exist yet): copy, repeat run, a changed file repaired, only `asix-*` files sent, owner-only files, a wrong key and an unwritable folder fail with exit 1 and a `failed` row, a bad target or a missing key file is refused before anything runs, nothing to copy is refused, a recording failure still exits 0 with a warning.
 - Real PostgreSQL 16: the script's row and the real Data safety report (`tests/offsite-backup-db.test.js`, CI `postgres` job): not configured, fresh copy clears the finding, a failed later copy is reported while last night's copy still counts, the row does not show up in the PostgreSQL backup history.
 - Unit tests: `tests/safety-offsite.test.js` (the findings and their thresholds), `tests/offsite-backup-script.test.js` (the script against a local folder; skipped when rsync is missing).
-- **Not run on the k3s box yet** (the `k3s kubectl exec` recording and the systemd timer); the SSH path is not in CI.
+- **Run on the k3s box (2026-10-18):** the first copy to another VM over SSH completed (2.7 MB, same names and sizes), was recorded through the PostgreSQL pod, and the Data safety page shows it on the **Copy on another machine** card. Not yet seen on the box: the nightly timer run, a failed copy, a stale finding. The SSH path is not in CI.
 
 ## Not built
 Pruning the other machine, S3 or other object storage, a restricted-key setup script, a portal button, an alert when the timer itself is missing (the stale finding catches it after 36 hours, but only once at least one copy has been recorded).

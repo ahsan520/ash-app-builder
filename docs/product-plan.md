@@ -345,7 +345,7 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
 - The Data safety page shows a **Copy on another machine** card. The info finding "Backups are stored on this VM" stays until a good copy is under 36 hours old; a failed latest copy is a warning;
   a last good copy over 36 hours old is a warning, over 72 hours critical. No schema change (`backup_runs.kind` is a free text column).
 - It never deletes on the other machine. The files are useless without the backup passphrase, which must be kept outside the VM too.
-- Checked on real PostgreSQL 16 and over real SSH on one machine, unit tests and a gated DB test (CI `postgres` job). **Not run on the k3s box yet; the SSH path is not in CI.**
+- Checked on real PostgreSQL 16 and over real SSH on one machine, unit tests and a gated DB test (CI `postgres` job). **Run on the k3s box 2026-10-18: first copy to another VM (2.7 MB, checked), shown on the Data safety page; the nightly timer run is not yet seen. The SSH path is not in CI.**
 - Not built: pruning the other machine, S3 or object storage, a portal button, an alert when the timer is missing before any copy was recorded.
 
 ## Open decisions (ask before committing)
