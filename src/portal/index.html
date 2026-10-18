@@ -1192,6 +1192,16 @@ function brokerUpgradeCard(r) {
     el('pre', { className: 'mono', style: 'white-space:pre-wrap;margin:0' }, r.upgrade_command), el('div', { style: 'margin-top:8px' }, copyBtn(() => r.upgrade_command, 'Copy command')));
 }
 const UPGRADE_PILL = { behind: (t) => pill('Behind ' + t, 'bad'), current: () => pill('Up to date', 'ok'), ahead: () => pill('Newer than target', 'off') };
+// ---- Broker config signing ----
+// Whether ASIX signs what it tells brokers (src/brokers/config-signing.js). Brokers installed with --config-pubkey act only on signed answers.
+// The public key is shown so it can be copied to a file for bootstrap-broker.sh; compare the key id the bootstrap prints with this one.
+function brokerSigningLine(sg) {
+  if (!sg) return '';
+  return el('div', { style: 'margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap' },
+    sg.enabled ? pill('Answers signed (key ' + sg.key_id + ')', 'ok') : pill(sg.error ? 'Signing key unusable' : 'Answers not signed', sg.error ? 'bad' : 'off'),
+    sg.enabled ? copyBtn(() => sg.public_key, 'Copy public key') : '',
+    el('span', { className: 'mute', style: 'font-size:13px', textContent: sg.error || (sg.enabled ? 'Install it on a broker with bootstrap-broker.sh --accept-config --config-pubkey <file>; that broker then ignores anything unsigned.' : 'Make a key with scripts/deploy/make-config-signing-key.sh --apply to let brokers check where their config comes from.') }));
+}
 // ---- Broker config pull ----
 // The syslog port that brokers set up with --accept-config should listen on. Nothing is pushed: those brokers ask ASIX every 5 minutes and
 // apply the port only after their own checks (deploy/broker/asix-broker-config.sh). A broker without --accept-config ignores this card.
@@ -1206,7 +1216,8 @@ function brokerConfigCard(cfg, sum) {
       cfg.syslog_port ? pill('Asking brokers for ' + cfg.syslog_port, 'ok') : el('span', { className: 'mute', textContent: 'No port set: brokers keep what they have.' }),
       (() => { const asked = sum ? sum.config_applied + sum.config_not_applied : 0; return asked ? (sum.config_not_applied ? pill(sum.config_applied + ' of ' + asked + ' applied', 'bad') : pill('All ' + asked + ' applied', 'ok')) : ''; })(),
       sum && sum.port_excluded ? el('span', { className: 'mute', textContent: sum.port_excluded + ' left out' }) : ''),
-    el('div', { className: 'mute', style: 'margin:10px 0 0;font-size:13px', textContent: 'A broker can have its own port instead (Port button on its row); that one wins for it alone. Leave out keeps one broker off this port. Only brokers installed with --accept-config ask for this. Each checks the port itself, validates its Vector config, restarts Vector, and goes back to its old settings if that fails. It does not open the firewall: open the new port on the broker VM, and point the devices at it. Reserved: ' + cfg.reserved_ports.join(', ') + '. See the broker\'s journal: journalctl -u asix-broker-config.' }));
+    el('div', { className: 'mute', style: 'margin:10px 0 0;font-size:13px', textContent: 'A broker can have its own port instead (Port button on its row); that one wins for it alone. Leave out keeps one broker off this port. Only brokers installed with --accept-config ask for this. Each checks the port itself, validates its Vector config, restarts Vector, and goes back to its old settings if that fails. It does not open the firewall: open the new port on the broker VM, and point the devices at it. Reserved: ' + cfg.reserved_ports.join(', ') + '. See the broker\'s journal: journalctl -u asix-broker-config.' }),
+    brokerSigningLine(cfg.signing));
 }
 // What a broker says about the syslog port (b.config from GET /v1/brokers; src/brokers/config.js). Brokers that opted in report after every pull.
 function brokerConfigCell(b) {

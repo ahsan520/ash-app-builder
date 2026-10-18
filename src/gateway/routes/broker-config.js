@@ -2,13 +2,14 @@ const express = require('express');
 const router = express.Router();
 const { db, guarded, apiError } = require('../shared');
 const config = require('../../brokers/config');
+const signing = require('../../brokers/config-signing');
 
 // Broker config for the portal: the syslog port brokers that opted in (bootstrap-broker.sh --accept-config) should listen on.
 // Nothing is pushed: brokers ask for it (src/ingest/broker-config.js). Uses collectors:read / collectors:write; no role change.
 router.get('/v1/broker-config', ...guarded('collectors:read'), async (req, res) => {
   try {
     const port = await db.withTenant(req.tenant_id, (client) => config.readSyslogPort(client, req.tenant_id));
-    res.status(200).json({ success: true, config: config.view(port) });
+    res.status(200).json({ success: true, config: { ...config.view(port), signing: signing.status() } });   // signing: whether answers are signed, the key id and the PUBLIC key
   } catch (e) {
     console.error('Broker config read failed:', e.message);
     apiError(res, 500, 'BROKER_CONFIG_ERROR', 'Failed to read the broker config');

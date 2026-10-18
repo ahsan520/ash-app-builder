@@ -49,6 +49,14 @@ spec:
                   name: asix-notify-secret
                   key: NOTIFY_ENCRYPTION_KEY
                   optional: true
+            # Signs the answers of the broker config pull (src/brokers/config-signing.js). Optional: without the Secret the answers are
+            # unsigned, as before. Create it with scripts/deploy/make-config-signing-key.sh.
+            - name: ASIX_CONFIG_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: asix-config-signing
+                  key: ASIX_CONFIG_SIGNING_KEY
+                  optional: true
             # "true" lets webhooks / SMTP target private networks (RFC1918). Loopback, link-local
             # and cloud-metadata addresses stay blocked either way.
             - name: NOTIFY_ALLOW_PRIVATE_TARGETS

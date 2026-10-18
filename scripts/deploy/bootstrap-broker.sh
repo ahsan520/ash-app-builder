@@ -5,7 +5,7 @@
 # Usage (as root):
 #   ./scripts/deploy/bootstrap-broker.sh --url https://asix1:30443/v1/ingest/http --key asix_ik_... \
 #       --name broker-1 [--port 514] [--ca /path/to/cert.pem] [--no-install]
-#       [--tls-cert server.crt --tls-key server.key [--tls-port 6514] [--tls-client-ca ca.pem]] [--accept-config]
+#       [--tls-cert server.crt --tls-key server.key [--tls-port 6514] [--tls-client-ca ca.pem]] [--accept-config [--config-pubkey config-signing.pub]]
 #
 # --no-install     Vector is already installed (offline or pinned install); skip the package repo.
 # --tls-cert/key   Also accept syslog over TLS (RFC 5425) on --tls-port (default 6514), with this server certificate.
@@ -14,10 +14,14 @@
 # --accept-config  Let ASIX change this broker's syslog port (Brokers page, Syslog port): installs a root timer that asks ASIX every 5
 #                  minutes and applies the port only after its own checks (see deploy/broker/asix-broker-config.sh). Without this flag
 #                  ASIX cannot change the broker; re-running without it turns the timer off again.
+# --config-pubkey  With --accept-config: act only on config that ASIX has SIGNED with the matching private key (Brokers page shows the
+#                  public key; scripts/deploy/make-config-signing-key.sh makes the pair). The file may hold several public keys (any one
+#                  matches), which lets a signing key be replaced without a gap. Needs openssl. Re-running without it goes back to
+#                  accepting unsigned config, so keep it on every re-run.
 
 set -euo pipefail
 
-URL=""; KEY=""; NAME=""; PORT="514"; CA=""; INSTALL=1; TLS_CERT=""; TLS_KEY=""; TLS_PORT="6514"; TLS_CLIENT_CA=""; ACCEPT_CONFIG=0
+URL=""; KEY=""; NAME=""; PORT="514"; CA=""; INSTALL=1; TLS_CERT=""; TLS_KEY=""; TLS_PORT="6514"; TLS_CLIENT_CA=""; ACCEPT_CONFIG=0; CONFIG_PUBKEY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --url) URL="$2"; shift 2;;
@@ -31,6 +35,7 @@ while [ $# -gt 0 ]; do
     --tls-port) TLS_PORT="$2"; shift 2;;
     --tls-client-ca) TLS_CLIENT_CA="$2"; shift 2;;
     --accept-config) ACCEPT_CONFIG=1; shift;;
+    --config-pubkey) CONFIG_PUBKEY="$2"; shift 2;;
     *) echo "Unknown option: $1" >&2; exit 2;;
   esac
 done
@@ -54,6 +59,20 @@ if [ -n "$TLS_CERT$TLS_KEY$TLS_CLIENT_CA" ]; then
   fi
 fi
 
+if [ -n "$CONFIG_PUBKEY" ]; then
+  [ "$ACCEPT_CONFIG" -eq 1 ] || { echo "--config-pubkey only makes sense with --accept-config (it is what the config pull checks)." >&2; exit 2; }
+  [ -r "$CONFIG_PUBKEY" ] || { echo "Cannot read $CONFIG_PUBKEY" >&2; exit 2; }
+  command -v openssl >/dev/null 2>&1 || { echo "--config-pubkey needs openssl on this machine (apt-get install openssl)." >&2; exit 2; }
+  # Every key in the file must be a P-256 public key, or the broker would refuse everything ASIX signs.
+  PKTMP="$(mktemp -d)"; trap 'rm -rf "$PKTMP"' EXIT
+  awk -v d="$PKTMP" '/-----BEGIN PUBLIC KEY-----/{n++} n{print > (d "/key" n ".pem")}' "$CONFIG_PUBKEY"
+  shopt -s nullglob; PKFILES=("$PKTMP"/key*.pem); shopt -u nullglob
+  [ "${#PKFILES[@]}" -gt 0 ] || { echo "$CONFIG_PUBKEY holds no PEM public key (-----BEGIN PUBLIC KEY-----)." >&2; exit 2; }
+  for k in "${PKFILES[@]}"; do
+    openssl pkey -pubin -in "$k" -noout -text 2>/dev/null | grep -q 'prime256v1\|P-256' || { echo "A key in $CONFIG_PUBKEY is not an EC P-256 public key." >&2; exit 2; }
+  done
+fi
+
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../deploy/broker" && pwd)"
 
 echo "== ASIX broker bootstrap =="
@@ -70,6 +89,12 @@ command -v curl >/dev/null || apt-get install -y curl
 
 echo "-- 2. Writing /etc/asix-broker/broker.env (mode 600) --"
 install -d -m 750 -o root -g vector /etc/asix-broker
+if [ -n "$CONFIG_PUBKEY" ]; then
+  install -m 644 "$CONFIG_PUBKEY" /etc/asix-broker/config-signing.pub
+  for k in "${PKFILES[@]}"; do echo "   trusting config signing key $(openssl pkey -pubin -in "$k" -outform DER | openssl dgst -sha256 -hex | sed 's/^.*= //' | cut -c1-12) (compare with the key id on ASIX's Brokers page)"; done
+else
+  rm -f /etc/asix-broker/config-signing.pub   # re-run without --config-pubkey: signatures are no longer required
+fi
 {
   echo "ASIX_INGEST_URL=$URL"
   echo "ASIX_INGEST_KEY=$KEY"
@@ -79,6 +104,7 @@ install -d -m 750 -o root -g vector /etc/asix-broker
   # The substituted values are this file's own settings, readable only by root and the vector user.
   echo "VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION=true"
   [ "$ACCEPT_CONFIG" -eq 0 ] || echo "ASIX_ACCEPT_CONFIG=true"
+  [ -z "$CONFIG_PUBKEY" ] || echo "ASIX_CONFIG_PUBKEY_FILE=/etc/asix-broker/config-signing.pub"
   if [ -n "$CA" ]; then
     install -m 644 "$CA" /etc/asix-broker/ca.pem
     echo "ASIX_CA_FILE=/etc/asix-broker/ca.pem"
@@ -146,5 +172,5 @@ echo
 echo "Done. Send a test line:   logger -n 127.0.0.1 -P $PORT -T 'asix broker test'"
 echo "Then check Settings > Collectors for '$NAME' (Connected)."
 echo "Open $PORT/udp and $PORT/tcp on this VM's firewall for the devices that will send syslog."
-[ "$ACCEPT_CONFIG" -eq 0 ] || echo "ASIX may now change this broker's syslog port (Brokers page). Watch it: journalctl -u asix-broker-config -n 20"
+[ "$ACCEPT_CONFIG" -eq 0 ] || echo "ASIX may now change this broker's syslog port (Brokers page)$([ -n "$CONFIG_PUBKEY" ] && echo ', but only with a signature from the key above'). Watch it: journalctl -u asix-broker-config -n 20"
 [ -z "$TLS_CERT" ] || echo "Syslog over TLS is on $TLS_PORT/tcp$([ -n "$TLS_CLIENT_CA" ] && echo ' (senders must present a certificate from the client CA)'): open it too. Check: openssl s_client -connect 127.0.0.1:$TLS_PORT"

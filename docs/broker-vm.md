@@ -144,7 +144,7 @@ Plain syslog is readable and forgeable by anyone on the path. For sources that c
 - One syslog port for UDP and TCP, plus the optional TLS port. No non-syslog sources (files, Windows events, Kafka) on the broker yet.
   TLS certificates are not renewed or reloaded for you (re-run the script after replacing them).
 - The portal has a read-only **Brokers** page (Settings, Brokers: status, Vector version, events in 24 hours, installer key state, what needs attention, and the
-  command to add a broker). It cannot push a change to a broker: the only config is the syslog port brokers can pull (see "Config from ASIX" below), there is no remote upgrade (it shows which brokers are behind a target Vector version and gives the command, see "Upgrading Vector" below) and no capacity view. A broker is recognised by its heartbeat's
+  command to add a broker). It cannot push a change to a broker: the only config is the syslog port brokers can pull (see "Config from ASIX" below; a broker can be set to accept it only with ASIX's signature, see "Signed config"), there is no remote upgrade (it shows which brokers are behind a target Vector version and gives the command, see "Upgrading Vector" below) and no capacity view. A broker is recognised by its heartbeat's
   version text (`vector-<version>`), so a broker that has never sent a heartbeat does not appear. `src/brokers/broker-framework.js` is still the Phase 3 placeholder.
 - A 4xx other than 408/429 from ASIX (for example a revoked key) is not retried by Vector, so those events are
   dropped; fix the key and re-run the bootstrap script.
@@ -157,7 +157,7 @@ ASIX never connects to a broker. A broker that was installed with `--accept-conf
 sudo ./scripts/deploy/bootstrap-broker.sh --url https://asix1:30443/v1/ingest/http --key asix_ik_... --name broker-1 --accept-config
 ```
 This writes `ASIX_ACCEPT_CONFIG=true` to `broker.env` and installs `asix-broker-config.timer`, which runs `asix-broker-config.sh` as root two minutes after boot and then every 5 minutes. Re-running the bootstrap script **without** `--accept-config` turns it off again
-(and, as always, rewrites `broker.env` from the flags you give it, so give `--port` again if the broker was told to use another one).
+(and, as always, rewrites `broker.env` from the flags you give it, so give `--port` again if the broker was told to use another one, and `--config-pubkey` again if it was set up to require signed config, see "Signed config" below).
 A broker installed before this existed can be switched on by re-running the bootstrap script with the same options plus `--accept-config`.
 
 **Setting it:** Brokers page, **Syslog port for brokers** card (`GET` and `PUT /v1/broker-config`, body `{ "syslog_port": 1514 | null }`; `collectors:read` / `collectors:write`, no role change). One value for the whole tenant; empty means "no opinion": brokers keep what they have.
@@ -221,6 +221,29 @@ The TLS port, the key, the certificates and the ASIX URL are never changed this 
 | **Not reporting** | a port is set but the broker never reported: it was not installed with `--accept-config`, or its `asix-broker-config.sh` is older than reporting. Copy the new script and re-run the bootstrap script with `--accept-config` |
 
 None of these is a "needs attention" problem and none raises an alert. **Applied** means the broker says it is listening, not that devices send to it: that is still on you (firewall and senders), and the test line from `logger -n <broker> -P 1514 -T test` arriving in Events is the real proof.
+
+## Signed config (optional)
+Without this, the only protection on the config a broker pulls is the HTTPS connection and the broker's ingestion key. With it, ASIX **signs** what it tells a broker, and a broker that has been given ASIX's public key acts only on a valid signature. An answer from something that is not ASIX, one edited on the way, one made for another broker and an old one that is replayed are all refused (nothing changes, the reason is in `journalctl -u asix-broker-config`).
+
+**What it protects against, and what it does not.** It protects against a spoofed ASIX address, an answer changed in transit, and anything that can write ASIX's database but cannot read the signing Secret. It does **not** protect against someone who can read that Secret: the private key lives on ASIX (an offline signing key, where a person signs each change, is not built). It does not change what a broker accepts: the broker still checks the port itself (never 22, 443, 8686, 30443 or its TLS port) and still validates, restarts and puts the old settings back on failure.
+
+**1. Make the key pair, once, on the ASIX VM** (needs only openssl and k3s):
+```bash
+sudo scripts/deploy/make-config-signing-key.sh --dir /root/asix-config-signing --apply
+```
+This writes `config-signing.key` (private, owner only) and `config-signing.pub`, prints the **key id**, stores the private key as the Secret `asix-platform/asix-config-signing` and restarts `asix-api`. Without `--apply` it only makes the files and prints the two `k3s kubectl` commands. It never overwrites an existing key file or Secret. **Keep a copy of `config-signing.key` somewhere safe.** The Brokers page then shows **Answers signed (key ...)** with a **Copy public key** button; the key id must match the one the script printed.
+
+**2. Give a broker the public key**, by re-running its bootstrap with the usual options plus `--config-pubkey`:
+```bash
+sudo ./scripts/deploy/bootstrap-broker.sh --url https://asix1:30443/v1/ingest/http --key asix_ik_... --name broker-1 --accept-config --config-pubkey config-signing.pub
+```
+It checks that every key in the file is an EC P-256 public key, installs it as `/etc/asix-broker/config-signing.pub`, writes `ASIX_CONFIG_PUBKEY_FILE` to `broker.env` and prints the key id it now trusts (compare it with the portal's). Needs `openssl` on the broker. `--config-pubkey` needs `--accept-config`. **Re-running the bootstrap without `--config-pubkey` goes back to accepting unsigned config**, so keep the flag on every re-run (as with `--port`).
+
+**What the broker checks, in order** (`asix-broker-config.sh`): the answer has a signed part (else: "ASIX did not sign this answer"); the ECDSA P-256 / SHA-256 signature matches one of the keys in the file; the signed text is version 1 and was made for **this broker's name** (or for none, if the broker has no usable name); and it was issued within `ASIX_CONFIG_MAX_SKEW_S` (default 600) seconds of the broker's own clock. Only then it reads the port, **from the signed text**; the unsigned `config` part of the answer is ignored in this mode. A broker whose clock is badly wrong refuses everything: fix the clock (`timedatectl`).
+
+**Replacing the signing key** (a broker pins the public key, so a new key means every broker needs it): put both public keys in one file (`cat old.pub new.pub > both.pub`), re-run each broker's bootstrap with `--config-pubkey both.pub`, then make the new pair under a new `--dir`, replace the Secret by hand (`k3s kubectl -n asix-platform delete secret asix-config-signing`, create it again from the new key file, `rollout restart deployment/asix-api`), and when every broker has been given the file with both keys, re-run them once more with `--config-pubkey new.pub` alone. The script refuses to replace an existing Secret so this is never done by accident. Until the Secret is replaced the brokers go on with the settings they have.
+
+**Checking it works:** on the broker, with the portal's port set to something new, `journalctl -u asix-broker-config -n 20` says "Done: syslog port ... Vector healthy"; with the signing Secret deleted (and `asix-api` restarted) the same journal says "ASIX did not sign this answer" and nothing changes. The Brokers page cannot tell which brokers verify signatures (a broker does not report that yet): the broker's `broker.env` having `ASIX_CONFIG_PUBKEY_FILE` is the proof.
 
 ## Getting an alert when a broker goes quiet
 A broker that stops (Vector down, VM off, network cut) shows as Disconnected on the Collectors and Brokers pages, but nothing tells you unless you look. On the

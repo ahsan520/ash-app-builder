@@ -4,6 +4,8 @@
 //   -> { success: true, config: { syslog_port: 1514 | null }, interval_seconds: 300 }
 //   Optional ?collector=broker-1: the broker's own port (set on the Brokers page) wins over the tenant-wide one; found by this key AND that name.
 //   A broker that was left out of the tenant-wide port (and has no own port) is answered null: no opinion, it keeps what it has.
+//   With ASIX_CONFIG_SIGNING_KEY set the answer also has `signed: { v, alg, key_id, payload, signature }` (src/brokers/config-signing.js): a broker
+//   that has the public key acts on the signed payload alone and ignores `config`.
 //   POST /v1/ingest/broker-config/report   { collector: "broker-1", syslog_port: 1514, rejected_port: null }   (same key)
 //   -> { success: true, recorded: true }   The broker says which port it listens on and which it rejected, so the Brokers page can show
 //   Applied / Pending / Rejected. It is information only: it changes no setting, writes no audit row, and lands on the collector row that
@@ -15,6 +17,7 @@ const express = require('express');
 const db = require('../db');
 const { authKey } = require('./heartbeat');
 const config = require('../brokers/config');
+const signing = require('../brokers/config-signing');
 
 const INTERVAL_S = 300;
 const router = express.Router();
@@ -29,8 +32,12 @@ router.get('/v1/ingest/broker-config', authKey, async (req, res) => {
     let left = false;   // left out of the tenant-wide port: only asked when it matters (a tenant-wide port, no own port); a missing column means not left out
     if (name && own === null && tenantPort !== null) { try { left = await db.withTenant(tenantId, (client) => config.readExclude(client, tenantId, req.ingestKey.id, name)); } catch (e) { console.error('Broker port exclusion read failed:', e.message); } }
     const port = config.effectivePort(tenantPort, own, left);
+    const answer = { success: true, config: { syslog_port: port }, interval_seconds: INTERVAL_S };
+    // With a signing key set, a signed copy of the same setting is added; brokers given the public key act on that copy only. If signing fails
+    // the answer goes out unsigned (a broker that requires signatures refuses it) rather than not at all.
+    try { const sk = signing.current(); if (sk && sk.privateKey) answer.signed = signing.signedDocument(sk, name, port); } catch (e) { console.error('Broker config signing failed:', e.message); }
     res.set('Cache-Control', 'no-store');
-    res.status(200).json({ success: true, config: { syslog_port: port }, interval_seconds: INTERVAL_S });
+    res.status(200).json(answer);
   } catch (e) {
     console.error('Broker config pull failed:', e.message);
     res.status(500).json({ success: false, error: { code: 'BROKER_CONFIG_ERROR', message: 'Broker config is temporarily unavailable' } });
