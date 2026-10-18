@@ -187,7 +187,7 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   closed with a note on reconnect, a new outage raises a new alert, custom threshold, watching off, collector deleted, and the real notification dispatcher sending it
   once) and in unit and route tests (`tests/collector-watchdog.test.js`, in `npm test`). **Not yet run on the k3s box or seen in a browser.**
 - Not built: a tenant-wide "watch everything" switch, a per-collector severity, a separate "recovered" notification (the alert closes with a note, nothing is sent),
-  an alert when a broker's installer key is revoked. (An alert for a collector that stops sending events while its heartbeat keeps arriving is done: see "Collector silence alerts" below.)
+  (An alert when a broker's installer key is revoked or deleted is done: see "Broker key alerts" below. An alert for a collector that stops sending events while its heartbeat keeps arriving is done: see "Collector silence alerts" below.)
 
 ### Collector silence alerts (what exists)
 - **The gap it closes:** the heartbeat keeps an idle broker or the built-in syslog collector Connected, so "Collector disconnected" cannot see a device that quietly stopped sending
@@ -214,6 +214,23 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   cover on both engines), not yet run on the k3s box, the new button and column not seen in a browser, the new CI line not run on GitHub.**
 - Not built: a tenant-wide "watch everything" switch, a per-collector severity, a limit above 3 days, a "recovered" notification (the alert closes with a note, nothing is sent), silence per source type or per
   device behind a broker (it is per collector, so a broker with ten devices is silent only when all ten are), a watch for sources that appear only in events.
+
+### Broker key alerts (what exists)
+- **The gap it closes:** a broker whose installer key was revoked or deleted is rejected by ASIX, but it only showed as "Collector disconnected" after its threshold, with no cause. This alert is
+  immediate and says what to do.
+- **No new setting, no schema change, no new button:** it applies to brokers (collectors whose version reads `vector-<version>`) that already have **Alert if down** on. It runs in the same watchdog cycle
+  (same start-up grace, same `ASIX_WATCHDOG_SEVERITY`, same notification channels) as `src/collectors/key-watch.js`.
+- **What it does:** a watched broker still tied to a revoked key, or whose key was deleted (`collectors.key_id` is NULL), gets one alert: rule `Broker installer key unusable`, title
+  `Broker installer key unusable: <name>`, severity `high`, group `brokerkey:<id>`, no detection rule behind it. The summary tells the operator to press **Rotate key** on the Brokers page and re-run the bootstrap script.
+- **Rotation raises nothing:** the new key is active and the heartbeat moves the broker onto it before the old key is revoked, so a revoked key with no broker on it is not a problem. Revoking the old key
+  *before* the broker moved does raise it, which is correct.
+- **One alert per problem:** it stays while the problem stays. It closes (with an "ASIX" note) when the broker is on an active key again, the watch is turned off, or the broker is deleted. If an analyst
+  closes it while the same key is still bad it is not raised again for that key; a different problem (the replacement key revoked, or the key deleted) raises a new one.
+- Checked on real PostgreSQL 16 with the real heartbeat lane, the real rotate-key, revoke and delete routes and the real notification dispatcher (`tests/broker-key-watch-db.test.js`, in the CI `postgres`
+  job: only the watched broker on a bad key raises, not healthy, unwatched, non-broker or other-tenant ones; sent once; no repeat; closed on rotation; the normal rotation order raises nothing; deleted key
+  raises a new alert; watch off and broker deleted close it; the watchdog's real `runOnce` runs it without error) and in unit tests (`tests/broker-key-watch.test.js`, in `npm test`).
+  **Not yet run on the k3s box or a real broker, the new CI line has not run on GitHub.**
+- Not built: an alert for a key that is about to expire (keys do not expire), a separate alert for a key revoked on a collector that is not a broker, a "recovered" notification.
 
 ### Alert triage (what exists)
 - Each alert can be assigned to a user of the same tenant (or unassigned), and carries analyst notes
