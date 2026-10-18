@@ -36,7 +36,8 @@ function shape(row, { now = Date.now(), events24h = 0, target = null, syslogPort
   b.upgrade = upgradeState(b.vector_version, target);   // none | unknown | current | behind | ahead (src/brokers/upgrade.js); not a problem
   // The port asked of THIS broker: its own if one was set on the Brokers page, else the tenant-wide one (src/brokers/config.js).
   const own = row.syslog_port_override != null ? Number(row.syslog_port_override) : null;
-  b.config = { ...configState(effectivePort(syslogPort, own), row, now), source: portSource(syslogPort, own), override_port: own };   // state: none | unknown | applied | rejected | pending | stale; not a problem
+  const left = row.syslog_port_exclude === true;   // left out of the tenant-wide port; an own port still applies
+  b.config = { ...configState(effectivePort(syslogPort, own, left), row, now), source: portSource(syslogPort, own, left), override_port: own, excluded: left };   // state: none | unknown | applied | rejected | pending | stale; not a problem
   return b;
 }
 
@@ -53,6 +54,7 @@ function summarize(brokers) {
     config_applied: brokers.filter((b) => b.config && b.config.state === 'applied').length,
     config_not_applied: brokers.filter((b) => b.config && ['unknown', 'rejected', 'pending', 'stale'].includes(b.config.state)).length,
     port_overrides: brokers.filter((b) => b.config && b.config.source === 'broker').length,
+    port_excluded: brokers.filter((b) => b.config && b.config.excluded && b.config.source !== 'broker').length,
     events_24h: brokers.reduce((n, b) => n + b.events_24h, 0),
     versions, mixed_versions: Object.keys(versions).length > 1,
   };

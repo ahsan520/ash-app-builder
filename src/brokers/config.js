@@ -95,9 +95,12 @@ function configState(configured, row, now = Date.now()) {
 const COLLECTOR_NAME_RE = /^[A-Za-z0-9._:-]{1,100}$/;   // the same rule checkReport applies; every character is safe in a URL
 const nameOrNull = (v) => (typeof v === 'string' && COLLECTOR_NAME_RE.test(v) ? v : null);
 
-// The port this broker is asked for: its own if it has one, else the tenant-wide one, else null (no opinion).
-const effectivePort = (tenantPort, overridePort) => (overridePort != null ? Number(overridePort) : tenantPort != null ? Number(tenantPort) : null);
-const portSource = (tenantPort, overridePort) => (overridePort != null ? 'broker' : tenantPort != null ? 'tenant' : 'none');
+// The port this broker is asked for: its own if it has one, else the tenant-wide one, else null (no opinion). A broker that is LEFT OUT of the
+// tenant-wide port (collectors.syslog_port_exclude) is not asked for the tenant-wide port: null, so it keeps whatever it listens on now. Its own
+// port still applies, because that was chosen for it alone.
+const effectivePort = (tenantPort, overridePort, exclude = false) => (overridePort != null ? Number(overridePort) : exclude ? null : tenantPort != null ? Number(tenantPort) : null);
+// broker = its own port; excluded = a tenant-wide port is set but this broker is left out of it; tenant = follows it; none = nothing asked.
+const portSource = (tenantPort, overridePort, exclude = false) => (overridePort != null ? 'broker' : tenantPort != null ? (exclude ? 'excluded' : 'tenant') : 'none');
 
 // Found by key AND name, so one key cannot read another broker's override. No such row = no override.
 async function readOverride(client, tenantId, keyId, name) {
@@ -112,7 +115,21 @@ async function writeOverride(client, tenantId, brokerId, port) {
   return r.rows[0] ? { id: r.rows[0].id, name: r.rows[0].name } : null;
 }
 
+// ---- Leaving one broker out of the tenant-wide port -----------------------------------------------------------------------
+// Found by key AND name like the override, so one key cannot read another broker's flag. No such row = not left out.
+async function readExclude(client, tenantId, keyId, name) {
+  const r = await client.query('SELECT syslog_port_exclude FROM collectors WHERE tenant_id = $1 AND key_id = $2 AND name = $3', [tenantId, keyId, name]);
+  return !!(r.rows[0] && r.rows[0].syslog_port_exclude === true);
+}
+
+// Sets or clears the flag on one broker (a collector whose version reads vector-<version>). Returns { id, name, syslog_port_exclude } or null if there is no such broker.
+async function writeExclude(client, tenantId, brokerId, exclude) {
+  const r = await client.query(
+    "UPDATE collectors SET syslog_port_exclude = $3 WHERE id = $1 AND tenant_id = $2 AND version ILIKE 'vector-%' RETURNING id, name, syslog_port_exclude", [brokerId, tenantId, exclude]);
+  return r.rows[0] ? { id: r.rows[0].id, name: r.rows[0].name, syslog_port_exclude: r.rows[0].syslog_port_exclude === true } : null;
+}
+
 const view = (port) => ({ syslog_port: port, reserved_ports: Object.keys(RESERVED).map(Number) });
 
 module.exports = { RESERVED, REPORT_FRESH_MS, checkSyslogPort, readSyslogPort, writeSyslogPort, view, checkReport, recordReport, configState,
-  nameOrNull, effectivePort, portSource, readOverride, writeOverride };
+  nameOrNull, effectivePort, portSource, readOverride, writeOverride, readExclude, writeExclude };

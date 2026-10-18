@@ -61,6 +61,7 @@ app.use(require('./routes/brokers'));
 app.use(require('./routes/broker-settings'));
 app.use(require('./routes/broker-config'));
 app.use(require('./routes/broker-port'));
+app.use(require('./routes/broker-port-exclude'));
 app.use(require('./routes/notifications'));
 app.use(require('./routes/storage'));
 app.use(require('./routes/capacity'));
