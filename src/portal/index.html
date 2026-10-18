@@ -1006,6 +1006,7 @@ async function pgSafety() {
     r.warnings.length ? el('div', {}, r.warnings.map(warnCard)) : card('', el('span', { className: 'ok pill', textContent: 'Nothing to report.' })),
     el('div', { className: 'grid' },
       card('Last successful backup', r.last_success ? kv({ when: when(r.last_success.finished_at), trigger: r.last_success.trigger, databases: (r.last_success.databases || []).join(', '), size: fmtSize(r.last_success.bytes) }) : el('div', { className: 'mute', textContent: 'None yet.' })),
+      card('Copy on another machine', r.offsite && r.offsite.last_success ? kv({ when: when(r.offsite.last_success.finished_at), to: (r.offsite.last_success.databases || []).join(', '), size: fmtSize(r.offsite.last_success.bytes), checked: r.offsite.last_success.verified ? 'yes, same names and sizes' : 'no' }) : el('div', { className: 'mute', textContent: 'No copy has been made yet. On the VM: sudo bash scripts/offsite-backup.sh --install-timer --target user@host:/path' })),
       card('Last restore test', r.last_verified ? kv({ when: when(r.last_verified.verified_at), set: r.last_verified.set_name }) : el('div', { className: 'mute', textContent: 'A backup is restored into a scratch database about once a week to prove it works; none has run yet.' }))),
     card('Data volumes', vol === null ? el('div', { className: 'mute', textContent: 'Volume settings could not be read from the cluster (see the checks above).' })
       : vol.length === 0 ? el('div', { className: 'mute', textContent: 'No data volumes found yet.' })

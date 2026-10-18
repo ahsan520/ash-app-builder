@@ -77,4 +77,4 @@ sudo scripts/restore-backup.sh ch-restore --yes [--from D] [--to D]      # ADD t
 ## Not built
 - ClickHouse's own `BACKUP` command, point-in-time restore, and restoring one tenant.
 - A portal screen for the ClickHouse backup (the findings appear in the existing Data safety list).
-- Off-VM copies or S3.
+- S3 or other object storage. Off-VM copies of the backup folder (this backup included) to another machine are built: see `docs/offsite-backup.md`.

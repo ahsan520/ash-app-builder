@@ -52,10 +52,21 @@ async function report(now = Date.now()) {
     if (released.length) add('released', 'info', `${released.length} retained volume(s) from a deleted claim still hold data`, released.map((x) => `${x.claim} (${x.path || x.name})`).join(', '), 'See: sudo scripts/recover-volume.sh list');
     if (!volumes.length) add('no_volumes', 'info', 'No data volumes found for this namespace', 'Nothing to protect yet.');
   }
-  add('same_disk', 'info', 'Backups are stored on this VM', `They are in ${BACKUP_DIR} on the same disk as the database, so they protect against mistakes and bad upgrades but not against losing the VM. Copy them somewhere else regularly (rsync, a NAS, cloud storage).`, 'Keep a copy of the passphrase (/root/asix-backup-key.txt) outside the VM too: without it the backups cannot be read.');
+  // Copies sent to another machine by scripts/offsite-backup.sh (rows of kind 'offsite'). Until a recent one exists the backups only live on this VM.
+  const offRuns = (await db.query(
+    `SELECT id, trigger, status, started_at, finished_at, bytes::bigint AS bytes, databases, verified, verified_at, error
+     FROM backup_runs WHERE kind = 'offsite' ORDER BY started_at DESC LIMIT 15`)).rows.map((r) => ({ ...r, bytes: r.bytes == null ? null : Number(r.bytes) }));
+  const offOk = offRuns.find((r) => r.status === 'completed') || null, offLatest = offRuns[0] || null;
+  const offAge = offOk ? ageH(asUtc(offOk.finished_at), now) : null;
+  const offFresh = !!offOk && offAge <= 36;
+  if (offLatest && offLatest.status === 'failed') add('offsite_failed', 'warning', 'The most recent off-VM copy of the backups failed', offLatest.error || 'No error text was recorded.', 'Test the connection: sudo bash scripts/offsite-backup.sh --check (it uses the saved settings), then copy again: sudo bash scripts/offsite-backup.sh');
+  if (offOk && offAge > 72) add('offsite_stale', 'critical', `The last good off-VM copy is ${Math.round(offAge / 24)} days old`, 'The copy runs every night after the backup (03:30).', 'Check the timer: systemctl status asix-offsite-backup.timer, and the last run: journalctl -u asix-offsite-backup -n 30');
+  else if (offOk && offAge > 36) add('offsite_stale', 'warning', `The last good off-VM copy is ${Math.round(offAge)} hours old`, 'The copy runs every night after the backup (03:30).', 'Check the timer: systemctl status asix-offsite-backup.timer, and the last run: journalctl -u asix-offsite-backup -n 30');
+  if (!offFresh) add('same_disk', 'info', 'Backups are stored on this VM', `They are in ${BACKUP_DIR} on the same disk as the database, so they protect against mistakes and bad upgrades but not against losing the VM. Copy them to another machine every night.`, 'Set it up once: sudo bash scripts/offsite-backup.sh --install-timer --target user@host:/path (see docs/offsite-backup.md). Keep a copy of the passphrase (/root/asix-backup-key.txt) outside the VM too: without it the backups cannot be read.');
   const order = { critical: 0, warning: 1, info: 2 }; w.sort((x, y) => order[x.severity] - order[y.severity]);
   return { schedule: 'daily at 02:17 (server time)', backup_dir: BACKUP_DIR, keep: 14, last_success: lastOk, last_verified: lastVerified, runs, volumes,
     clickhouse: { active: chActive, last_success: chOk, last_verified: chVerified, runs: chRuns },
+    offsite: { configured: offRuns.length > 0, fresh: offFresh, last_success: offOk, runs: offRuns },
     verdict: w.some((x) => x.severity === 'critical') ? 'critical' : w.some((x) => x.severity === 'warning') ? 'attention' : 'ok', warnings: w };
 }
 

@@ -337,7 +337,16 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
 - Checked on real PostgreSQL 16 and ClickHouse 24.8.14.39: unit tests, a gated real-database test (CI job `clickhouse`), and the real nightly job and `restore.js`
   commands end to end. A bug found on the way (two runs in one second could write the same file name) is fixed and has a test. **Run on the k3s box 2026-10-17 (nightly job's
   ClickHouse part, `ch-verify`, `ch-restore --as`); not measured at millions of events.**
-- Not built: ClickHouse's native `BACKUP`, restoring one tenant, off-VM copies, a portal screen (findings appear in the existing list).
+- Not built: ClickHouse's native `BACKUP`, restoring one tenant, a portal screen (findings appear in the existing list). Off-VM copies are built: see "Off-VM copy of the backups" below.
+
+### Off-VM copy of the backups (what exists)
+- `scripts/offsite-backup.sh` copies the encrypted `asix-*` backup files (PostgreSQL and ClickHouse) to another machine with rsync over SSH (or to a local folder), checks the copy with a
+  dry-run rsync (same names and sizes), and records a `backup_runs` row of `kind = 'offsite'`. `--install-timer` saves the settings and runs it every night at 03:30. Setup and details: `docs/offsite-backup.md`.
+- The Data safety page shows a **Copy on another machine** card. The info finding "Backups are stored on this VM" stays until a good copy is under 36 hours old; a failed latest copy is a warning;
+  a last good copy over 36 hours old is a warning, over 72 hours critical. No schema change (`backup_runs.kind` is a free text column).
+- It never deletes on the other machine. The files are useless without the backup passphrase, which must be kept outside the VM too.
+- Checked on real PostgreSQL 16 and over real SSH on one machine, unit tests and a gated DB test (CI `postgres` job). **Not run on the k3s box yet; the SSH path is not in CI.**
+- Not built: pruning the other machine, S3 or object storage, a portal button, an alert when the timer is missing before any copy was recorded.
 
 ## Open decisions (ask before committing)
 - Smallest Home machine to design against (assumed: 4 vCPU / 8 GB / 100 GB until told otherwise).
