@@ -1168,21 +1168,39 @@ async function rotateBrokerKey(b) {
     el('div', { className: 'mute', textContent: 'Command' }), el('pre', { style: 'white-space:pre-wrap', textContent: r.command }),
     el('div', { className: 'actions' }, copyBtn(() => r.command, 'Copy command'), revoke, el('button', { className: 'btn pri', textContent: 'Done', onclick: () => { m.close(); route(); } })));
 }
+// ---- Broker upgrades ----
+// The Vector version this tenant's brokers should run. ASIX runs nothing on a broker: this card only records the target, the table
+// says which brokers are behind it, and the command below is run by hand on each broker VM (scripts/deploy/upgrade-broker.sh).
+function brokerUpgradeCard(r) {
+  const inp = el('input', { value: r.vector_target || '', placeholder: 'for example 0.60.0', style: 'width:150px' });
+  const save = async (v) => { try { await api('/v1/broker-settings', { method: 'PUT', body: { vector_target: v } }); route(); } catch (e) { alert(e.message); } };
+  const behind = r.summary.behind_target;
+  return card('Vector version target',
+    el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, inp,
+      el('button', { className: 'btn pri', textContent: 'Set target', onclick: () => save(inp.value.trim() || null) }),
+      r.vector_target ? el('button', { className: 'btn', textContent: 'Clear', onclick: () => save(null) }) : '',
+      r.vector_target ? (behind ? pill(behind + ' of ' + r.summary.total + ' behind', 'bad') : pill('All brokers at or above the target', 'ok')) : el('span', { className: 'mute', textContent: 'No target set.' })),
+    el('div', { className: 'mute', style: 'margin:10px 0 6px;font-size:13px', textContent: 'ASIX does not change a broker. To upgrade one, run this on the broker VM as root, from the ASIX repo checkout. It installs the version, checks the broker\'s config against it and only then restarts Vector:' }),
+    el('pre', { className: 'mono', style: 'white-space:pre-wrap;margin:0' }, r.upgrade_command), el('div', { style: 'margin-top:8px' }, copyBtn(() => r.upgrade_command, 'Copy command')));
+}
+const UPGRADE_PILL = { behind: (t) => pill('Behind ' + t, 'bad'), current: () => pill('Up to date', 'ok'), ahead: () => pill('Newer than target', 'off') };
 // Read-only: the broker VMs that report to this install (docs/broker-vm.md), and the command to add one.
 async function pgBrokers() {
   const r = await api('/v1/brokers'), s = r.summary;
   const ver = Object.entries(s.versions).map(([v, n]) => v + ' x' + n).join(', ');
   return [el('div', { style: 'display:flex;align-items:baseline;gap:12px;flex-wrap:wrap' }, el('h2', { textContent: 'Brokers' }), el('span', { className: 'mute', textContent: 'updated ' + when(r.generated_at) + ' UTC' }),
       el('button', { className: 'btn', style: 'margin-left:auto', textContent: 'Refresh', onclick: () => route() })),
-    el('p', { className: 'desc', textContent: 'Broker VMs that receive syslog and forward it to ASIX. A broker shows here once it has sent a heartbeat. Change a broker by re-running its bootstrap script; Rotate key makes a new key for one. Turn on "Alert if down" for a broker on the Collectors page.' }),
+    el('p', { className: 'desc', textContent: 'Broker VMs that receive syslog and forward it to ASIX. A broker shows here once it has sent a heartbeat. Change a broker by re-running its bootstrap script; Rotate key makes a new key for one; set a Vector version target below to see which brokers are behind. Turn on "Alert if down" for a broker on the Collectors page.' }),
     el('div', { className: 'grid' },
       card('Brokers', el('div', { className: 'stat' }, String(s.total), el('small', { textContent: s.connected + ' connected, ' + s.disconnected + ' disconnected' }))),
       card('Events, last 24 hours', el('div', { className: 'stat' }, s.events_24h.toLocaleString(), el('small', { textContent: r.counts_error || 'through brokers' }))),
       card('Vector versions', el('div', {}, s.total ? ver : '-', s.mixed_versions ? el('div', { className: 'mute', style: 'margin-top:6px;font-size:12px', textContent: 'More than one version is in use.' }) : ''))),
+    brokerUpgradeCard(r),
     card('', table([
       { h: 'Name', f: (b) => b.name + (b.alias ? ' (' + b.alias + ')' : '') },
       { h: 'Status', f: (b) => pill(b.status === 'connected' ? '\u2713 Connected' : '\u2715 Disconnected', b.status === 'connected' ? 'ok' : 'off') },
-      { h: 'Vector', f: (b) => b.vector_version || '-' }, { h: 'OS', f: (b) => b.os || '-' }, { h: 'IP address', f: (b) => b.last_ip || '-' },
+      { h: 'Vector', f: (b) => b.vector_version || '-' }, { h: 'Upgrade', f: (b) => (UPGRADE_PILL[b.upgrade] ? UPGRADE_PILL[b.upgrade](r.vector_target) : '-') },
+      { h: 'OS', f: (b) => b.os || '-' }, { h: 'IP address', f: (b) => b.last_ip || '-' },
       { h: 'Last seen (UTC)', f: (b) => when(b.last_seen) }, { h: 'Events (24h)', f: (b) => b.events_24h.toLocaleString() },
       { h: 'Alert if down', f: (b) => pill(b.watch_disconnect ? 'On' : 'Off', b.watch_disconnect ? 'ok' : 'off') },
       { h: 'Installer', f: (b) => (b.installer ? b.installer.name + (b.installer.status === 'revoked' ? ' (revoked)' : '') : 'deleted') },

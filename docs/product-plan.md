@@ -149,9 +149,31 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   old key with no collectors), then press **Revoke old key** in the dialog or revoke it on the Installers page. Only the key hash is stored. A broker whose key was revoked or
   deleted can be rotated too. Checked on real PostgreSQL 16 (`tests/broker-rotate-key-db.test.js`, CI `postgres` job: both keys send a heartbeat, the broker moves to the new one,
   the revoked old one is refused) and in unit and route tests (`tests/broker-rotate-key.test.js`). The button has not been seen in a browser; not tried on a real broker VM.
-- Not built: pushing the new key to the broker (re-running the bootstrap script is still by hand), changing a broker from the portal otherwise (config push, upgrades, capacity per broker), TLS on the in-cluster Node collector, certificate renewal,
+- **Upgrades, first slice (done):** see "Broker upgrades" below: a target Vector version, a per-broker "Behind / Up to date" flag, and `scripts/deploy/upgrade-broker.sh` to run on the VM.
+- Not built: pushing the new key to the broker (re-running the bootstrap script is still by hand), changing a broker from the portal otherwise (config push, running an upgrade from the portal, capacity per broker), TLS on the in-cluster Node collector, certificate renewal,
   non-syslog sources on the broker, Kafka between broker and parser (Phase 3). The connected threshold is per collector now (see "Collector connected threshold" below), and
   a broker can raise an alert when it goes Disconnected (see "Collector disconnect alerts" below).
+
+### Broker upgrades (what exists, first slice)
+- **The gap it closes:** the Brokers page showed Vector versions and said "more than one version is in use" but not which broker was behind or what to do about it. Upgrading was
+  `apt` by hand with no check that the new Vector still accepts the broker's config (0.59 broke the old one).
+- **A target, not a push.** Brokers page, **Vector version target** card (`GET` and `PUT /v1/broker-settings`, body `{ "vector_target": "0.60.0" | null }`; uses `collectors:read` /
+  `collectors:write`, no role change). Only plain `x.y.z` is accepted (a 400 otherwise); empty or `null` clears it. Each broker in `GET /v1/brokers` now carries `upgrade`: `none` (no target),
+  `current`, `behind`, `ahead` or `unknown` (the broker's version or the target is not plain `x.y.z`); the response also carries `vector_target`, `upgrade_command`, and the summary
+  `behind_target`. Versions are compared as numbers (0.9.0 is older than 0.59.0). Behind is **not** a problem in `problems` and raises no alert. **ASIX runs nothing on a broker.**
+- **The script:** `scripts/deploy/upgrade-broker.sh [--version X.Y.Z] [--dry-run]`, run as root on the broker VM. Installs the package, runs `vector validate` on that broker's own config (and
+  `vector-tls.yaml` if there is one) against the NEW binary before restarting, restarts only if that passes, waits for Vector's health check, sends one heartbeat. A failed check leaves
+  Vector running on the old binary and prints the downgrade command. Refuses a downgrade or an unknown version. Details: `docs/broker-vm.md`, "Upgrading Vector".
+- **Schema:** table `broker_settings` (one row per tenant, `vector_target` with a CHECK on the format, row-level security like the other tenant tables; no row = no target), created by the
+  normal schema-init job and safe to re-run. If the table is missing (schema job not yet run) the Brokers page still loads, with no target.
+- Checked on real PostgreSQL 16 with the schema applied twice (`tests/broker-upgrade-db.test.js`, in the CI `postgres` job: no row means no target, set / update / clear on one row, the
+  `updated_by` column, the states `behind` / `current` / `unknown` from real collector rows, another tenant does not see it, the database refuses a malformed value;
+  `brokers-db`, `broker-rotate-key-db`, `heartbeat-db`, `collector-watch-all-db` still pass), in unit and route tests (`tests/broker-upgrade.test.js`) and with every system command
+  stubbed for the script (`tests/upgrade-broker-script.test.js`: order of the steps, no restart on a bad config, refusals, dry run, TLS file included, unhealthy restart). `npm test` (356
+  tests) and `npm run lint` clean; `scripts/ci/validate-k8s.py` 0 failures; portal script parses. **Not run on a real broker VM (the script has only run against stubs: `apt`, `vector`
+  and `systemctl` are not real), the card and the Upgrade column have not been seen in a browser, the new CI line has not run on GitHub, not yet run on the k3s box.**
+- Not built: running the upgrade from the portal (it needs an agent or a pull on the broker and a decision on how that is authenticated and signed), a per-broker target, a rollback
+  command that undoes a restart that failed (the script prints the way back, it does not run it), non-apt systems, config push.
 
 ### Collector connected threshold (what exists)
 - A collector is **Connected** if it was last seen within its threshold: 15 minutes unless the collector has its own. A slow sender (a nightly job) can be given a

@@ -3,6 +3,7 @@
 // that sends the heartbeat from deploy/broker/asix-broker-heartbeat.sh, whose version reads "vector-<version>".
 // This file recognises those rows and shapes them for the Brokers page. Pure functions, no database.
 const { effectiveMinutes, isCustom, statusOf, tsMs } = require('../collectors/status');
+const { upgradeState } = require('./upgrade');
 
 const BROKER_VERSION_SQL = 'vector-%';              // the same rule as isBroker(), for the query
 const isBroker = (row) => !!row && /^vector-/i.test(String(row.version || ''));
@@ -19,7 +20,7 @@ function problemsOf(b, now = Date.now()) {
   return out;
 }
 
-function shape(row, { now = Date.now(), events24h = 0 } = {}) {
+function shape(row, { now = Date.now(), events24h = 0, target = null } = {}) {
   const b = {
     id: row.id, name: row.name, alias: row.alias || null,
     vector_version: String(row.version || '').replace(/^vector-/i, '') || null,
@@ -31,6 +32,7 @@ function shape(row, { now = Date.now(), events24h = 0 } = {}) {
     installer: row.key_id ? { id: row.key_id, name: row.installer_name || null, status: row.key_status || 'active', key_prefix: row.key_prefix || null, last_used_at: row.key_last_used_at || null } : null,
   };
   b.problems = problemsOf(b, now);
+  b.upgrade = upgradeState(b.vector_version, target);   // none | unknown | current | behind | ahead (src/brokers/upgrade.js); not a problem
   return b;
 }
 
@@ -43,6 +45,7 @@ function summarize(brokers) {
     connected: brokers.filter((b) => b.status === 'connected').length,
     disconnected: brokers.filter((b) => b.status === 'disconnected').length,
     with_problems: brokers.filter((b) => b.problems.length).length,
+    behind_target: brokers.filter((b) => b.upgrade === 'behind').length,
     events_24h: brokers.reduce((n, b) => n + b.events_24h, 0),
     versions, mixed_versions: Object.keys(versions).length > 1,
   };

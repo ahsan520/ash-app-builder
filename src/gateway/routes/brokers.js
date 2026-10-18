@@ -4,6 +4,7 @@ const { db, guarded, apiError, UUID_RE } = require('../shared');
 const { generateKey, hashKey, PLATFORMS: KEY_PLATFORMS } = require('../../ingest/http-ingest');
 const { getEventStore } = require('../../events');
 const view = require('../../brokers/broker-view');
+const upgrade = require('../../brokers/upgrade');
 
 // ---- Brokers (read-only) --------------------------------------------------------------------------
 // The broker VMs that report to this install, recognised by their heartbeat (see src/brokers/broker-view.js), with their
@@ -19,9 +20,13 @@ router.get('/v1/brokers', ...guarded('collectors:read'), async (req, res) => {
     try { day = await getEventStore().groupCounts(req.tenant_id, { by: 'collector_id', since: new Date(Date.now() - 86400000).toISOString() }); }
     catch (e) { countsError = 'Event counts are unavailable right now.'; console.error('Broker counts failed:', e.message); }
     const d = new Map(day.map((g) => [g.key, g.events]));
+    let target = null;   // the page still loads if the setting cannot be read (a database that has not had the new schema yet)
+    try { target = await db.withTenant(req.tenant_id, (client) => upgrade.readTarget(client, req.tenant_id)); }
+    catch (e) { console.error('Broker target version read failed:', e.message); }
     const now = Date.now();
-    const brokers = reg.rows.filter(view.isBroker).map((r) => view.shape(r, { now, events24h: d.get(r.name) || 0 }));
+    const brokers = reg.rows.filter(view.isBroker).map((r) => view.shape(r, { now, events24h: d.get(r.name) || 0, target }));
     res.status(200).json({ success: true, generated_at: new Date(now).toISOString(), summary: view.summarize(brokers), brokers,
+      vector_target: target, upgrade_command: upgrade.upgradeCommand(target),
       install_command: view.installCommand(), counts_error: countsError });
   } catch (e) {
     console.error('Broker listing failed:', e.message);

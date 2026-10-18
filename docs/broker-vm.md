@@ -142,7 +142,7 @@ Plain syslog is readable and forgeable by anyone on the path. For sources that c
 - One syslog port for UDP and TCP, plus the optional TLS port. No non-syslog sources (files, Windows events, Kafka) on the broker yet.
   TLS certificates are not renewed or reloaded for you (re-run the script after replacing them).
 - The portal has a read-only **Brokers** page (Settings, Brokers: status, Vector version, events in 24 hours, installer key state, what needs attention, and the
-  command to add a broker). It cannot change a broker: there is no remote config push, upgrade or capacity view. A broker is recognised by its heartbeat's
+  command to add a broker). It cannot change a broker: there is no remote config push, no remote upgrade (it shows which brokers are behind a target Vector version and gives the command, see "Upgrading Vector" below) and no capacity view. A broker is recognised by its heartbeat's
   version text (`vector-<version>`), so a broker that has never sent a heartbeat does not appear. `src/brokers/broker-framework.js` is still the Phase 3 placeholder.
 - A 4xx other than 408/429 from ASIX (for example a revoked key) is not retried by Vector, so those events are
   dropped; fix the key and re-run the bootstrap script.
@@ -160,3 +160,17 @@ by email, Slack or webhook. It is off until you press the button; a slow or rare
 If a key leaked, or the old one was revoked, press **Rotate key** on the broker's row on the Brokers page. ASIX makes a new key and shows it once with the bootstrap command for
 that broker. Run that command on the broker VM, as root, with the same `--ca` or `--tls-*` options as the first install. The broker keeps working on the old key until you
 revoke it, so do the revoke last: when the broker shows Connected again, press **Revoke old key** in the same dialog, or revoke it on the Installers page.
+
+## Upgrading Vector
+ASIX never runs anything on a broker, so an upgrade is a command you run on the VM. The Brokers page helps with the rest:
+1. Set a **Vector version target** on the Brokers page (for example `0.60.0`; empty clears it). Each broker row then shows **Behind 0.60.0**, **Up to date** or **Newer than target**
+   (a version that is not a plain `x.y.z`, such as a nightly build, shows nothing). Being behind is not a "needs attention" problem and raises no alert. The target is stored per tenant (`broker_settings`).
+2. On each broker VM, as root, from the ASIX repo checkout: `sudo ./scripts/deploy/upgrade-broker.sh --version 0.60.0` (the card shows the exact command; without `--version` it takes
+   the newest version the package repository offers). `--dry-run` says what it would do and changes nothing.
+3. The script installs the package, then checks **this broker's own config** (including `vector-tls.yaml` if present) against the new binary with `vector validate` **before** restarting. If that
+   check fails, Vector is not restarted and keeps forwarding on the old binary, and the script prints the `apt-get install --allow-downgrades vector=<old version>` command to go back (this
+   matters: Vector 0.59 stopped accepting the old config until `VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION=true` was set). After the restart it waits up to 30 seconds for Vector's health
+   check, then sends one heartbeat so the page shows the new version at once.
+4. It refuses a version older than the one installed, and a version the repository does not have. It does not touch `broker.env`, the keys, the certificates or the disk buffer.
+
+Upgrade one broker first and watch it on the Brokers page before doing the rest. Debian and Ubuntu only (it uses `apt`).

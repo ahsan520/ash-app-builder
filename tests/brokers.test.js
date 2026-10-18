@@ -61,7 +61,7 @@ describe('summarize', () => {
 describe('GET /v1/brokers', () => {
   const TENANT = '11111111-1111-4111-8111-111111111111';
   let rows; let seen; let failStore = false;
-  const fakeDb = { withTenant: async (t, fn) => fn({ query: async (sql, args) => { seen = { sql, args }; return { rows }; } }), query: async () => ({ rows: [] }) };
+  const fakeDb = { withTenant: async (t, fn) => fn({ query: async (sql, args) => { if (/FROM collectors/.test(sql)) seen = { sql, args }; return { rows }; } }), query: async () => ({ rows: [] }) };
   const shared = require('../src/gateway/shared');
   const savedShared = require.cache[require.resolve('../src/gateway/shared')].exports;
   let srv; let base;

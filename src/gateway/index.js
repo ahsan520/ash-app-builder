@@ -56,6 +56,7 @@ app.use(require('./routes/collector-watch'));
 app.use(require('./routes/collector-silent'));
 app.use(require('./routes/collector-watch-all'));
 app.use(require('./routes/brokers'));
+app.use(require('./routes/broker-settings'));
 app.use(require('./routes/notifications'));
 app.use(require('./routes/storage'));
 app.use(require('./routes/capacity'));

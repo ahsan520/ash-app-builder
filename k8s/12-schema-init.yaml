@@ -500,6 +500,20 @@ data:
         WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
     GRANT SELECT, INSERT, UPDATE, DELETE ON collector_watch_defaults TO asix_admin;
 
+    -- Broker settings (src/brokers/upgrade.js): the Vector version this tenant's brokers should run. One row per tenant; no row = no target.
+    CREATE TABLE IF NOT EXISTS broker_settings (
+        tenant_id UUID PRIMARY KEY REFERENCES tenants(id),
+        vector_target VARCHAR(20) CHECK (vector_target IS NULL OR vector_target ~ '^[0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}$'),
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_by TEXT
+    );
+    ALTER TABLE broker_settings ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS broker_settings_tenant_isolation ON broker_settings;
+    CREATE POLICY broker_settings_tenant_isolation ON broker_settings FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+    GRANT SELECT, INSERT, UPDATE, DELETE ON broker_settings TO asix_admin;
+
     -- ============================================================
     -- Alert notifications: channels (email / Slack / webhook) and the delivery outbox
     -- ============================================================
