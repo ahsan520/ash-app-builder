@@ -14,7 +14,9 @@ describe('asix-broker-config.sh', () => {
   let tmp, bin, log, envFile, stateDir;
   const stub = (name, body) => fs.writeFileSync(path.join(bin, name), '#!/bin/bash\n' + body + '\n', { mode: 0o755 });
   const state = (f, v) => fs.writeFileSync(path.join(tmp, f), v);
-  const calls = () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) : []);
+  const all = () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) : []);
+  const calls = () => all().filter((c) => !c.startsWith('report'));          // the report to ASIX is checked on its own below
+  const reports = () => all().filter((c) => c.startsWith('report')).map((c) => ({ line: c, body: JSON.parse(/--data (\{.*?\})/.exec(c)[1]) }));
   const env = () => fs.readFileSync(envFile, 'utf8');
   const asks = (port) => state('answer', JSON.stringify({ success: true, config: { syslog_port: port }, interval_seconds: 300 }));
   const run = (extra = {}) => spawnSync('bash', [SCRIPT], { encoding: 'utf8', stdin: 'ignore',
@@ -25,11 +27,12 @@ describe('asix-broker-config.sh', () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bcfg-')); bin = path.join(tmp, 'bin'); log = path.join(tmp, 'calls.log'); envFile = path.join(tmp, 'broker.env'); stateDir = path.join(tmp, 'state');
     fs.mkdirSync(bin); fs.mkdirSync(path.join(tmp, 'vector')); fs.writeFileSync(path.join(tmp, 'vector', 'vector.yaml'), 'sources: {}\n');
     fs.writeFileSync(envFile, BASE, { mode: 0o640 }); fs.chmodSync(envFile, 0o640);
-    asks(1514); state('answer-rc', '0'); state('validate', 'ok'); state('health', 'ok'); state('restart', 'ok');
+    asks(1514); state('answer-rc', '0'); state('report-rc', '0'); state('validate', 'ok'); state('health', 'ok'); state('restart', 'ok');
     stub('id', 'echo 0');
     stub('vector', `if [ "$1" = "validate" ]; then echo "validate port=$(grep '^ASIX_SYSLOG_PORT=' '${envFile}' | cut -d= -f2) \\$*" >> '${log}'; [ "$(cat '${tmp}/validate')" = ok ]; exit $?; fi`);
     stub('systemctl', `echo "systemctl $* port=$(grep '^ASIX_SYSLOG_PORT=' '${envFile}' | cut -d= -f2)" >> '${log}'; [ "$(cat '${tmp}/restart')" = ok ]`);
     stub('curl', `case "$*" in
+  *broker-config/report*) echo "report $*" >> '${log}'; exit $(cat '${tmp}/report-rc');;
   *broker-config*) echo "fetch $*" >> '${log}'; cat '${tmp}/answer'; exit $(cat '${tmp}/answer-rc');;
   *health*) [ "$(cat '${tmp}/health')" = ok ]; exit $?;;
 esac`);
@@ -37,13 +40,13 @@ esac`);
   afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
   it('refuses when not root or when broker.env is missing, and touches nothing', () => {
-    stub('id', 'echo 1000'); assert.strictEqual(run().status, 1); assert.deepStrictEqual(calls(), []);
+    stub('id', 'echo 1000'); assert.strictEqual(run().status, 1); assert.deepStrictEqual(all(), []);
     stub('id', 'echo 0'); fs.rmSync(envFile); const r = run(); assert.strictEqual(r.status, 1); assert.match(r.stderr, /bootstrap-broker\.sh/);
   });
   it('does nothing, and does not even ask ASIX, when the broker did not opt in', () => {
     fs.writeFileSync(envFile, BASE.replace('ASIX_ACCEPT_CONFIG=true\n', ''));
-    const r = run(); assert.strictEqual(r.status, 0); assert.match(r.stdout, /not set up to accept config/); assert.deepStrictEqual(calls(), []); assert.strictEqual(env(), BASE.replace('ASIX_ACCEPT_CONFIG=true\n', ''));
-    fs.writeFileSync(envFile, BASE.replace('=true', '=yes')); assert.deepStrictEqual((run(), calls()), []);
+    const r = run(); assert.strictEqual(r.status, 0); assert.match(r.stdout, /not set up to accept config/); assert.deepStrictEqual(all(), []); assert.strictEqual(env(), BASE.replace('ASIX_ACCEPT_CONFIG=true\n', ''));
+    fs.writeFileSync(envFile, BASE.replace('=true', '=yes')); assert.deepStrictEqual((run(), all()), []);
   });
   it('asks with its own key at the broker-config URL derived from the ingest URL', () => {
     run(); const f = calls().find((c) => c.startsWith('fetch'));
@@ -95,6 +98,48 @@ esac`);
   it('the restart itself failing is handled the same way', () => {
     state('restart', 'bad'); const r = run(); assert.strictEqual(r.status, 1); assert.match(r.stderr, /restart vector failed/); assert.strictEqual(env(), BASE);
     assert.ok(fs.existsSync(path.join(stateDir, 'config-rejected')));
+  });
+  it('tells ASIX what it listens on after a change: the new port, nothing rejected, with its own key at /report', () => {
+    const r = run(); assert.strictEqual(r.status, 0, r.stderr);
+    const rep = reports(); assert.strictEqual(rep.length, 1);
+    assert.deepStrictEqual(rep[0].body, { collector: 'broker-1', syslog_port: 1514, rejected_port: null }, 'read from broker.env after the change');
+    assert.match(rep[0].line, /Authorization: Bearer asix_ik_secretsecret/); assert.match(rep[0].line, /Content-Type: application\/json/);
+    assert.match(rep[0].line, /-X POST/); assert.match(rep[0].line, /https:\/\/asix1:30443\/v1\/ingest\/broker-config\/report/);
+    assert.ok(all().findIndex((c) => c.startsWith('report')) > all().findIndex((c) => c.startsWith('systemctl restart')), 'the report comes after the restart');
+  });
+  it('reports on every run that asked, also when there is nothing to change (null, or the port already in use)', () => {
+    asks(null); run(); asks(514); run();
+    assert.deepStrictEqual(reports().map((x) => x.body), [{ collector: 'broker-1', syslog_port: 514, rejected_port: null }, { collector: 'broker-1', syslog_port: 514, rejected_port: null }]);
+    assert.strictEqual(env(), BASE);
+  });
+  it('a port it rejected is reported as rejected, with the old port still in use, and again on the next run that does not retry it', () => {
+    state('validate', 'bad'); run(); run();
+    assert.deepStrictEqual(reports().map((x) => x.body), [{ collector: 'broker-1', syslog_port: 514, rejected_port: 1514 }, { collector: 'broker-1', syslog_port: 514, rejected_port: 1514 }]);
+    asks(2514); state('validate', 'ok'); run();
+    assert.deepStrictEqual(reports()[2].body, { collector: 'broker-1', syslog_port: 2514, rejected_port: null }, 'a later success clears the rejected port');
+  });
+  it('after an unhealthy restart is put back, the report says the old port and the rejected one', () => {
+    state('health', 'bad'); run(); const rep = reports(); assert.strictEqual(rep.length, 1);
+    assert.deepStrictEqual(rep[0].body, { collector: 'broker-1', syslog_port: 514, rejected_port: 1514 });
+  });
+  it('reports even when it ignored an unsafe answer, but nothing when it never reached ASIX\'s answer for another reason than the fetch', () => {
+    state('answer', '{"success":true,"config":{"syslog_port":22}}'); assert.strictEqual(run().status, 1);
+    assert.deepStrictEqual(reports().map((x) => x.body), [{ collector: 'broker-1', syslog_port: 514, rejected_port: null }]);
+  });
+  it('a report that cannot be sent changes nothing: same exit status, same env, no retry loop', () => {
+    state('report-rc', '22'); let r = run(); assert.strictEqual(r.status, 0, r.stderr); assert.match(env(), /^ASIX_SYSLOG_PORT=1514$/m); assert.strictEqual(reports().length, 1);
+    state('answer-rc', '22'); r = run(); assert.strictEqual(r.status, 1); assert.match(r.stderr, /Could not fetch/);
+    assert.ok(!/report/.test(r.stderr), 'a failed report prints nothing');
+  });
+  it('the broker name in the report is cleaned like the heartbeat does and a missing name means no report', () => {
+    fs.writeFileSync(envFile, BASE.replace('ASIX_BROKER_NAME=broker-1', `ASIX_BROKER_NAME='bro"ker-1'`)); run();
+    assert.strictEqual(reports()[0].body.collector, 'broker-1');
+    fs.writeFileSync(envFile, BASE.replace('ASIX_BROKER_NAME=broker-1\n', '')); const before = reports().length; run(); assert.strictEqual(reports().length, before, 'no name, no report');
+  });
+  it('the default port 514 is reported when broker.env has no port line, and a garbled port line is not reported', () => {
+    asks(null); fs.writeFileSync(envFile, BASE.replace('ASIX_SYSLOG_PORT=514\n', '')); run();
+    assert.deepStrictEqual(reports()[0].body, { collector: 'broker-1', syslog_port: 514, rejected_port: null });
+    fs.writeFileSync(envFile, BASE.replace('ASIX_SYSLOG_PORT=514', 'ASIX_SYSLOG_PORT=abc')); const before = reports().length; run(); assert.strictEqual(reports().length, before);
   });
   it('is syntactically valid bash and ships with its service and timer', () => {
     assert.strictEqual(spawnSync('bash', ['-n', SCRIPT]).status, 0);

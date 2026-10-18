@@ -4,6 +4,8 @@
 // (deploy/broker/asix-broker-config.sh) and applies it only after its own checks. A broker without that flag never asks.
 // Pure rules plus two small database helpers; the broker repeats the port rules on its side, so a wrong value here cannot lock a broker out.
 
+const { tsMs } = require('../collectors/status');
+
 // Ports a broker must never be told to listen on: SSH, HTTPS, Vector's local health API, and the ASIX HTTPS NodePort.
 const RESERVED = { 22: 'SSH', 443: 'HTTPS', 8686: "Vector's local health API", 30443: 'ASIX HTTPS' };
 
@@ -32,6 +34,59 @@ async function writeSyslogPort(client, tenantId, port, userId = null) {
   return port;
 }
 
+// ---- What each broker says it applied ------------------------------------------------------------------------------------
+// A broker that pulls its config also tells ASIX, after every pull, which syslog port it is listening on and which one it rejected
+// (POST /v1/ingest/broker-config/report). That is information, never an instruction: it changes no setting and is stored on the
+// broker's own collector row, so the Brokers page can say Applied, Pending or Rejected instead of only showing the setting.
+const REPORT_FRESH_MS = 15 * 60 * 1000;   // three pull intervals; a report older than this no longer says what the broker is doing
+
+const portOrNull = (v) => {
+  if (v === null || v === undefined) return { value: null };
+  const n = typeof v === 'number' ? v : (typeof v === 'string' && /^[0-9]{1,5}$/.test(v) ? Number(v) : NaN);
+  return Number.isInteger(n) && n >= 1 && n <= 65535 ? { value: n } : { error: true };
+};
+
+// Validates the report body: { collector: 'broker-1', syslog_port: 1514, rejected_port: 2514 | null }. Returns { name, port, rejected } or { error }.
+function checkReport(body) {
+  const b = body && typeof body === 'object' && !Array.isArray(body) ? body : null;
+  if (!b) return { error: 'Send a JSON object with collector and syslog_port' };
+  const name = typeof b.collector === 'string' ? b.collector : '';
+  if (!/^[A-Za-z0-9._:-]{1,100}$/.test(name)) return { error: 'collector: 1-100 chars of letters, digits . _ : -' };
+  const port = portOrNull(b.syslog_port), rej = portOrNull(b.rejected_port);
+  if (port.error || port.value === null) return { error: 'syslog_port must be a whole number from 1 to 65535' };
+  if (rej.error) return { error: 'rejected_port must be a whole number from 1 to 65535, or null' };
+  return { name, port: port.value, rejected: rej.value };
+}
+
+// Stores a report on the collector row of THE KEY'S OWN broker (same name, key_id = the key that sent it), so one key cannot write
+// another broker's row. Returns true if a row was updated. Nothing is inserted: a broker that has not sent a heartbeat has no row yet.
+async function recordReport(client, tenantId, keyId, report) {
+  const r = await client.query(
+    `UPDATE collectors SET config_syslog_port = $4, config_rejected_port = $5, config_reported_at = localtimestamp
+     WHERE tenant_id = $1 AND key_id = $2 AND name = $3`, [tenantId, keyId, report.name, report.port, report.rejected]);
+  return r.rowCount > 0;
+}
+
+
+// The state of one broker against the port ASIX is asking for. `row` carries config_syslog_port, config_rejected_port, config_reported_at.
+//   none      ASIX has no port set (the broker's own port, if it reported one, is still returned)
+//   unknown   a port is set but this broker never reported: it did not opt in (--accept-config), or its script predates reporting
+//   applied   the broker reports listening on that port
+//   rejected  the broker reports it tried that port and put its old settings back (journalctl -u asix-broker-config on the broker)
+//   pending   the broker reports a different port and has not rejected this one: it has not picked it up yet
+//   stale     as pending, but its last report is older than 15 minutes: it is not asking any more (timer stopped, Vector unhealthy, VM off)
+function configState(configured, row, now = Date.now()) {
+  const reported = row && row.config_syslog_port != null ? Number(row.config_syslog_port) : null;
+  const rejected = row && row.config_rejected_port != null ? Number(row.config_rejected_port) : null;
+  const at = row && row.config_reported_at ? tsMs(row.config_reported_at) : NaN;
+  const out = { state: 'none', configured_port: configured, reported_port: reported, rejected_port: rejected, reported_at: row && row.config_reported_at ? row.config_reported_at : null };
+  if (configured === null || configured === undefined) return out;
+  if (reported === null) return { ...out, state: 'unknown' };
+  if (reported === configured) return { ...out, state: 'applied' };
+  if (rejected === configured) return { ...out, state: 'rejected' };
+  return { ...out, state: Number.isFinite(at) && now - at > REPORT_FRESH_MS ? 'stale' : 'pending' };
+}
+
 const view = (port) => ({ syslog_port: port, reserved_ports: Object.keys(RESERVED).map(Number) });
 
-module.exports = { RESERVED, checkSyslogPort, readSyslogPort, writeSyslogPort, view };
+module.exports = { RESERVED, REPORT_FRESH_MS, checkSyslogPort, readSyslogPort, writeSyslogPort, view, checkReport, recordReport, configState };

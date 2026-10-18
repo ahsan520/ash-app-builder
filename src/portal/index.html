@@ -1195,7 +1195,7 @@ const UPGRADE_PILL = { behind: (t) => pill('Behind ' + t, 'bad'), current: () =>
 // ---- Broker config pull ----
 // The syslog port that brokers set up with --accept-config should listen on. Nothing is pushed: those brokers ask ASIX every 5 minutes and
 // apply the port only after their own checks (deploy/broker/asix-broker-config.sh). A broker without --accept-config ignores this card.
-function brokerConfigCard(cfg) {
+function brokerConfigCard(cfg, sum) {
   if (!cfg) return card('Syslog port for brokers', el('div', { className: 'mute', textContent: 'The broker config is not available (has the schema job run on deploy?).' }));
   const inp = el('input', { value: cfg.syslog_port || '', placeholder: 'for example 1514', style: 'width:130px', inputMode: 'numeric' });
   const save = async (v) => { try { await api('/v1/broker-config', { method: 'PUT', body: { syslog_port: v } }); route(); } catch (e) { alert(e.message); } };
@@ -1203,8 +1203,20 @@ function brokerConfigCard(cfg) {
     el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, inp,
       el('button', { className: 'btn pri', textContent: 'Set port', onclick: () => save(inp.value.trim() === '' ? null : inp.value.trim()) }),
       cfg.syslog_port ? el('button', { className: 'btn', textContent: 'Clear', onclick: () => save(null) }) : '',
-      cfg.syslog_port ? pill('Asking brokers for ' + cfg.syslog_port, 'ok') : el('span', { className: 'mute', textContent: 'No port set: brokers keep what they have.' })),
+      cfg.syslog_port ? pill('Asking brokers for ' + cfg.syslog_port, 'ok') : el('span', { className: 'mute', textContent: 'No port set: brokers keep what they have.' }),
+      cfg.syslog_port && sum && sum.total ? (sum.config_not_applied ? pill(sum.config_applied + ' of ' + sum.total + ' applied', 'bad') : pill('All ' + sum.total + ' applied', 'ok')) : ''),
     el('div', { className: 'mute', style: 'margin:10px 0 0;font-size:13px', textContent: 'Only brokers installed with --accept-config ask for this. Each checks the port itself, validates its Vector config, restarts Vector, and goes back to its old settings if that fails. It does not open the firewall: open the new port on the broker VM, and point the devices at it. Reserved: ' + cfg.reserved_ports.join(', ') + '. See the broker\'s journal: journalctl -u asix-broker-config.' }));
+}
+// What a broker says about the syslog port (b.config from GET /v1/brokers; src/brokers/config.js). Brokers that opted in report after every pull.
+function brokerConfigCell(b) {
+  const c = b.config || {}, now = c.reported_port != null ? ' (now ' + c.reported_port + ')' : '';
+  const tip = (t, ...kids) => el('span', { title: t }, ...kids);
+  if (c.state === 'applied') return pill('Applied ' + c.configured_port, 'ok');
+  if (c.state === 'pending') return tip('Reported ' + when(c.reported_at) + ' UTC. It asks every 5 minutes.', pill('Pending ' + c.configured_port, 'off'), el('span', { className: 'mute', textContent: now }));
+  if (c.state === 'rejected') return tip('This broker tried port ' + c.rejected_port + ' and put its old settings back. See journalctl -u asix-broker-config on the broker.', pill('Rejected ' + c.configured_port, 'bad'), el('span', { className: 'mute', textContent: now }));
+  if (c.state === 'stale') return tip('Last report ' + when(c.reported_at) + ' UTC. Check the timer and Vector on the broker.', pill('Not asking', 'bad'), el('span', { className: 'mute', textContent: now }));
+  if (c.state === 'unknown') return tip('ASIX asks for port ' + c.configured_port + ' but this broker has not reported. It was not set up with --accept-config, or its config script is older than reporting. Re-run the bootstrap script with --accept-config.', pill('Not reporting', 'off'));
+  return c.reported_port != null ? String(c.reported_port) : '-';
 }
 // Read-only: the broker VMs that report to this install (docs/broker-vm.md), and the command to add one.
 async function pgBrokers() {
@@ -1219,11 +1231,12 @@ async function pgBrokers() {
       card('Events, last 24 hours', el('div', { className: 'stat' }, s.events_24h.toLocaleString(), el('small', { textContent: r.counts_error || 'through brokers' }))),
       card('Vector versions', el('div', {}, s.total ? ver : '-', s.mixed_versions ? el('div', { className: 'mute', style: 'margin-top:6px;font-size:12px', textContent: 'More than one version is in use.' }) : ''))),
     brokerUpgradeCard(r),
-    brokerConfigCard(bcfg),
+    brokerConfigCard(bcfg, s),
     card('', table([
       { h: 'Name', f: (b) => b.name + (b.alias ? ' (' + b.alias + ')' : '') },
       { h: 'Status', f: (b) => pill(b.status === 'connected' ? '\u2713 Connected' : '\u2715 Disconnected', b.status === 'connected' ? 'ok' : 'off') },
       { h: 'Vector', f: (b) => b.vector_version || '-' }, { h: 'Upgrade', f: (b) => (UPGRADE_PILL[b.upgrade] ? UPGRADE_PILL[b.upgrade](r.vector_target) : '-') },
+      { h: 'Syslog port', f: brokerConfigCell },
       { h: 'OS', f: (b) => b.os || '-' }, { h: 'IP address', f: (b) => b.last_ip || '-' },
       { h: 'Last seen (UTC)', f: (b) => when(b.last_seen) }, { h: 'Events (24h)', f: (b) => b.events_24h.toLocaleString() },
       { h: 'Alert if down', f: (b) => pill(b.watch_disconnect ? 'On' : 'Off', b.watch_disconnect ? 'ok' : 'off') },

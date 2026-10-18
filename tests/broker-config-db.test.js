@@ -21,8 +21,8 @@ async function main() {
     "INSERT INTO ingestion_keys (tenant_id, name, platform, key_prefix, key_hash) VALUES ($1,$2,'linux',$3,$4)", [tenant, name, key.slice(0, 12), hashKey(key)])); return key; };
   const keyA = await mkKey(TENANT, 'broker-a'), keyB = await mkKey(OTHER, 'broker-b');
 
-  const app = express(); app.use(require('../src/ingest/broker-config').router); app.use(express.json());
-  app.use(require('../src/gateway/routes/broker-config')); app.use(require('../src/gateway/routes/broker-settings'));
+  const app = express(); app.use(require('../src/ingest/heartbeat').router); app.use(require('../src/ingest/broker-config').router); app.use(express.json());
+  app.use(require('../src/gateway/routes/broker-config')); app.use(require('../src/gateway/routes/broker-settings')); app.use(require('../src/gateway/routes/brokers'));
   const srv = app.listen(0); const base = 'http://127.0.0.1:' + srv.address().port;
   const call = async (method, p, body, headers = {}) => { const r = await fetch(base + p, { method, headers: { 'content-type': 'application/json', ...headers }, body: body === undefined ? undefined : JSON.stringify(body) }); return { status: r.status, json: await r.json() }; };
   const pull = (key) => call('GET', '/v1/ingest/broker-config', undefined, key ? { authorization: 'Bearer ' + key } : {});
@@ -55,6 +55,61 @@ async function main() {
     assert.strictEqual((await pull(keyB)).json.config.syslog_port, null, 'another tenant does not see it');
     const saved = TENANT; TENANT = OTHER; assert.strictEqual((await call('GET', '/v1/broker-config')).json.config.syslog_port, null); TENANT = saved;
 
+
+    // what each broker says it applied: the real heartbeat creates the rows, the real report route fills them, the real Brokers listing shows the state
+    assert.strictEqual((await call('PUT', '/v1/broker-config', { syslog_port: 1514 })).status, 200);
+    const beat = (key, name) => call('POST', '/v1/ingest/heartbeat', { collector: { name, platform: 'linux', version: 'vector-0.59.0' } }, { authorization: 'Bearer ' + key });
+    const report = (key, body) => call('POST', '/v1/ingest/broker-config/report', body, key ? { authorization: 'Bearer ' + key } : {});
+    const listed = async () => (await call('GET', '/v1/brokers')).json;
+    const rowOf = async (tenant, name) => (await db.query('SELECT config_syslog_port, config_rejected_port, config_reported_at FROM collectors WHERE tenant_id = $1 AND name = $2', [tenant, name])).rows[0];
+    assert.strictEqual((await beat(keyA, 'broker-a')).status, 200); assert.strictEqual((await beat(keyB, 'broker-b')).status, 200);
+    let l = await listed(); assert.strictEqual(l.syslog_port, 1514); assert.strictEqual(l.brokers.length, 1, 'only this tenant\'s broker');
+    assert.strictEqual(l.brokers[0].config.state, 'unknown', 'a port is set and the broker has not reported'); assert.strictEqual(l.summary.config_not_applied, 1);
+    assert.deepStrictEqual(await rowOf(TENANT, 'broker-a'), { config_syslog_port: null, config_rejected_port: null, config_reported_at: null });
+
+    // no key, a bad key and a bad body write nothing
+    assert.strictEqual((await report(null, { collector: 'broker-a', syslog_port: 514 })).status, 401);
+    assert.strictEqual((await report('asix_ik_' + 'z'.repeat(40), { collector: 'broker-a', syslog_port: 514 })).status, 401);
+    for (const bad of [{}, { collector: 'broker-a' }, { collector: 'broker-a', syslog_port: 70000 }, { collector: 'a b', syslog_port: 514 }]) assert.strictEqual((await report(keyA, bad)).status, 400, JSON.stringify(bad));
+    assert.strictEqual((await rowOf(TENANT, 'broker-a')).config_reported_at, null);
+
+    // pending: it reports the old port
+    r = await report(keyA, { collector: 'broker-a', syslog_port: 514, rejected_port: null }); assert.strictEqual(r.status, 200); assert.deepStrictEqual(r.json, { success: true, recorded: true });
+    l = await listed(); assert.strictEqual(l.brokers[0].config.state, 'pending'); assert.strictEqual(l.brokers[0].config.reported_port, 514);
+    assert.strictEqual(l.syslog_port, 1514, 'a report never changes the setting'); assert.strictEqual((await call('GET', '/v1/broker-config')).json.config.syslog_port, 1514);
+    // rejected
+    assert.strictEqual((await report(keyA, { collector: 'broker-a', syslog_port: 514, rejected_port: 1514 })).status, 200);
+    l = await listed(); assert.strictEqual(l.brokers[0].config.state, 'rejected'); assert.strictEqual(l.brokers[0].config.rejected_port, 1514); assert.deepStrictEqual(l.brokers[0].problems, []);
+    // applied
+    assert.strictEqual((await report(keyA, { collector: 'broker-a', syslog_port: 1514, rejected_port: null })).status, 200);
+    l = await listed(); assert.strictEqual(l.brokers[0].config.state, 'applied'); assert.strictEqual(l.summary.config_applied, 1); assert.strictEqual(l.summary.config_not_applied, 0);
+    const x = await rowOf(TENANT, 'broker-a'); assert.strictEqual(x.config_syslog_port, 1514); assert.strictEqual(x.config_rejected_port, null); assert.ok(x.config_reported_at);
+    // the next heartbeat does not wipe what it reported
+    assert.strictEqual((await beat(keyA, 'broker-a')).status, 200); assert.strictEqual((await rowOf(TENANT, 'broker-a')).config_syslog_port, 1514);
+
+    // a key writes only its own broker's row: another key in the same tenant, another tenant's key, and a name that does not exist
+    const keyA2 = await mkKey(TENANT, 'broker-c-key'); assert.strictEqual((await beat(keyA2, 'broker-c')).status, 200);
+    r = await report(keyA, { collector: 'broker-c', syslog_port: 7777 }); assert.strictEqual(r.status, 200); assert.strictEqual(r.json.recorded, false, 'same tenant, but not this key\'s broker');
+    r = await report(keyB, { collector: 'broker-a', syslog_port: 7777 }); assert.strictEqual(r.json.recorded, false, 'another tenant\'s key');
+    r = await report(keyA, { collector: 'no-such-broker', syslog_port: 7777 }); assert.strictEqual(r.json.recorded, false); assert.strictEqual((await rowOf(TENANT, 'no-such-broker')), undefined, 'a report never creates a row');
+    assert.strictEqual((await rowOf(TENANT, 'broker-c')).config_syslog_port, null); assert.strictEqual((await rowOf(TENANT, 'broker-a')).config_syslog_port, 1514); assert.strictEqual((await rowOf(OTHER, 'broker-b')).config_syslog_port, null);
+
+    // another tenant sees only its own broker, with no port set for it
+    { const saved2 = TENANT; TENANT = OTHER; const o = await listed(); TENANT = saved2;
+      assert.deepStrictEqual(o.brokers.map((b) => b.name), ['broker-b']); assert.strictEqual(o.syslog_port, null); assert.strictEqual(o.brokers[0].config.state, 'none'); }
+
+    // ASIX moves to another port: the old report no longer says applied; an old report goes stale; clearing the port goes back to none
+    assert.strictEqual((await call('PUT', '/v1/broker-config', { syslog_port: 2514 })).status, 200);
+    l = await listed(); assert.strictEqual(l.brokers.find((b) => b.name === 'broker-a').config.state, 'pending');
+    await db.query("UPDATE collectors SET config_reported_at = localtimestamp - interval '1 hour' WHERE tenant_id = $1 AND name = 'broker-a'", [TENANT]);
+    l = await listed(); assert.strictEqual(l.brokers.find((b) => b.name === 'broker-a').config.state, 'stale');
+    assert.strictEqual((await call('PUT', '/v1/broker-config', { syslog_port: null })).status, 200);
+    l = await listed(); assert.strictEqual(l.brokers.find((b) => b.name === 'broker-a').config.state, 'none'); assert.strictEqual(l.brokers.find((b) => b.name === 'broker-a').config.reported_port, 1514);
+    // and the database refuses a bad port in the new columns even if the application did not
+    await assert.rejects(() => db.query('UPDATE collectors SET config_syslog_port = 70000 WHERE tenant_id = $1', [TENANT]), /violates check/);
+    await assert.rejects(() => db.query('UPDATE collectors SET config_rejected_port = 0 WHERE tenant_id = $1', [TENANT]), /violates check/);
+    assert.strictEqual((await call('PUT', '/v1/broker-config', { syslog_port: 2514 })).status, 200);   // the section below expects the port set
+
     // keys: none, unknown and revoked are refused; a revoked key stops getting config
     assert.strictEqual((await pull()).status, 401); assert.strictEqual((await pull('asix_ik_' + 'z'.repeat(40))).status, 401);
     await db.withTenant(TENANT, (c) => c.query("UPDATE ingestion_keys SET status = 'revoked' WHERE name = 'broker-a'"));
@@ -68,6 +123,7 @@ async function main() {
   } finally {
     srv.close();
     await db.query('DELETE FROM broker_settings WHERE tenant_id = ANY($1)', [[TENANT, OTHER]]).catch(() => {});
+    await db.query('DELETE FROM collectors WHERE tenant_id = ANY($1)', [[TENANT, OTHER]]).catch(() => {});
     await db.query('DELETE FROM ingestion_keys WHERE tenant_id = ANY($1)', [[TENANT, OTHER]]).catch(() => {});
     await db.query('DELETE FROM tenants WHERE id = ANY($1)', [[TENANT, OTHER]]).catch(() => {});
     await db.pool.end();

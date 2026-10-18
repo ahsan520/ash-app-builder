@@ -162,6 +162,7 @@ A broker installed before this existed can be switched on by re-running the boot
 
 **Setting it:** Brokers page, **Syslog port for brokers** card (`GET` and `PUT /v1/broker-config`, body `{ "syslog_port": 1514 | null }`; `collectors:read` / `collectors:write`, no role change). One value for the whole tenant; empty means "no opinion": brokers keep what they have.
 The broker asks with `GET /v1/ingest/broker-config` and its own ingestion key and gets `{ "config": { "syslog_port": 1514 | null }, "interval_seconds": 300 }` (read only, no audit row, same rate limit and key rules as the heartbeat; a revoked key gets nothing).
+After every pull the broker also tells ASIX what it is listening on: `POST /v1/ingest/broker-config/report` with `{ "collector": "broker-1", "syslog_port": 1514, "rejected_port": null }` and the same key (see "What the Brokers page shows" below). That is information only; it changes no setting.
 
 **What the broker does with it, in order, stopping at the first failure:**
 1. Does nothing for `null`, or when the port is already the one in use.
@@ -171,7 +172,20 @@ The broker asks with `GET /v1/ingest/broker-config` and its own ingestion key an
 
 **It does not open the firewall and does not move your devices:** after a change, open the new port (UDP and TCP) on the broker VM and point the senders at it; until they are changed they send to a port nobody listens on. Check what happened with `journalctl -u asix-broker-config -n 20`.
 Seen working on broker-1 (vm1, Ubuntu aarch64, Vector 0.59.0, 2026-10-18): after the port was set to 1514 one pull applied it, Vector was healthy, and it listened on 1514 UDP and TCP with nothing on 514; with no port set the pull changes nothing. The way back (setting 514 again) and the failure paths have only run against stubs. Under systemd the service runs as root with `StateDirectory=asix-broker`; the journal shows its lines under `asix-broker-config.sh`.
-Not seen on the Brokers page yet: whether a broker applied the port (the page shows the setting, not each broker's state). The TLS port, the key, the certificates and the ASIX URL are never changed this way.
+The TLS port, the key, the certificates and the ASIX URL are never changed this way.
+
+**What the Brokers page shows (done 2026-10-18):** a **Syslog port** column, and an "N of M applied" line on the port card. The broker's script sends a report at the end of **every** run that asked ASIX, whatever happened (an `EXIT` trap, best effort: if the report cannot be sent nothing else changes, and the exit status stays the script's own). The report carries the port read from `broker.env` after any change or put-back, and the port in `/var/lib/asix-broker/config-rejected` if there is one. ASIX keeps it on that broker's own row (`collectors.config_syslog_port`, `config_rejected_port`, `config_reported_at`; the row is found by the sending key AND the name, so one key cannot write another broker's row, and a report never creates a row). The column compares it with the port ASIX asks for:
+
+| Shows | Meaning |
+|---|---|
+| (the port, or `-`) | ASIX asks for no port; the number is what the broker reported, if it did |
+| **Applied 1514** | the broker reports it is listening on the port ASIX asks for |
+| **Pending 1514** (now 514) | it reported a different port, has not rejected this one, and its report is under 15 minutes old: it has not picked the change up yet (it asks every 5 minutes) |
+| **Rejected 1514** (now 514) | it tried this port and put its old settings back; `journalctl -u asix-broker-config` on the broker says why. It will not try that port again until ASIX asks for a different one |
+| **Not asking** (now 514) | its last report is over 15 minutes old and it is not on the port: the timer, Vector or the VM is down |
+| **Not reporting** | a port is set but the broker never reported: it was not installed with `--accept-config`, or its `asix-broker-config.sh` is older than reporting. Copy the new script and re-run the bootstrap script with `--accept-config` |
+
+None of these is a "needs attention" problem and none raises an alert. **Applied** means the broker says it is listening, not that devices send to it: that is still on you (firewall and senders), and the test line from `logger -n <broker> -P 1514 -T test` arriving in Events is the real proof.
 
 ## Getting an alert when a broker goes quiet
 A broker that stops (Vector down, VM off, network cut) shows as Disconnected on the Collectors and Brokers pages, but nothing tells you unless you look. On the

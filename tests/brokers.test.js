@@ -58,10 +58,35 @@ describe('summarize', () => {
   it('the install command never contains a key', () => assert.ok(!/asix_ik_[A-Za-z0-9]{8}/.test(view.installCommand())));
 });
 
+describe('config state on each broker (what it says it applied)', () => {
+  it('shape carries the state against the port ASIX asks for; no port asked for means none', () => {
+    assert.strictEqual(view.shape(row(), { now: NOW }).config.state, 'none');
+    const none = view.shape(row({ config_syslog_port: 514, config_reported_at: ago(1) }), { now: NOW }); assert.strictEqual(none.config.state, 'none'); assert.strictEqual(none.config.reported_port, 514);
+    assert.strictEqual(view.shape(row(), { now: NOW, syslogPort: 1514 }).config.state, 'unknown');
+    assert.strictEqual(view.shape(row({ config_syslog_port: 1514, config_reported_at: ago(1) }), { now: NOW, syslogPort: 1514 }).config.state, 'applied');
+    assert.strictEqual(view.shape(row({ config_syslog_port: 514, config_rejected_port: 1514, config_reported_at: ago(1) }), { now: NOW, syslogPort: 1514 }).config.state, 'rejected');
+    assert.strictEqual(view.shape(row({ config_syslog_port: 514, config_reported_at: ago(2) }), { now: NOW, syslogPort: 1514 }).config.state, 'pending');
+    assert.strictEqual(view.shape(row({ config_syslog_port: 514, config_reported_at: ago(60) }), { now: NOW, syslogPort: 1514 }).config.state, 'stale');
+  });
+  it('is not a problem: no entry in problems and no change to with_problems', () => {
+    const b = view.shape(row({ config_syslog_port: 514, config_rejected_port: 1514, config_reported_at: ago(1) }), { now: NOW, syslogPort: 1514 });
+    assert.deepStrictEqual(b.problems, []); assert.strictEqual(view.summarize([b]).with_problems, 0);
+  });
+  it('summarize counts the brokers that applied it and the ones that did not (not the ones with no port to apply)', () => {
+    const mk = (name, o) => view.shape(row({ name, ...o }), { now: NOW, syslogPort: 1514 });
+    const list = [mk('a', { config_syslog_port: 1514, config_reported_at: ago(1) }), mk('b', {}), mk('c', { config_syslog_port: 514, config_rejected_port: 1514, config_reported_at: ago(1) }),
+      mk('d', { config_syslog_port: 514, config_reported_at: ago(1) }), mk('e', { config_syslog_port: 514, config_reported_at: ago(90) })];
+    const s = view.summarize(list); assert.strictEqual(s.config_applied, 1); assert.strictEqual(s.config_not_applied, 4);
+    const off = view.summarize([view.shape(row(), { now: NOW })]); assert.strictEqual(off.config_applied, 0); assert.strictEqual(off.config_not_applied, 0);
+  });
+});
+
 describe('GET /v1/brokers', () => {
   const TENANT = '11111111-1111-4111-8111-111111111111';
-  let rows; let seen; let failStore = false;
-  const fakeDb = { withTenant: async (t, fn) => fn({ query: async (sql, args) => { if (/FROM collectors/.test(sql)) seen = { sql, args }; return { rows }; } }), query: async () => ({ rows: [] }) };
+  let rows; let seen; let failStore = false; let port = null; let failSettings = false;
+  const fakeDb = { withTenant: async (t, fn) => fn({ query: async (sql, args) => {
+    if (/syslog_port FROM broker_settings/.test(sql)) { if (failSettings) throw new Error('no such column'); return { rows: port === undefined ? [] : [{ syslog_port: port }] }; }
+    if (/FROM collectors/.test(sql)) seen = { sql, args }; return { rows }; } }), query: async () => ({ rows: [] }) };
   const shared = require('../src/gateway/shared');
   const savedShared = require.cache[require.resolve('../src/gateway/shared')].exports;
   let srv; let base;
@@ -83,6 +108,19 @@ describe('GET /v1/brokers', () => {
     assert.strictEqual(r.json.brokers[0].events_24h, 33); assert.strictEqual(r.json.brokers[0].status, 'connected');
     assert.strictEqual(r.json.summary.total, 1); assert.match(r.json.install_command, /bootstrap-broker\.sh/);
     assert.deepStrictEqual(seen.args, [TENANT, 'vector-%']);
+  });
+  it('asks for the config columns and returns each broker\'s state with the port ASIX asks for', async () => {
+    port = 1514; rows = [row({ last_seen: new Date(), config_syslog_port: 1514, config_reported_at: new Date() }), row({ name: 'b2', last_seen: new Date(), config_syslog_port: 514, config_rejected_port: 1514, config_reported_at: new Date() })];
+    const r = await get(); port = null;
+    assert.match(seen.sql, /c\.config_syslog_port, c\.config_rejected_port, c\.config_reported_at/);
+    assert.strictEqual(r.json.syslog_port, 1514); assert.deepStrictEqual(r.json.brokers.map((b) => b.config.state), ['applied', 'rejected']);
+    assert.strictEqual(r.json.summary.config_applied, 1); assert.strictEqual(r.json.summary.config_not_applied, 1);
+  });
+  it('no port set: state none, and the page still loads when the setting cannot be read', async () => {
+    rows = [row({ last_seen: new Date() })]; port = undefined; let r = await get(); port = null;
+    assert.strictEqual(r.json.syslog_port, null); assert.strictEqual(r.json.brokers[0].config.state, 'none');
+    failSettings = true; try { r = await get(); } finally { failSettings = false; }
+    assert.strictEqual(r.status, 200); assert.strictEqual(r.json.syslog_port, null); assert.strictEqual(r.json.brokers.length, 1);
   });
   it('drops rows that are not brokers even if the query returned them', async () => {
     rows = [row({ version: '1.0', name: 'laptop' })];

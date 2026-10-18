@@ -12,6 +12,9 @@
 #      waits for its health check
 #   5. any failure from step 4 puts the old broker.env back and restarts Vector on it, and remembers the rejected port in
 #      /var/lib/asix-broker/config-rejected so it is not retried every 5 minutes until ASIX asks for a different port
+# After EVERY run that got as far as asking, it tells ASIX which syslog port it is listening on now and which one it rejected (POST to
+# <ingest URL>/../broker-config/report, an EXIT trap, best effort: a failed report changes nothing and never the exit status). That only feeds the
+# Applied / Pending / Rejected column on ASIX's Brokers page; it is information, not a setting.
 # It does not open the firewall: the new port must be opened on this VM by hand. Results go to the journal (journalctl -u asix-broker-config).
 set -uo pipefail
 
@@ -33,6 +36,18 @@ if [ -z "$URL" ]; then : "${ASIX_INGEST_URL:?ASIX_INGEST_URL is not set}"; URL="
 
 ARGS=(-fsS -m 10 -H "Authorization: Bearer ${ASIX_INGEST_KEY}")
 [ -n "${ASIX_CA_FILE:-}" ] && ARGS+=(--cacert "$ASIX_CA_FILE")
+
+report() {  # EXIT trap: what this broker listens on now (read from broker.env AFTER any change or put-back) and the port it rejected, if any
+  local cur rej name body
+  name="$(printf '%s' "${ASIX_BROKER_NAME:-}" | tr -d '"\\' | cut -c1-100)"; [ -n "$name" ] || return 0
+  cur="$( . "$ENV_FILE" >/dev/null 2>&1; printf '%s' "${ASIX_SYSLOG_PORT:-514}" )"
+  [[ "$cur" =~ ^[1-9][0-9]{0,4}$ ]] || return 0
+  rej=""; [ -r "$STATE_DIR/config-rejected" ] && rej="$(tr -cd '0-9' < "$STATE_DIR/config-rejected" 2>/dev/null | cut -c1-5)"
+  [[ "$rej" =~ ^[1-9][0-9]{0,4}$ ]] || rej="null"
+  body="$(printf '{"collector":"%s","syslog_port":%s,"rejected_port":%s}' "$name" "$cur" "$rej")"
+  curl "${ARGS[@]}" -X POST -H "Content-Type: application/json" --data "$body" "$URL/report" >/dev/null 2>&1 || true
+}
+trap report EXIT
 BODY="$(curl "${ARGS[@]}" "$URL")" || { echo "Could not fetch the config from ASIX; nothing changed." >&2; exit 1; }
 FLAT="$(printf '%s' "$BODY" | tr -d ' \t\r\n')"
 if printf '%s' "$FLAT" | grep -q '"syslog_port":null'; then exit 0; fi
