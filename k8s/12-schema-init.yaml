@@ -487,6 +487,10 @@ data:
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS config_reported_at TIMESTAMP;
     -- Whether a broker checks ASIX's signature on its config, as the broker reports it (src/brokers/config.js, SIGNATURE_VALUES). NULL = never reported it (older script).
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS config_signature TEXT CHECK (config_signature IS NULL OR config_signature IN ('off','unchecked','ok','unsigned','bad_signature','wrong_broker','clock_skew','bad_format','no_key_file','no_openssl'));
+    -- What the broker says about its syslog-over-TLS listener (report from asix-broker-config.sh): the port it listens on, 0 = it has no TLS listener, NULL = never said (older script);
+    -- and the TLS port it rejected. Information only, like config_syslog_port.
+    ALTER TABLE collectors ADD COLUMN IF NOT EXISTS config_tls_port INTEGER CHECK (config_tls_port IS NULL OR config_tls_port BETWEEN 0 AND 65535);
+    ALTER TABLE collectors ADD COLUMN IF NOT EXISTS config_rejected_tls_port INTEGER CHECK (config_rejected_tls_port IS NULL OR config_rejected_tls_port BETWEEN 1 AND 65535);
     -- A syslog port for ONE broker, set from the Brokers page; it wins over the tenant-wide broker_settings.syslog_port (src/brokers/config.js). NULL = use the tenant-wide value.
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS syslog_port_override INTEGER CHECK (syslog_port_override IS NULL OR syslog_port_override BETWEEN 1 AND 65535);
     -- Left out of the tenant-wide syslog port (src/brokers/config.js): the broker is told no port and keeps what it has. An own port (above) still applies.

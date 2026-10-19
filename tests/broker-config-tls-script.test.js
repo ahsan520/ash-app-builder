@@ -106,9 +106,9 @@ esac`);
     answer(1514, 1514); const r = run(); assert.strictEqual(r.status, 1); assert.match(r.stderr, /syslog port this broker uses/);
     assert.match(env(), /^ASIX_SYSLOG_PORT=1514$/m); assert.match(env(), /^ASIX_SYSLOG_TLS_PORT=6514$/m);
   });
-  it('still reports the syslog port in use after a TLS change (the report is unchanged)', () => {
+  it('reports the syslog port in use and the TLS port of its listener', () => {
     run(); const rep = all().filter((c) => c.startsWith('report')); assert.strictEqual(rep.length, 1);
-    assert.deepStrictEqual(JSON.parse(/--data (\{.*?\})/.exec(rep[0])[1]), { collector: 'broker-1', syslog_port: 514, rejected_port: null, signature: 'off' });
+    assert.deepStrictEqual(JSON.parse(/--data (\{.*?\})/.exec(rep[0])[1]), { collector: 'broker-1', syslog_port: 514, rejected_port: null, signature: 'off', tls_port: 6515, rejected_tls_port: null });   // the default answer moves 6514 to 6515: the report is read AFTER the change
   });
 
   describe('signed answers', { skip: !hasOpenssl }, () => {

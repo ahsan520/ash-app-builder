@@ -96,15 +96,31 @@ function checkReport(body) {
     if (typeof b.signature !== 'string' || !SIGNATURE_VALUES.includes(b.signature)) return { error: 'signature must be one of: ' + SIGNATURE_VALUES.join(', ') };
     signature = b.signature;
   }
-  return { name, port: port.value, rejected: rej.value, signature };
+  // Optional (scripts older than TLS reporting do not send these): the port of this broker's syslog-over-TLS listener, null when it has none, and the TLS
+  // port it rejected. Stored as 0 = no TLS listener, so that NULL can keep meaning "never said"; a key that is absent is NULL, a key that is null is 0.
+  let tls = null, tlsRejected = null;
+  if (b.tls_port !== undefined) {
+    const t = portOrNull(b.tls_port);
+    if (t.error) return { error: 'tls_port must be a whole number from 1 to 65535, or null when the broker has no TLS listener' };
+    tls = t.value === null ? 0 : t.value;
+  }
+  if (b.rejected_tls_port !== undefined) {
+    const t = portOrNull(b.rejected_tls_port);
+    if (t.error) return { error: 'rejected_tls_port must be a whole number from 1 to 65535, or null' };
+    tlsRejected = t.value;
+  }
+  return { name, port: port.value, rejected: rej.value, signature, tls, tlsRejected };
 }
 
 // Stores a report on the collector row of THE KEY'S OWN broker (same name, key_id = the key that sent it), so one key cannot write
 // another broker's row. Returns true if a row was updated. Nothing is inserted: a broker that has not sent a heartbeat has no row yet.
 async function recordReport(client, tenantId, keyId, report) {
   const r = await client.query(
-    `UPDATE collectors SET config_syslog_port = $4, config_rejected_port = $5, config_reported_at = localtimestamp, config_signature = $6
-     WHERE tenant_id = $1 AND key_id = $2 AND name = $3`, [tenantId, keyId, report.name, report.port, report.rejected, report.signature || null]);
+    `UPDATE collectors SET config_syslog_port = $4, config_rejected_port = $5, config_reported_at = localtimestamp, config_signature = $6,
+            config_tls_port = $7, config_rejected_tls_port = $8
+     WHERE tenant_id = $1 AND key_id = $2 AND name = $3`,
+    [tenantId, keyId, report.name, report.port, report.rejected, report.signature || null,
+      report.tls === undefined ? null : report.tls, report.tlsRejected === undefined ? null : report.tlsRejected]);
   return r.rowCount > 0;
 }
 
@@ -159,6 +175,29 @@ function configState(configured, row, now = Date.now()) {
   return { ...out, state: Number.isFinite(at) && now - at > REPORT_FRESH_MS ? 'stale' : 'pending' };
 }
 
+// The same for the syslog-over-TLS port. `configured` = the TLS port this broker is asked for (the tenant-wide one, or null when none is set or the broker is
+// left out of the tenant-wide settings). `row` carries config_tls_port (NULL = never said, 0 = it has no TLS listener, else the port its listener uses),
+// config_rejected_tls_port and config_reported_at. Information only: never a "needs attention" problem and never an alert.
+//   none         ASIX asks for no TLS port (none set, or this broker is left out)
+//   unknown      a TLS port is set but this broker never said anything about TLS: it did not opt in, or its config script is older than this report
+//   no_listener  the broker says it has no TLS listener, so it ignores the setting (ASIX cannot turn TLS on: that needs certificates on the broker)
+//   applied      the broker says its TLS listener is on that port
+//   rejected     the broker says it tried that port and put its old settings back (journalctl -u asix-broker-config on the broker)
+//   pending      the broker's TLS listener is on a different port and it has not rejected this one: it has not picked it up yet
+//   stale        as pending, but its last report is older than 15 minutes: it is not asking any more
+function tlsState(configured, row, now = Date.now()) {
+  const raw = row && row.config_tls_port != null ? Number(row.config_tls_port) : null;
+  const rejected = row && row.config_rejected_tls_port != null ? Number(row.config_rejected_tls_port) : null;
+  const at = row && row.config_reported_at ? tsMs(row.config_reported_at) : NaN;
+  const out = { state: 'none', configured_port: configured == null ? null : Number(configured), reported_port: raw && raw > 0 ? raw : null, has_listener: raw === null ? null : raw > 0, rejected_port: rejected, reported_at: row && row.config_reported_at ? row.config_reported_at : null };
+  if (configured === null || configured === undefined) return out;
+  if (raw === null) return { ...out, state: 'unknown' };
+  if (raw === 0) return { ...out, state: 'no_listener' };
+  if (raw === Number(configured)) return { ...out, state: 'applied' };
+  if (rejected === Number(configured)) return { ...out, state: 'rejected' };
+  return { ...out, state: Number.isFinite(at) && now - at > REPORT_FRESH_MS ? 'stale' : 'pending' };
+}
+
 // ---- One broker's own port ------------------------------------------------------------------------------------------------
 // The tenant-wide port is one value for every broker that opted in. A broker can also be given ITS OWN port (collectors.syslog_port_override,
 // set from the Brokers page); it wins over the tenant-wide value for that broker only. Same port rules, same pull: the broker asks with
@@ -203,5 +242,5 @@ async function writeExclude(client, tenantId, brokerId, exclude) {
 
 const view = (port) => ({ syslog_port: port, reserved_ports: Object.keys(RESERVED).map(Number) });
 
-module.exports = { RESERVED, checkTlsPort, readTlsPort, writeTlsPort, REPORT_FRESH_MS, SIGNATURE_VALUES, SIGNATURE_PROBLEMS, SIGNATURE_HELP, signatureState, checkSyslogPort, readSyslogPort, writeSyslogPort, view, checkReport, recordReport, configState,
+module.exports = { RESERVED, checkTlsPort, readTlsPort, writeTlsPort, REPORT_FRESH_MS, SIGNATURE_VALUES, SIGNATURE_PROBLEMS, SIGNATURE_HELP, signatureState, checkSyslogPort, readSyslogPort, writeSyslogPort, view, checkReport, recordReport, configState, tlsState,
   nameOrNull, effectivePort, portSource, readOverride, writeOverride, readExclude, writeExclude };

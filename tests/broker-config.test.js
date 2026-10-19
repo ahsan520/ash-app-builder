@@ -66,9 +66,9 @@ describe('database helpers', () => {
 
 describe('broker reports (what a broker says it applied)', () => {
   it('checkReport accepts a name, the port in use, and a rejected port or null', () => {
-    assert.deepStrictEqual(config.checkReport({ collector: 'broker-1', syslog_port: 1514, rejected_port: null }), { name: 'broker-1', port: 1514, rejected: null, signature: null });
-    assert.deepStrictEqual(config.checkReport({ collector: 'b.2:x_y', syslog_port: '514', rejected_port: 1514 }), { name: 'b.2:x_y', port: 514, rejected: 1514, signature: null });
-    assert.deepStrictEqual(config.checkReport({ collector: 'b', syslog_port: 514 }), { name: 'b', port: 514, rejected: null, signature: null }, 'rejected_port may be left out');
+    assert.deepStrictEqual(config.checkReport({ collector: 'broker-1', syslog_port: 1514, rejected_port: null }), { name: 'broker-1', port: 1514, rejected: null, signature: null, tls: null, tlsRejected: null });
+    assert.deepStrictEqual(config.checkReport({ collector: 'b.2:x_y', syslog_port: '514', rejected_port: 1514 }), { name: 'b.2:x_y', port: 514, rejected: 1514, signature: null, tls: null, tlsRejected: null });
+    assert.deepStrictEqual(config.checkReport({ collector: 'b', syslog_port: 514 }), { name: 'b', port: 514, rejected: null, signature: null, tls: null, tlsRejected: null }, 'rejected_port may be left out');
   });
   it('checkReport refuses everything else with a reason', () => {
     for (const b of [null, undefined, [], 'x', 5, {}, { syslog_port: 514 }, { collector: '', syslog_port: 514 }, { collector: 'a b', syslog_port: 514 }, { collector: 'x'.repeat(101), syslog_port: 514 },
@@ -83,7 +83,7 @@ describe('broker reports (what a broker says it applied)', () => {
     assert.strictEqual(await config.recordReport(q(0), 'tenant-1', 'key-1', { name: 'ghost', port: 514, rejected: 1514 }), false);
     assert.match(seen[0].sql, /^\s*UPDATE collectors SET/); assert.doesNotMatch(seen[0].sql, /INSERT/i);
     assert.match(seen[0].sql, /WHERE tenant_id = \$1 AND key_id = \$2 AND name = \$3/);
-    assert.deepStrictEqual(seen[0].args, ['tenant-1', 'key-1', 'broker-1', 1514, null, null]); assert.deepStrictEqual(seen[1].args, ['tenant-1', 'key-1', 'ghost', 514, 1514, null]);
+    assert.deepStrictEqual(seen[0].args, ['tenant-1', 'key-1', 'broker-1', 1514, null, null, null, null]); assert.deepStrictEqual(seen[1].args, ['tenant-1', 'key-1', 'ghost', 514, 1514, null, null, null]);
   });
   describe('configState', () => {
     const NOW = Date.parse('2026-10-18T12:00:00Z'), ago = (min) => new Date(NOW - min * 60000);
@@ -197,7 +197,7 @@ describe('routes', () => {
     assert.strictEqual(updates.length, 0, 'refused bodies write nothing');
     stored = 1514; reportRows = 1;
     let r = await post({ collector: 'broker-1', syslog_port: 514, rejected_port: 1514 }); assert.strictEqual(r.status, 200); assert.deepStrictEqual(r.json, { success: true, recorded: true });
-    assert.deepStrictEqual(updates[0].args, ['t1', 'k1', 'broker-1', 514, 1514, null], 'tenant and key come from the key lookup, not from the body');
+    assert.deepStrictEqual(updates[0].args, ['t1', 'k1', 'broker-1', 514, 1514, null, null, null], 'tenant and key come from the key lookup, not from the body');
     assert.strictEqual(stored, 1514, 'a report never changes the setting');
     reportRows = 0; r = await post({ collector: 'ghost', syslog_port: 514 }); assert.strictEqual(r.status, 200); assert.strictEqual(r.json.recorded, false); reportRows = 1;
   });

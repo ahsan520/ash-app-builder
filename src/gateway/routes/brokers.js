@@ -15,7 +15,7 @@ router.get('/v1/brokers', ...guarded('collectors:read'), async (req, res) => {
   try {
     const reg = await db.withTenant(req.tenant_id, (client) => client.query(
       `SELECT c.id, c.name, c.alias, c.os, c.version, c.last_ip, c.first_seen, c.last_seen, c.events_total::bigint AS events_total,
-              c.connected_within_min, c.watch_disconnect, c.config_syslog_port, c.config_rejected_port, c.config_reported_at, c.config_signature, c.syslog_port_override, c.syslog_port_exclude, c.key_id, k.name AS installer_name, k.status AS key_status, k.key_prefix, k.last_used_at AS key_last_used_at
+              c.connected_within_min, c.watch_disconnect, c.config_syslog_port, c.config_rejected_port, c.config_reported_at, c.config_signature, c.config_tls_port, c.config_rejected_tls_port, c.syslog_port_override, c.syslog_port_exclude, c.key_id, k.name AS installer_name, k.status AS key_status, k.key_prefix, k.last_used_at AS key_last_used_at
        FROM collectors c LEFT JOIN ingestion_keys k ON k.id = c.key_id
        WHERE c.tenant_id = $1 AND c.version ILIKE $2 ORDER BY c.name`, [req.tenant_id, view.BROKER_VERSION_SQL]));
     let day = []; let countsError = null;
@@ -28,12 +28,15 @@ router.get('/v1/brokers', ...guarded('collectors:read'), async (req, res) => {
     let syslogPort = null;   // same: the page still loads without it (the new columns or table not created yet)
     try { syslogPort = await db.withTenant(req.tenant_id, (client) => config.readSyslogPort(client, req.tenant_id)); }
     catch (e) { console.error('Broker syslog port read failed:', e.message); }
+    let tlsPort = null;   // the tenant-wide syslog-over-TLS port; its own read, so the page still loads without it (column not created yet)
+    try { tlsPort = await db.withTenant(req.tenant_id, (client) => config.readTlsPort(client, req.tenant_id)); }
+    catch (e) { console.error('Broker TLS port read failed:', e.message); }
     let signingOn = false;   // whether ASIX signs its answers (never throws: an unusable key just reads as off)
     try { signingOn = signing.status().enabled === true; } catch (e) { console.error('Broker signing status failed:', e.message); }
     const now = Date.now();
-    const brokers = reg.rows.filter(view.isBroker).map((r) => view.shape(r, { now, events24h: d.get(r.name) || 0, target, syslogPort, signingOn }));
+    const brokers = reg.rows.filter(view.isBroker).map((r) => view.shape(r, { now, events24h: d.get(r.name) || 0, target, syslogPort, signingOn, tlsPort }));
     res.status(200).json({ success: true, generated_at: new Date(now).toISOString(), summary: view.summarize(brokers), brokers,
-      vector_target: target, upgrade_command: upgrade.upgradeCommand(target), syslog_port: syslogPort,
+      vector_target: target, upgrade_command: upgrade.upgradeCommand(target), syslog_port: syslogPort, tls_port: tlsPort,
       install_command: view.installCommand(), counts_error: countsError });
   } catch (e) {
     console.error('Broker listing failed:', e.message);

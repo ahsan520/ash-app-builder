@@ -34,7 +34,7 @@ describe('the signature field of a broker report', () => {
     await config.recordReport(q, 't', 'k', config.checkReport(body({ signature: 'bad_signature' })));
     await config.recordReport(q, 't', 'k', config.checkReport(body()));
     assert.match(seen[0].sql, /config_signature = \$6/); assert.match(seen[0].sql, /WHERE tenant_id = \$1 AND key_id = \$2 AND name = \$3/);
-    assert.deepStrictEqual(seen[0].args, ['t', 'k', 'broker-1', 514, null, 'bad_signature']);
+    assert.deepStrictEqual(seen[0].args, ['t', 'k', 'broker-1', 514, null, 'bad_signature', null, null]);
     assert.strictEqual(seen[1].args[5], null, 'an older script that does not send it clears an old value instead of leaving it');
   });
 });

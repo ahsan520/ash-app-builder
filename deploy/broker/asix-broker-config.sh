@@ -21,6 +21,7 @@
 # key can be replaced without a gap), that the signed text was made for THIS broker's name, and that it was issued within ASIX_CONFIG_MAX_SKEW_S
 # (default 600) seconds of this machine's clock. An unsigned answer, a bad signature, another broker's answer or an old one changes nothing (exit 1,
 # the reason in the journal). The unsigned `config` part of the answer is ignored in this mode.
+# The report also says which syslog-over-TLS port this broker listens on (null = it has no TLS listener) and which TLS port it rejected (tls_port, rejected_tls_port).
 # The report also says whether this broker checks signatures (`signature`): off (no public key), unchecked (it has one but got no answer to check), ok (the
 # last answer passed) or the reason the last answer was refused (unsigned, bad_signature, wrong_broker, clock_skew, bad_format, no_key_file, no_openssl).
 # The TLS port is moved only on a broker that has a TLS listener (ASIX_SYSLOG_TLS_PORT in broker.env and vector-tls.yaml present); otherwise it is ignored with a note.
@@ -54,13 +55,19 @@ ARGS=(-fsS -m 10 -H "Authorization: Bearer ${ASIX_INGEST_KEY}")
 [ -n "${ASIX_CA_FILE:-}" ] && ARGS+=(--cacert "$ASIX_CA_FILE")
 
 report() {  # EXIT trap: what this broker listens on now (read from broker.env AFTER any change or put-back) and the port it rejected, if any
-  local cur rej name body
+  local cur rej name body tls trej
   name="$(printf '%s' "${ASIX_BROKER_NAME:-}" | tr -d '"\\' | cut -c1-100)"; [ -n "$name" ] || return 0
   cur="$( . "$ENV_FILE" >/dev/null 2>&1; printf '%s' "${ASIX_SYSLOG_PORT:-514}" )"
   [[ "$cur" =~ ^[1-9][0-9]{0,4}$ ]] || return 0
   rej=""; [ -r "$STATE_DIR/config-rejected" ] && rej="$(tr -cd '0-9' < "$STATE_DIR/config-rejected" 2>/dev/null | cut -c1-5)"
   [[ "$rej" =~ ^[1-9][0-9]{0,4}$ ]] || rej="null"
-  body="$(printf '{"collector":"%s","syslog_port":%s,"rejected_port":%s,"signature":"%s"}' "$name" "$cur" "$rej" "$SIG")"
+  # The syslog-over-TLS listener: the port it uses now (read AFTER any change or put-back), or null when this broker has none (no ASIX_SYSLOG_TLS_PORT or no vector-tls.yaml),
+  # and the TLS port it rejected. Same rule as step 2 below for "has a TLS listener".
+  tls="$( . "$ENV_FILE" >/dev/null 2>&1; printf '%s' "${ASIX_SYSLOG_TLS_PORT:-}" )"
+  if [[ "$tls" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$tls" -le 65535 ] && [ -r "$VECTOR_DIR/vector-tls.yaml" ]; then :; else tls="null"; fi
+  trej=""; [ -r "$STATE_DIR/config-tls-rejected" ] && trej="$(tr -cd '0-9' < "$STATE_DIR/config-tls-rejected" 2>/dev/null | cut -c1-5)"
+  [[ "$trej" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$trej" -le 65535 ] || trej="null"
+  body="$(printf '{"collector":"%s","syslog_port":%s,"rejected_port":%s,"signature":"%s","tls_port":%s,"rejected_tls_port":%s}' "$name" "$cur" "$rej" "$SIG" "$tls" "$trej")"
   curl "${ARGS[@]}" -X POST -H "Content-Type: application/json" --data "$body" "$URL/report" >/dev/null 2>&1 || true
 }
 trap 'report; [ -z "${W:-}" ] || rm -rf "$W"' EXIT

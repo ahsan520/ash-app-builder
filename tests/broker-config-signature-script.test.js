@@ -46,11 +46,11 @@ describe('the signature field in the broker\'s report', { skip: !HAVE_OPENSSL &&
   it('no public key: off (the broker checks nothing), and the plain answer is still used as before', () => {
     fs.writeFileSync(envFile, BASE(null)); answer(1514);
     const r = run(); assert.strictEqual(r.status, 0, r.stderr); assert.match(env(), /^ASIX_SYSLOG_PORT=1514$/m);
-    assert.deepStrictEqual(bodies(), [{ collector: 'broker-1', syslog_port: 1514, rejected_port: null, signature: 'off' }]);
+    assert.deepStrictEqual(bodies(), [{ collector: 'broker-1', syslog_port: 1514, rejected_port: null, signature: 'off', tls_port: null, rejected_tls_port: null }]);
   });
   it('a good signature: ok, with the new port reported alongside', () => {
     answer(1514, sign(A, 'broker-1', 1514)); const r = run(); assert.strictEqual(r.status, 0, r.stderr);
-    assert.deepStrictEqual(bodies(), [{ collector: 'broker-1', syslog_port: 1514, rejected_port: null, signature: 'ok' }]);
+    assert.deepStrictEqual(bodies(), [{ collector: 'broker-1', syslog_port: 1514, rejected_port: null, signature: 'ok', tls_port: null, rejected_tls_port: null }]);
   });
   it('a signed null (nothing to change) is still a checked answer: ok', () => {
     answer(2514, sign(A, 'broker-1', null)); const r = run(); assert.strictEqual(r.status, 0, r.stderr);
@@ -58,7 +58,7 @@ describe('the signature field in the broker\'s report', { skip: !HAVE_OPENSSL &&
   });
   it('a good signature but a port the broker\'s Vector rejects: signature ok, rejected port reported (the two are independent)', () => {
     fs.writeFileSync(path.join(tmp, 'vectorfail'), ''); answer(1514, sign(A, 'broker-1', 1514));
-    const r = run(); assert.strictEqual(r.status, 1); assert.deepStrictEqual(bodies(), [{ collector: 'broker-1', syslog_port: 514, rejected_port: 1514, signature: 'ok' }]);
+    const r = run(); assert.strictEqual(r.status, 1); assert.deepStrictEqual(bodies(), [{ collector: 'broker-1', syslog_port: 514, rejected_port: 1514, signature: 'ok', tls_port: null, rejected_tls_port: null }]);
   });
   it('an unsigned answer: unsigned, and nothing changed', () => {
     answer(1514); const r = run(); assert.strictEqual(r.status, 1); assert.strictEqual(reported(r).signature, 'unsigned'); assert.strictEqual(env(), BASE(pubFile));

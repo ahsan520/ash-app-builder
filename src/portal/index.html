@@ -1229,8 +1229,9 @@ function brokerConfigCard(cfg, sum) {
         el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, tin,
           el('button', { className: 'btn pri', textContent: 'Set TLS port', onclick: () => tsave(tin.value.trim() === '' ? null : tin.value.trim()) }),
           cfg.tls_port ? el('button', { className: 'btn', textContent: 'Clear', onclick: () => tsave(null) }) : '',
-          cfg.tls_port ? pill('Asking brokers for ' + cfg.tls_port, 'ok') : el('span', { className: 'mute', textContent: 'No TLS port set: brokers keep what they have.' })),
-        el('div', { className: 'mute', style: 'margin-top:6px;font-size:13px', textContent: 'Only brokers that already have a TLS listener (installed with --tls-cert and --tls-key) act on this; the others ignore it. It cannot turn TLS on or off, and it must differ from the syslog port. A broker left out of the tenant-wide port is left out of this too. This page does not show whether a broker applied it yet: check journalctl -u asix-broker-config on the broker and ss -tln | grep <port>.' }));
+          cfg.tls_port ? pill('Asking brokers for ' + cfg.tls_port, 'ok') : el('span', { className: 'mute', textContent: 'No TLS port set: brokers keep what they have.' }),
+          cfg.tls_port ? brokerTlsSummary(sum) : ''),
+        el('div', { className: 'mute', style: 'margin-top:6px;font-size:13px', textContent: 'Only brokers that already have a TLS listener (installed with --tls-cert and --tls-key) act on this; the others ignore it. It cannot turn TLS on or off, and it must differ from the syslog port. A broker left out of the tenant-wide port is left out of this too. The TLS port column below shows what each broker says it applied; if one stays Pending, check journalctl -u asix-broker-config on the broker and ss -tln | grep <port>.' }));
     })(),
     el('div', { className: 'mute', style: 'margin:10px 0 0;font-size:13px', textContent: 'A broker can have its own port instead (Port button on its row); that one wins for it alone. Leave out keeps one broker off this port. Only brokers installed with --accept-config ask for this. Each checks the port itself, validates its Vector config, restarts Vector, and goes back to its old settings if that fails. It does not open the firewall: open the new port on the broker VM, and point the devices at it. Reserved: ' + cfg.reserved_ports.join(', ') + '. See the broker\'s journal: journalctl -u asix-broker-config.' }),
     brokerSigningLine(cfg.signing, sum));
@@ -1275,6 +1276,29 @@ async function brokerPortExclude(b) {
   if (!left && !confirm('Leave ' + b.name + ' out of the tenant-wide syslog port?\nASIX will tell it no port, so it keeps the port it has now. A port set for it alone still applies.')) return;
   try { await api('/v1/brokers/' + b.id + '/syslog-port-exclude', { method: 'PUT', body: { exclude: !left } }); route(); } catch (e) { alert(e.message); }
 }
+// ---- Broker syslog-over-TLS port report ----
+// What a broker says about its syslog-over-TLS listener (b.tls from GET /v1/brokers; src/brokers/config.js tlsState). Brokers that pull their config report the TLS
+// port they listen on after every pull. Information only: not a problem, no alert. ASIX never turns TLS on, so a broker without a listener just says so.
+function brokerTlsCell(b) {
+  const t = b.tls || {}, tip = (x, ...kids) => el('span', { title: x }, ...kids);
+  const now = t.reported_port != null ? ' (now ' + t.reported_port + ')' : '';
+  if (t.state === 'applied') return tip('Its TLS listener is on port ' + t.configured_port + ' (reported ' + when(t.reported_at) + ' UTC).', pill('Applied ' + t.configured_port, 'ok'));
+  if (t.state === 'pending') return tip('Reported ' + when(t.reported_at) + ' UTC. It asks every 5 minutes.', pill('Pending ' + t.configured_port, 'off'), el('span', { className: 'mute', textContent: now }));
+  if (t.state === 'rejected') return tip('This broker tried TLS port ' + t.rejected_port + ' and put its old settings back. See journalctl -u asix-broker-config on the broker.', pill('Rejected ' + t.configured_port, 'bad'), el('span', { className: 'mute', textContent: now }));
+  if (t.state === 'stale') return tip('Last report ' + when(t.reported_at) + ' UTC. Check the timer and Vector on the broker.', pill('Not asking', 'bad'), el('span', { className: 'mute', textContent: now }));
+  if (t.state === 'no_listener') return tip('This broker has no syslog-over-TLS listener, so it ignores the TLS port. ASIX cannot turn TLS on: install it on the broker with bootstrap-broker.sh --tls-cert and --tls-key.', pill('No TLS listener', 'off'));
+  if (t.state === 'unknown') return tip('ASIX asks for TLS port ' + t.configured_port + ' but this broker has said nothing about TLS. It was not set up with --accept-config, or its config script is older than the TLS report. Copy the new script and re-run the bootstrap script with --accept-config.', pill('Not reporting', 'off'));
+  const left = b.config && b.config.excluded;
+  return tip(left ? 'Left out of the tenant-wide ports: ASIX asks this broker for no TLS port.' : (t.has_listener === false ? 'This broker has no TLS listener.' : ''), t.reported_port != null ? String(t.reported_port) : '-');
+}
+// The summary beside the TLS port row on the Syslog port card: how many of the brokers that are asked for the TLS port have it. Information only.
+function brokerTlsSummary(sum) {
+  if (!sum) return '';
+  const asked = (sum.tls_applied || 0) + (sum.tls_not_applied || 0);
+  return el('span', { style: 'display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap' },
+    asked ? (sum.tls_not_applied ? pill(sum.tls_applied + ' of ' + asked + ' applied', 'bad') : pill('All ' + asked + ' applied', 'ok')) : '',
+    sum.tls_no_listener ? el('span', { className: 'mute', textContent: sum.tls_no_listener + ' without a TLS listener' }) : '');
+}
 // Read-only: the broker VMs that report to this install (docs/broker-vm.md), and the command to add one.
 async function pgBrokers() {
   const r = await api('/v1/brokers'), s = r.summary;
@@ -1293,7 +1317,7 @@ async function pgBrokers() {
       { h: 'Name', f: (b) => b.name + (b.alias ? ' (' + b.alias + ')' : '') },
       { h: 'Status', f: (b) => pill(b.status === 'connected' ? '\u2713 Connected' : '\u2715 Disconnected', b.status === 'connected' ? 'ok' : 'off') },
       { h: 'Vector', f: (b) => b.vector_version || '-' }, { h: 'Upgrade', f: (b) => (UPGRADE_PILL[b.upgrade] ? UPGRADE_PILL[b.upgrade](r.vector_target) : '-') },
-      { h: 'Syslog port', f: brokerConfigCell }, { h: 'Config check', f: brokerSignatureCell },
+      { h: 'Syslog port', f: brokerConfigCell }, { h: 'TLS port', f: brokerTlsCell }, { h: 'Config check', f: brokerSignatureCell },
       { h: 'OS', f: (b) => b.os || '-' }, { h: 'IP address', f: (b) => b.last_ip || '-' },
       { h: 'Last seen (UTC)', f: (b) => when(b.last_seen) }, { h: 'Events (24h)', f: (b) => b.events_24h.toLocaleString() },
       { h: 'Alert if down', f: (b) => pill(b.watch_disconnect ? 'On' : 'Off', b.watch_disconnect ? 'ok' : 'off') },
