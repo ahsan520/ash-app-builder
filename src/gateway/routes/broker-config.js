@@ -26,6 +26,12 @@ router.put('/v1/broker-config', ...guarded('collectors:write'), async (req, res)
   if (!has('syslog_port') && !has('tls_port')) return apiError(res, 400, 'INVALID_BODY', 'Send syslog_port and/or tls_port (for example 1514, or null to clear it)');
   const sp = has('syslog_port') ? config.checkSyslogPort(body.syslog_port) : null;
   if (sp && sp.error) return apiError(res, 400, 'INVALID_SYSLOG_PORT', sp.error);
+  // Brokers that would follow a new tenant-wide port but already have the other kind of port set to that number (their own). Own transaction: a database
+  // without the per-broker columns skips the check.
+  const clash = async (fn, port) => { try { return await db.withTenant(req.tenant_id, (client) => fn(client, req.tenant_id, port)); } catch (e) { console.error('Broker port clash read failed:', e.message); return []; } };
+  const names = (l) => l.join(', ');
+  if (sp && sp.value !== null) { const l = await clash(config.brokersClashingWithSyslog, sp.value); if (l.length) return apiError(res, 400, 'INVALID_SYSLOG_PORT', `Syslog port ${sp.value} is the own syslog-over-TLS port of: ${names(l)}. Change that first, or leave the broker out.`); }
+  if (has('tls_port')) { const t = config.checkTlsPort(body.tls_port); if (!t.error && t.value !== null) { const l = await clash(config.brokersClashingWithTls, t.value); if (l.length) return apiError(res, 400, 'INVALID_TLS_PORT', `Syslog-over-TLS port ${t.value} is the own syslog port of: ${names(l)}. Change that first, or leave the broker out.`); } }
   try {
     const out = await db.withTenant(req.tenant_id, async (client) => {
       const curSyslog = sp ? sp.value : await config.readSyslogPort(client, req.tenant_id);

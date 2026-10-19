@@ -125,6 +125,22 @@ async function main() {
     await assert.rejects(() => db.query('UPDATE collectors SET tls_port_override = 70000 WHERE tenant_id = $1', [TENANT]), /violates check/);
     await assert.rejects(() => db.query('UPDATE collectors SET tls_port_override = 0 WHERE tenant_id = $1', [TENANT]), /violates check/);
 
+    // clashes from the other direction and for the tenant-wide saves (state here: broker-c has its own TLS port 6517, the tenant-wide TLS port is 6514)
+    const syslogOwn = (id, v) => call('PUT', '/v1/brokers/' + id + '/syslog-port', { syslog_port: v });
+    r = await syslogOwn(C, 6517); assert.strictEqual(r.status, 400); assert.strictEqual(r.json.error.code, 'INVALID_SYSLOG_PORT'); assert.match(r.json.error.message, /TLS port/);
+    assert.strictEqual((await syslogOwn(A, 6514)).status, 400, 'broker-a follows the tenant-wide TLS port 6514');
+    assert.strictEqual((await syslogOwn(C, 6514)).status, 200, 'broker-c has its own TLS port, so 6514 is not its TLS port'); assert.strictEqual((await syslogOwn(C, null)).status, 200);
+    r = await call('PUT', '/v1/broker-config', { syslog_port: 6517 }); assert.strictEqual(r.status, 400); assert.match(r.json.error.message, /broker-c/);
+    assert.strictEqual((await call('PUT', '/v1/broker-config', { syslog_port: 6519 })).status, 200);
+    assert.strictEqual((await syslogOwn(A, 2599)).status, 200);
+    r = await call('PUT', '/v1/broker-config', { tls_port: 2599 }); assert.strictEqual(r.status, 400); assert.strictEqual(r.json.error.code, 'INVALID_TLS_PORT'); assert.match(r.json.error.message, /broker-a/);
+    assert.strictEqual((await call('GET', '/v1/broker-config')).json.config.tls_port, 6514, 'a refused save changes nothing');
+    assert.strictEqual((await put(A, { tls_port: 2599 })).status, 400, 'and the own-port route refuses it too');
+    assert.strictEqual((await call('PUT', '/v1/brokers/' + C + '/syslog-port-exclude', { exclude: true })).status, 200);
+    assert.strictEqual((await call('PUT', '/v1/broker-config', { syslog_port: 6517 })).status, 200, 'a broker that is left out does not follow it, so no clash');
+    assert.strictEqual((await call('PUT', '/v1/broker-config', { syslog_port: null })).status, 200); assert.strictEqual((await syslogOwn(A, null)).status, 200);
+    assert.strictEqual((await call('PUT', '/v1/brokers/' + C + '/syslog-port-exclude', { exclude: false })).status, 200);
+
     // a revoked key gets no config at all, named or not
     await db.withTenant(TENANT, (c) => c.query("UPDATE ingestion_keys SET status = 'revoked' WHERE name = 'broker-c-key'"));
     assert.strictEqual((await pull(keyC, 'broker-c')).status, 401); assert.strictEqual((await pull(keyC)).status, 401);

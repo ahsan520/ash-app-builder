@@ -14,6 +14,11 @@ router.put('/v1/brokers/:id/syslog-port', ...guarded('collectors:write'), async 
   if (!Object.prototype.hasOwnProperty.call(body, 'syslog_port')) return apiError(res, 400, 'INVALID_BODY', 'Send syslog_port (for example 1514, or null to follow the tenant-wide port)');
   const p = config.checkSyslogPort(body.syslog_port);
   if (p.error) return apiError(res, 400, 'INVALID_SYSLOG_PORT', p.error);
+  if (p.value !== null) {   // must differ from the TLS port this broker is asked for; its own transaction, a database without the TLS column skips the check
+    let tls = null;
+    try { tls = await db.withTenant(req.tenant_id, (client) => config.readBrokerTlsPort(client, req.tenant_id, req.params.id)); } catch (e) { console.error('Broker TLS port read failed:', e.message); }
+    if (tls && tls.port === p.value) return apiError(res, 400, 'INVALID_SYSLOG_PORT', `Syslog port ${p.value} is the syslog-over-TLS port this broker is asked for; choose a different one`);
+  }
   try {
     const broker = await db.withTenant(req.tenant_id, (client) => config.writeOverride(client, req.tenant_id, req.params.id, p.value));
     if (!broker) return apiError(res, 404, 'NOT_FOUND', 'Broker not found');

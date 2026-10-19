@@ -268,8 +268,32 @@ async function readBrokerPorts(client, tenantId, brokerId) {
   return r.rows[0] ? { own: r.rows[0].syslog_port_override != null ? Number(r.rows[0].syslog_port_override) : null, excluded: r.rows[0].syslog_port_exclude === true } : null;
 }
 
+// ---- Port clashes between the tenant-wide ports and brokers' own ports -------------------------------------------------------
+// A broker's syslog port and its TLS port must differ. The own-port routes check their own broker; these two reads check the TENANT-WIDE saves against the
+// brokers that would follow the new value (no own port of that kind, not left out) but already have the other kind of port set to the same number.
+// Names only, at most 6. Run in their own transaction by the caller: a database without the columns throws, and the caller then skips the check.
+async function brokersClashingWithSyslog(client, tenantId, port) {
+  const r = await client.query("SELECT name FROM collectors WHERE tenant_id = $1 AND version ILIKE 'vector-%' AND syslog_port_override IS NULL AND syslog_port_exclude = false AND tls_port_override = $2 ORDER BY name LIMIT 6", [tenantId, port]);
+  return r.rows.map((x) => x && x.name).filter(Boolean);
+}
+async function brokersClashingWithTls(client, tenantId, port) {
+  const r = await client.query("SELECT name FROM collectors WHERE tenant_id = $1 AND version ILIKE 'vector-%' AND tls_port_override IS NULL AND syslog_port_exclude = false AND syslog_port_override = $2 ORDER BY name LIMIT 6", [tenantId, port]);
+  return r.rows.map((x) => x && x.name).filter(Boolean);
+}
+// What the own-syslog-port route needs: the TLS port this broker is asked for (own, else tenant-wide unless left out). Null = no such broker.
+async function readBrokerTlsPort(client, tenantId, brokerId) {
+  const r = await client.query("SELECT tls_port_override, syslog_port_exclude FROM collectors WHERE id = $1 AND tenant_id = $2 AND version ILIKE 'vector-%'", [brokerId, tenantId]);
+  if (!r.rows[0]) return null;
+  const own = r.rows[0].tls_port_override != null ? Number(r.rows[0].tls_port_override) : null;
+  const left = r.rows[0].syslog_port_exclude === true;
+  if (own !== null) return { port: own };
+  if (left) return { port: null };
+  return { port: await readTlsPort(client, tenantId) };
+}
+
 const view = (port) => ({ syslog_port: port, reserved_ports: Object.keys(RESERVED).map(Number) });
 
 module.exports = { RESERVED, checkTlsPort, readTlsPort, writeTlsPort, REPORT_FRESH_MS, SIGNATURE_VALUES, SIGNATURE_PROBLEMS, SIGNATURE_HELP, signatureState, checkSyslogPort, readSyslogPort, writeSyslogPort, view, checkReport, recordReport, configState, tlsState,
   nameOrNull, effectivePort, portSource, readOverride, writeOverride, readExclude, writeExclude,
-  effectiveTlsPort, tlsSource, readTlsOverride, writeTlsOverride, readBrokerPorts };
+  effectiveTlsPort, tlsSource, readTlsOverride, writeTlsOverride, readBrokerPorts,
+  brokersClashingWithSyslog, brokersClashingWithTls, readBrokerTlsPort };
