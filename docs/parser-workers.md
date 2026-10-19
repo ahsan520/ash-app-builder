@@ -85,3 +85,6 @@ Search `parsed._parse_error` to find events that were stored unparsed (Log searc
 - `tests/parse-ingest-db.test.js` (gated by `ASIX_TEST_DB=1`): the real HTTP lane on PostgreSQL. Built-in and tenant rules, a saved
   change taking effect at once, drops, timeout and crash stored unparsed and marked, the 503 and its collector counts. CI runs it
   inline and again with `ASIX_PARSER_WORKERS=2`.
+
+## Alert when events are stored unparsed (off until chosen)
+Set `ASIX_PARSE_ALERT_MIN_EVENTS` on the API (`k8s/30-asix-api.yaml`, default `"0"` = off) to the number of unparsed events in the window that should raise an alert, and optionally `ASIX_PARSE_ALERT_WINDOW_MIN` (5 to 1440, default 15). The collector watchdog checks every 60 seconds and raises one alert, **Events stored unparsed**, with the reasons (`PARSE_TIMEOUT`, `PARSE_WORKER_CRASH`, `PARSE_FAILED`, `PARSE_QUARANTINED`), through your notification channels (severity `ASIX_WATCHDOG_SEVERITY`, default `high`). It closes by itself when the count in the window drops below the limit. If you close it by hand while the count is still high it is not raised again for 60 minutes. A good first value is 20 with the default window; check Settings, Parser pool for what is normal for you first. See `docs/product-plan.md`, "Unparsed-events alert".

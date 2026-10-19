@@ -80,6 +80,12 @@ spec:
               value: "high"
             - name: ASIX_WATCHDOG_GRACE_SECONDS
               value: "300"
+            # Unparsed-events alert (src/ingestion/parse-watch.js): one alert when at least this many events were stored unparsed in the
+            # window (minutes). "0" = off. Runs in the watchdog cycle above, so the severity and grace settings apply.
+            - name: ASIX_PARSE_ALERT_MIN_EVENTS
+              value: "0"
+            - name: ASIX_PARSE_ALERT_WINDOW_MIN
+              value: "15"
             # Event store (src/events): "postgres" (default) or "clickhouse". Switching does NOT copy existing events: run
             # src/events/copy-events.js first (docs/clickhouse-server.md, "Switching the API to ClickHouse"). The nightly backup
             # covers both: the PostgreSQL sets and, when ClickHouse is deployed, its events (docs/clickhouse-backup.md). The
