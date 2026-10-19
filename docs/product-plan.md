@@ -228,7 +228,7 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   one alert for the down collector and none for the connected, unwatched or other tenant's, no duplicate while open or acknowledged, no repeat after a manual close,
   closed with a note on reconnect, a new outage raises a new alert, custom threshold, watching off, collector deleted, and the real notification dispatcher sending it
   once) and in unit and route tests (`tests/collector-watchdog.test.js`, in `npm test`). **Not yet run on the k3s box or seen in a browser.**
-- Not built: a per-collector severity, a separate "recovered" notification (the alert closes with a note, nothing is sent), (the tenant-wide "watch everything" switch is done: see "Collector watch everything" below),
+- Not built: a per-collector severity, (the "recovered" notification is done: see "Resolved notifications" below), (the tenant-wide "watch everything" switch is done: see "Collector watch everything" below),
   (An alert for a watched broker that does not check ASIX's signature while ASIX signs is done: see "Broker signature alerts" below. An alert when a broker's installer key is revoked or deleted is done: see "Broker key alerts" below. An alert for a collector that stops sending events while its heartbeat keeps arriving is done: see "Collector silence alerts" below.)
 
 ### Collector silence alerts (what exists)
@@ -254,7 +254,7 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   no repeat after a manual close, closed with a note when events return, a new silence raises a new alert, limit raised, Disconnected collector left to the other alert until it counts as Connected, watch off, collector deleted,
   and the list route returning the setting) and in unit and route tests (`tests/collector-silence.test.js`, in `npm test`). **Not run on ClickHouse (the only store call is `groupCounts`, which the conformance suites already
   cover on both engines), not yet run on the k3s box, the new button and column not seen in a browser, the new CI line not run on GitHub.**
-- Not built: a per-collector severity, a limit above 3 days, (the tenant-wide "watch everything" limit is done: see "Collector watch everything" below), a "recovered" notification (the alert closes with a note, nothing is sent), silence per source type or per
+- Not built: a per-collector severity, a limit above 3 days, (the tenant-wide "watch everything" limit is done: see "Collector watch everything" below), (the "recovered" notification is done: see "Resolved notifications" below), silence per source type or per
   device behind a broker (it is per collector, so a broker with ten devices is silent only when all ten are), a watch for sources that appear only in events.
 
 ### Broker key alerts (what exists)
@@ -272,7 +272,7 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   job: only the watched broker on a bad key raises, not healthy, unwatched, non-broker or other-tenant ones; sent once; no repeat; closed on rotation; the normal rotation order raises nothing; deleted key
   raises a new alert; watch off and broker deleted close it; the watchdog's real `runOnce` runs it without error) and in unit tests (`tests/broker-key-watch.test.js`, in `npm test`).
   **Not yet run on the k3s box or a real broker, the new CI line has not run on GitHub.**
-- Not built: an alert for a key that is about to expire (keys do not expire), a separate alert for a key revoked on a collector that is not a broker, a "recovered" notification.
+- Not built: an alert for a key that is about to expire (keys do not expire), a separate alert for a key revoked on a collector that is not a broker (the "recovered" notification is done: see "Resolved notifications" below).
 
 ### Broker signature alerts (what exists)
 - **The gap it closes:** with a signing key on ASIX, the Brokers page shows in its Config check column which brokers have no public key (**Not checking**) or refuse ASIX's answer (**Refused**), but nobody is told unless they open that page. A broker never re-run with `--config-pubkey` kept acting on unsigned answers unseen.
@@ -282,7 +282,7 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
 - **One alert per problem:** it stays while the problem stays (a refusal that changes reason keeps the same alert). It closes, with an "ASIX" note, when the broker checks again, stops reporting the problem, is no longer watched, is deleted, or ASIX stops signing. If an analyst closes it while the same problem is still there it is not raised again for that problem; a different problem (no public key after a refusal, or the reverse) raises a new one.
 - **It is the broker describing itself, not proof:** an old or edited script can say anything, exactly as for the Brokers page column.
 - Checked on real PostgreSQL 16 with the schema applied twice, a real signing key, the real heartbeat lane, the real broker report route and the real notification dispatcher (`tests/broker-signature-watch-db.test.js`, in the CI `postgres` job: ASIX not signing raises nothing; grace; only the watched broker with no public key and the watched broker that refuses raise, not a verifying, unwatched, never-reporting, non-broker or other-tenant one; sent once; no repeat while open or acknowledged or after a manual close; a refusal changing reason keeps one alert; closes with a note when the broker reports ok or its report goes stale; a different problem raises a new alert; closes when ASIX stops signing and is not raised again for the same problems; **Watch everything** covers an unwatched broker; watch off and broker deleted close it; the watchdog's real `runOnce` runs it without error) and in unit tests (`tests/broker-signature-watch.test.js`, in `npm test`). `collector-watch-db`, `collector-silence-db`, `collector-watch-all-db`, `broker-key-watch-db`, `brokers-db`, `broker-signature-report-db` still pass; `npm test` (628 tests) and `npm run lint` clean. **Not yet run on the k3s box or a real broker, the new CI line has not run on GitHub.**
-- Not built: a separate severity for this alert, requiring signatures from the ASIX side (ASIX cannot tell whether a pull comes from a checking broker), an alert for a broker that never reported, a "recovered" notification.
+- Not built: a separate severity for this alert, requiring signatures from the ASIX side (ASIX cannot tell whether a pull comes from a checking broker), an alert for a broker that never reported (the "recovered" notification is done: see "Resolved notifications" below).
 
 ### Collector watch everything (what exists)
 - **The gap it closes:** "Alert if down" and "Alert if silent" were per collector, so a new collector or broker was not watched until someone pressed the button on its row. One tenant-wide switch now covers every collector,
@@ -318,6 +318,40 @@ Every Phase 1 item is now done. Phase 2 (foundation for scale) is now done too: 
   **Not run on the k3s box, the button and the "Left out" pills have not been seen in a browser, the new CI line has not run on GitHub.** Not built: leaving a collector out of one alert only (it is both), a bulk
   "leave out" for several collectors.
 - Not built: a severity per setting, a switch for sources that appear only in events (they have no row), a count of how many alerts the switch would raise before it is turned on, the Brokers page showing the switch (it shows only what was set on the broker).
+
+### Resolved notifications (what exists)
+- **The gap it closes:** every watchdog alert (collector disconnected, collector sending no events, broker installer key unusable, broker not checking the config signature, events stored unparsed) is closed by ASIX
+  itself when the problem goes away, with an "ASIX" note on the alert, but nothing was sent: a person told "broker-1 is down" never heard that it was back, and a PagerDuty incident stayed open until someone
+  resolved it by hand.
+- **What it does:** **off until `ASIX_NOTIFY_RECOVERED` is `"true"`** (`k8s/30-asix-api.yaml`, default `"false"`, so deploying this changes nothing by itself). When on, the notification dispatcher's cycle
+  (`src/notifications/dispatcher.js`, every 30 seconds) also sends one short **Resolved** message for each alert that ASIX closed (`src/notifications/recovered.js`). The title is `Resolved: <the alert's title>`,
+  the text is ASIX's own closing note (for example "The collector is connected again."), the status is `closed`. Slack gets a `[RESOLVED]` header with a check mark, Teams and email a `[RESOLVED]` tag (email subject
+  `[ASIX][RESOLVED] ...`), a generic webhook the event `alert.resolved` (instead of `alert.created`, same fields, same signature headers), and **PagerDuty gets a real `resolve` with the alert's own dedup key**, so the
+  incident closes by itself. The message says "Resolved" and carries the reason, so an alert closed because its collector is no longer watched or was deleted reads honestly: it is resolved, not "recovered".
+- **Who gets it:** only a channel that was **sent** the original alert message (`notification_deliveries.status = 'sent'`) and is still enabled. A channel whose minimum severity or rule filter kept the alert out, a
+  channel that was added later, and an alert whose original message failed or is still retrying, send nothing. Each channel gets at most one Resolved message per alert (unique per channel and alert).
+- **Which alerts count:** closed, no detection rule behind it (watchdog alerts only; a detection rule's alert is closed by people), not merged into another alert, closed within the last day, and carrying a note written
+  by ASIX itself (not the "Merged ..." note of the dedupe tool). **An alert an analyst closes by hand sends nothing**, and neither does an alert that stays open. If an analyst reopens an ASIX-closed alert and closes it
+  again, no second message is sent.
+- **Delivery:** same as alert messages: due rows are claimed, sent outside any database transaction, and retried after 1 minute, 5 minutes, 15 minutes and 1 hour, then marked `failed` (five tries). A channel switched
+  off before the message goes out is `skipped`.
+- **Schema:** new table `notification_recoveries` (one row per channel and alert, `UNIQUE (channel_id, alert_id)`, row-level security like the other tenant tables), created by the normal schema-init job and safe to
+  re-run. It is a separate table so the unique key of `notification_deliveries` is untouched. If the table is missing (schema job not yet run) the dispatcher logs one line per tenant per cycle and keeps sending alert messages as
+  before. No role, route or portal change.
+- Checked: real PostgreSQL 16 with the schema applied twice: `tests/notify-recovered-db.test.js` (CI `postgres` job) runs the **real watchdog** to raise and close alerts and the **real dispatcher** to send them, with
+  only the final send replaced by a recorder: off sends nothing, on sends the Resolved message to the channel that heard the alert and not to the critical-only channel that did not, not for an alert closed by hand,
+  not for an alert whose first message never went out, not for one still open; never twice; a failed send waits for its time and then goes out; gives up after five tries; another tenant's alert goes to its own channel
+  only; a channel switched off is skipped; an alert merged into another one, one with a detection rule behind it, a "Merged" note and an alert closed two days ago send nothing. The test fails with the `sent` condition
+  dropped, with the ASIX-note condition dropped, and with the no-detection-rule condition dropped. `tests/notify-recovered.test.js` (unit, in `npm test`) runs every sender: the message, Slack, Teams, email, the generic
+  webhook, and the real HTTP sender against a local server, which sees one `trigger` for the alert and one `resolve` with the same dedup key for the resolution. `collector-watch-db`, `collector-silence-db`,
+  `broker-key-watch-db`, `broker-signature-watch-db`, `parse-watch-db`, `collector-watch-all-db`, `collector-watch-exclude-db`, `alert-dedupe-db`, `my-alerts-db`, `brokers-db` and `heartbeat-db` still pass; `npm test`
+  (652 tests) and `npm run lint` clean; `scripts/ci/validate-k8s.py` 0 failures. **Not yet run on the k3s box or against a real Slack, Teams, email or PagerDuty account (the real HTTP sender was run against a local
+  server only), the new CI line has not run on GitHub.** The test user is a PostgreSQL superuser, which bypasses row-level security, so the policy is checked by its definition, not by a cross-tenant read.
+- To try it on the k3s box: deploy (the schema job creates the table); set `ASIX_NOTIFY_RECOVERED` to `"true"` in `k8s/30-asix-api.yaml` and deploy again; turn on **Alert if down** for a broker and stop Vector on it
+  past its threshold, see the alert and your channel's message; start Vector again and within about two minutes (the next watchdog cycle closes the alert, the next dispatcher cycle sends) see the **Resolved** message
+  in the same channel (a PagerDuty channel: the incident resolves); close another alert by hand and see that no Resolved message follows. Set the variable back to `"false"` to stop them.
+- Not built: a switch per channel (it is tenant-wide, per API deployment), a Resolved message for alerts a person closes, for alerts from detection rules, or for merged alerts, a portal view of the Resolved messages
+  (the existing delivery list shows only alert messages), a different template per channel type, a digest.
 
 ### Alert triage (what exists)
 - Each alert can be assigned to a user of the same tenant (or unassigned), and carries analyst notes

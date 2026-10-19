@@ -8,6 +8,7 @@
 const db = require('../db');
 const box = require('./secret-box');
 const { buildMessage, sendToChannel } = require('./senders');
+const recovered = require('./recovered');
 
 const LOCK_KEY = 7412003;
 const MAX_ATTEMPTS = 5;
@@ -74,16 +75,23 @@ async function runTenant(tenantId, deps = {}) {
   const queued = await enqueue(tenantId);
   const due = await claim(tenantId);
   for (let i = 0; i < due.length; i += CONCURRENCY) await Promise.all(due.slice(i, i + CONCURRENCY).map((d) => deliverOne(tenantId, d, deps)));
-  return { queued, attempted: due.length };
+  // "Resolved" messages for alerts ASIX closed itself (off until ASIX_NOTIFY_RECOVERED is "true"). Its own try/catch: a problem here
+  // (for example the schema job has not created the table yet) never stops the alert messages above.
+  let resolved = 0;
+  if (recovered.enabled()) {
+    try { const r = await recovered.runTenant(tenantId, deps); resolved = r.queued; }
+    catch (e) { console.error(`[notify] resolved messages for tenant ${tenantId} failed: ${e.message}`); }
+  }
+  return { queued, attempted: due.length, resolved };
 }
 
 async function runOnce(deps = {}) {
   const lock = await db.pool.connect();
   try {
     if (!(await lock.query('SELECT pg_try_advisory_lock($1) AS ok', [LOCK_KEY])).rows[0].ok) return { skipped: true };
-    const total = { tenants: 0, queued: 0, attempted: 0, errors: 0 };
+    const total = { tenants: 0, queued: 0, attempted: 0, resolved: 0, errors: 0 };
     for (const t of (await lock.query("SELECT id FROM tenants WHERE status = 'active'")).rows) {
-      try { const r = await runTenant(t.id, deps); total.tenants += 1; total.queued += r.queued; total.attempted += r.attempted; }
+      try { const r = await runTenant(t.id, deps); total.tenants += 1; total.queued += r.queued; total.attempted += r.attempted; total.resolved += r.resolved; }
       catch (e) { total.errors += 1; console.error(`[notify] tenant ${t.id} failed: ${e.message}`); }
     }
     return total;
@@ -101,7 +109,7 @@ function start() {
   const tick = async () => {
     if (running || !box.configured()) return;
     running = true;
-    try { const r = await runOnce(); if (r.queued || r.attempted || r.errors) console.log('[notify] cycle', JSON.stringify(r)); }
+    try { const r = await runOnce(); if (r.queued || r.attempted || r.resolved || r.errors) console.log('[notify] cycle', JSON.stringify(r)); }
     catch (e) { console.error('[notify] cycle failed:', e.message); }
     finally { running = false; }
   };

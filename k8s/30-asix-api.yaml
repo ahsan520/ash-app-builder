@@ -86,6 +86,11 @@ spec:
               value: "0"
             - name: ASIX_PARSE_ALERT_WINDOW_MIN
               value: "15"
+            # "Resolved" messages (src/notifications/recovered.js): "true" sends one short message to the channels that were sent an alert
+            # when ASIX itself closes that alert because the problem went away (PagerDuty channels get a resolve). Alerts an analyst closes
+            # by hand send nothing. "false" = off (the previous behaviour).
+            - name: ASIX_NOTIFY_RECOVERED
+              value: "false"
             # Event store (src/events): "postgres" (default) or "clickhouse". Switching does NOT copy existing events: run
             # src/events/copy-events.js first (docs/clickhouse-server.md, "Switching the API to ClickHouse"). The nightly backup
             # covers both: the PostgreSQL sets and, when ClickHouse is deployed, its events (docs/clickhouse-backup.md). The

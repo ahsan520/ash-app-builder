@@ -588,6 +588,34 @@ data:
     GRANT SELECT, INSERT, UPDATE, DELETE ON notification_channels TO asix_admin;
     GRANT SELECT, INSERT, UPDATE, DELETE ON notification_deliveries TO asix_admin;
 
+    -- "Resolved" messages: one row per channel and per alert that ASIX itself closed because the problem went away
+    -- (src/notifications/recovered.js, off until ASIX_NOTIFY_RECOVERED is "true"). A separate table, so the unique key
+    -- of notification_deliveries (one ALERT message per channel and alert) is untouched.
+    CREATE TABLE IF NOT EXISTS notification_recoveries (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) NOT NULL,
+        channel_id UUID REFERENCES notification_channels(id) ON DELETE CASCADE NOT NULL,
+        alert_id UUID REFERENCES alerts(id) ON DELETE CASCADE NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TIMESTAMP NOT NULL DEFAULT localtimestamp,
+        last_error TEXT,
+        sent_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (channel_id, alert_id)
+    );
+
+    ALTER TABLE notification_recoveries ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS notification_recoveries_tenant_isolation ON notification_recoveries;
+    CREATE POLICY notification_recoveries_tenant_isolation ON notification_recoveries
+        FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    CREATE INDEX IF NOT EXISTS idx_notif_recoveries_due ON notification_recoveries(tenant_id, status, next_attempt_at);
+
+    GRANT SELECT, INSERT, UPDATE, DELETE ON notification_recoveries TO asix_admin;
+
     -- ============================================================
     -- Storage & retention
     --   * events becomes a table partitioned by DAY (received_at). Old data is removed by
