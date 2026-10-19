@@ -99,6 +99,7 @@ async function runOnce(opts = {}) {
     const total = { tenants: 0, raised: 0, closed: 0, errors: 0 };
     const silence = require('./silence');        // required here, not at the top: these files read severity() from this one
     const keyWatch = require('./key-watch');
+    const sigWatch = require('./signature-watch');
     for (const t of (await lock.query("SELECT id FROM tenants WHERE status = 'active'")).rows) {
       try { const r = await runTenant(t.id, opts); total.tenants += 1; total.raised += r.raised; total.closed += r.closed; }
       catch (e) { total.errors += 1; console.error(`[watchdog] tenant ${t.id} failed: ${e.message}`); }
@@ -108,6 +109,9 @@ async function runOnce(opts = {}) {
       // Watched brokers whose installer key was revoked or deleted.
       try { const r = await keyWatch.runTenant(t.id, opts); total.raised += r.raised; total.closed += r.closed; }
       catch (e) { total.errors += 1; console.error(`[watchdog] broker key check for tenant ${t.id} failed: ${e.message}`); }
+      // Watched brokers that do not check ASIX's config signature while ASIX signs. Separate, so a database without the report column never stops the alerts above.
+      try { const r = await sigWatch.runTenant(t.id, opts); total.raised += r.raised; total.closed += r.closed; }
+      catch (e) { total.errors += 1; console.error(`[watchdog] broker signature check for tenant ${t.id} failed: ${e.message}`); }
     }
     return total;
   } finally {

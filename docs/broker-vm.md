@@ -318,7 +318,19 @@ The gap it closes: with a signing key on ASIX, nothing showed which brokers had 
 
 Reasons for **Refused** (all of them leave `broker.env` and Vector alone): `unsigned` (ASIX did not sign: is the Secret `asix-config-signing` set and `asix-api` restarted?), `bad signature` (wrong key on the broker, or the answer was changed on the way: compare the key id the bootstrap printed with the portal's), `wrong broker` (the answer was made for another name: check `ASIX_BROKER_NAME`), `clock skew` (the answer is further from the broker's clock than `ASIX_CONFIG_MAX_SKEW_S`: check time sync), `bad format` (the signed part could not be read), `no key file` (the file named by `ASIX_CONFIG_PUBKEY_FILE` is missing: re-run the bootstrap with `--config-pubkey`), `no openssl` (install it on the broker).
 
-**Limits, stated plainly.** This is the broker describing itself, not ASIX proving it: a broker running an old or edited script, or one that has been taken over, can say anything. It is information for the operator. It does not change what a broker accepts, is not a "needs attention" problem and raises no alert. A report is only as fresh as the broker's last pull (every 5 minutes), and only brokers installed with `--accept-config` report at all. Not built: an alert for a broker that does not check while ASIX signs, a way to require signatures from the ASIX side (ASIX cannot refuse to serve an unchecked broker, because it cannot tell whether a pull comes from one), showing the key id each broker trusts.
+**Limits, stated plainly.** This is the broker describing itself, not ASIX proving it: a broker running an old or edited script, or one that has been taken over, can say anything. It is information for the operator. It does not change what a broker accepts, is not a "needs attention" problem on the page. The separate alert for a watched broker that does not check while ASIX signs is described in the next section. A report is only as fresh as the broker's last pull (every 5 minutes), and only brokers installed with `--accept-config` report at all. Not built: an alert for a broker that does not check while ASIX signs, a way to require signatures from the ASIX side (ASIX cannot refuse to serve an unchecked broker, because it cannot tell whether a pull comes from one), showing the key id each broker trusts.
+
+## Getting an alert when a broker does not check the signature (done 2026-10-19)
+
+When ASIX signs its config answers (see "Signed config"), a watched broker that has no public key, or that refuses ASIX's answer, raises the alert **Broker not checking config signature** (severity `high`, through your notification channels). "Watched" is the same as for the other broker alerts: **Alert if down** on the broker, or **Watch everything** on the Collectors page.
+
+| The broker says | Alert? | What to do |
+|---|---|---|
+| Not checking (`off`: no public key) | Yes | Copy the public key from the Syslog port card on the Brokers page, then re-run `bootstrap-broker.sh` with the broker's usual options plus `--accept-config --config-pubkey <file>` |
+| Refused (`bad_signature`, `wrong_broker`, `clock_skew`, ...) | Yes | The alert text and the Brokers page give the fix for each reason (see "Which brokers check the signature") |
+| Checks (`ok`), waiting, never reported, or a refusal report older than 15 minutes | No | Nothing; a broker that stopped reporting is the disconnect alert's job |
+
+Nothing is raised while ASIX does not sign, and an open alert closes (with an "ASIX" note) when it stops. It closes by itself when the broker checks again. If you close it while the same problem is still there it is not raised again for that problem. It is the broker describing itself: an old or edited script can say anything.
 
 ## Getting an alert when a broker goes quiet
 A broker that stops (Vector down, VM off, network cut) shows as Disconnected on the Collectors and Brokers pages, but nothing tells you unless you look. On the
