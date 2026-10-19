@@ -4,7 +4,7 @@
 // This file recognises those rows and shapes them for the Brokers page. Pure functions, no database.
 const { effectiveMinutes, isCustom, statusOf, tsMs } = require('../collectors/status');
 const { upgradeState } = require('./upgrade');
-const { configState, effectivePort, portSource } = require('./config');
+const { configState, effectivePort, portSource, signatureState, SIGNATURE_HELP } = require('./config');
 
 const BROKER_VERSION_SQL = 'vector-%';              // the same rule as isBroker(), for the query
 const isBroker = (row) => !!row && /^vector-/i.test(String(row.version || ''));
@@ -21,7 +21,7 @@ function problemsOf(b, now = Date.now()) {
   return out;
 }
 
-function shape(row, { now = Date.now(), events24h = 0, target = null, syslogPort = null } = {}) {
+function shape(row, { now = Date.now(), events24h = 0, target = null, syslogPort = null, signingOn = false } = {}) {
   const b = {
     id: row.id, name: row.name, alias: row.alias || null,
     vector_version: String(row.version || '').replace(/^vector-/i, '') || null,
@@ -38,6 +38,8 @@ function shape(row, { now = Date.now(), events24h = 0, target = null, syslogPort
   const own = row.syslog_port_override != null ? Number(row.syslog_port_override) : null;
   const left = row.syslog_port_exclude === true;   // left out of the tenant-wide port; an own port still applies
   b.config = { ...configState(effectivePort(syslogPort, own, left), row, now), source: portSource(syslogPort, own, left), override_port: own, excluded: left };   // state: none | unknown | applied | rejected | pending | stale; not a problem
+  b.signature = { ...signatureState(signingOn, row, now), help: null };   // state: unknown | not_verifying | verifying | waiting | refused | stale; not a problem
+  b.signature.help = b.signature.problem ? SIGNATURE_HELP[b.signature.problem] || null : null;
   return b;
 }
 
@@ -55,6 +57,9 @@ function summarize(brokers) {
     config_not_applied: brokers.filter((b) => b.config && ['unknown', 'rejected', 'pending', 'stale'].includes(b.config.state)).length,
     port_overrides: brokers.filter((b) => b.config && b.config.source === 'broker').length,
     port_excluded: brokers.filter((b) => b.config && b.config.excluded && b.config.source !== 'broker').length,
+    signature_verifying: brokers.filter((b) => b.signature && b.signature.state === 'verifying').length,
+    signature_not_verifying: brokers.filter((b) => b.signature && b.signature.state === 'not_verifying').length,
+    signature_refused: brokers.filter((b) => b.signature && b.signature.state === 'refused').length,
     events_24h: brokers.reduce((n, b) => n + b.events_24h, 0),
     versions, mixed_versions: Object.keys(versions).length > 1,
   };

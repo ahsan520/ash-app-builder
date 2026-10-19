@@ -20,6 +20,8 @@
 # key can be replaced without a gap), that the signed text was made for THIS broker's name, and that it was issued within ASIX_CONFIG_MAX_SKEW_S
 # (default 600) seconds of this machine's clock. An unsigned answer, a bad signature, another broker's answer or an old one changes nothing (exit 1,
 # the reason in the journal). The unsigned `config` part of the answer is ignored in this mode.
+# The report also says whether this broker checks signatures (`signature`): off (no public key), unchecked (it has one but got no answer to check), ok (the
+# last answer passed) or the reason the last answer was refused (unsigned, bad_signature, wrong_broker, clock_skew, bad_format, no_key_file, no_openssl).
 # It does not open the firewall: the new port must be opened on this VM by hand. Results go to the journal (journalctl -u asix-broker-config).
 set -uo pipefail
 
@@ -42,6 +44,9 @@ if [ -z "$URL" ]; then : "${ASIX_INGEST_URL:?ASIX_INGEST_URL is not set}"; URL="
 MAX_SKEW="${ASIX_CONFIG_MAX_SKEW_S:-600}"
 [[ "$MAX_SKEW" =~ ^[0-9]{1,5}$ ]] || { echo "ASIX_CONFIG_MAX_SKEW_S must be a number of seconds." >&2; exit 2; }
 W=""   # scratch folder for the signature check, removed on exit
+# What this broker reports about checking ASIX's signature (see the report below): off = no public key, so nothing is checked; with one,
+# unchecked until an answer has been checked, then ok or the reason it was refused.
+SIG="off"; [ -z "${ASIX_CONFIG_PUBKEY_FILE:-}" ] || SIG="unchecked"
 
 ARGS=(-fsS -m 10 -H "Authorization: Bearer ${ASIX_INGEST_KEY}")
 [ -n "${ASIX_CA_FILE:-}" ] && ARGS+=(--cacert "$ASIX_CA_FILE")
@@ -53,7 +58,7 @@ report() {  # EXIT trap: what this broker listens on now (read from broker.env A
   [[ "$cur" =~ ^[1-9][0-9]{0,4}$ ]] || return 0
   rej=""; [ -r "$STATE_DIR/config-rejected" ] && rej="$(tr -cd '0-9' < "$STATE_DIR/config-rejected" 2>/dev/null | cut -c1-5)"
   [[ "$rej" =~ ^[1-9][0-9]{0,4}$ ]] || rej="null"
-  body="$(printf '{"collector":"%s","syslog_port":%s,"rejected_port":%s}' "$name" "$cur" "$rej")"
+  body="$(printf '{"collector":"%s","syslog_port":%s,"rejected_port":%s,"signature":"%s"}' "$name" "$cur" "$rej" "$SIG")"
   curl "${ARGS[@]}" -X POST -H "Content-Type: application/json" --data "$body" "$URL/report" >/dev/null 2>&1 || true
 }
 trap 'report; [ -z "${W:-}" ] || rm -rf "$W"' EXIT
@@ -64,28 +69,30 @@ BODY="$(curl "${ARGS[@]}" "$FETCH_URL")" || { echo "Could not fetch the config f
 FLAT="$(printf '%s' "$BODY" | tr -d ' \t\r\n')"
 if [ -n "${ASIX_CONFIG_PUBKEY_FILE:-}" ]; then
   # Signed mode: from here on only the verified payload is read; `config` in the answer is never looked at.
-  [ -r "$ASIX_CONFIG_PUBKEY_FILE" ] || { echo "Cannot read the config public key $ASIX_CONFIG_PUBKEY_FILE; nothing changed." >&2; exit 1; }
-  command -v openssl >/dev/null 2>&1 || { echo "openssl is needed to check ASIX's signature; nothing changed." >&2; exit 1; }
+  [ -r "$ASIX_CONFIG_PUBKEY_FILE" ] || { SIG=no_key_file; echo "Cannot read the config public key $ASIX_CONFIG_PUBKEY_FILE; nothing changed." >&2; exit 1; }
+  command -v openssl >/dev/null 2>&1 || { SIG=no_openssl; echo "openssl is needed to check ASIX's signature; nothing changed." >&2; exit 1; }
   W="$(mktemp -d)" || { echo "Cannot make a scratch folder; nothing changed." >&2; exit 1; }
   PB="$(printf '%s' "$FLAT" | sed -n 's/.*"payload":"\([A-Za-z0-9+\/=]*\)".*/\1/p')"
   SB="$(printf '%s' "$FLAT" | sed -n 's/.*"signature":"\([A-Za-z0-9+\/=]*\)".*/\1/p')"
-  [ -n "$PB" ] && [ -n "$SB" ] && [ "${#PB}" -le 2000 ] && [ "${#SB}" -le 2000 ] || { echo "ASIX did not sign this answer, and this broker accepts only signed config (ASIX_CONFIG_PUBKEY_FILE). Is the signing key set on ASIX? Nothing changed." >&2; exit 1; }
+  [ -n "$PB" ] && [ -n "$SB" ] || { SIG=unsigned; echo "ASIX did not sign this answer, and this broker accepts only signed config (ASIX_CONFIG_PUBKEY_FILE). Is the signing key set on ASIX? Nothing changed." >&2; exit 1; }
+  [ "${#PB}" -le 2000 ] && [ "${#SB}" -le 2000 ] || { SIG=bad_format; echo "The signed part of ASIX's answer is too long to be valid; nothing changed." >&2; exit 1; }
   printf '%s' "$PB" | base64 -d > "$W/payload" 2>/dev/null && printf '%s' "$SB" | base64 -d > "$W/sig" 2>/dev/null && [ -s "$W/payload" ] && [ -s "$W/sig" ] \
-    || { echo "The signed part of ASIX's answer is not valid base64; nothing changed." >&2; exit 1; }
+    || { SIG=bad_format; echo "The signed part of ASIX's answer is not valid base64; nothing changed." >&2; exit 1; }
   awk -v d="$W" '/-----BEGIN PUBLIC KEY-----/{n++} n{print > (d "/key" n ".pem")}' "$ASIX_CONFIG_PUBKEY_FILE"
   ok=0; shopt -s nullglob
   for k in "$W"/key*.pem; do
     if openssl dgst -sha256 -verify "$k" -signature "$W/sig" "$W/payload" >/dev/null 2>&1; then ok=1; break; fi
   done
   shopt -u nullglob
-  [ "$ok" -eq 1 ] || { echo "The signature on ASIX's answer does not match the public key in $ASIX_CONFIG_PUBKEY_FILE (wrong key, or the answer was changed); nothing changed." >&2; exit 1; }
+  [ "$ok" -eq 1 ] || { SIG=bad_signature; echo "The signature on ASIX's answer does not match the public key in $ASIX_CONFIG_PUBKEY_FILE (wrong key, or the answer was changed); nothing changed." >&2; exit 1; }
   PAY="$(tr -d ' \t\r\n' < "$W/payload")"
-  [[ "$PAY" == '{"v":1,'* ]] || { echo "The signed answer has an unknown format; nothing changed." >&2; exit 1; }
+  [[ "$PAY" == '{"v":1,'* ]] || { SIG=bad_format; echo "The signed answer has an unknown format; nothing changed." >&2; exit 1; }
   WHO="null"; [[ "${ASIX_BROKER_NAME:-}" =~ ^[A-Za-z0-9._:-]{1,100}$ ]] && WHO="\"${ASIX_BROKER_NAME}\""
-  case "$PAY" in *'"collector":'"$WHO"',"issued_at":'*) ;; *) echo "The signed answer was made for another broker; nothing changed." >&2; exit 1;; esac
+  case "$PAY" in *'"collector":'"$WHO"',"issued_at":'*) ;; *) SIG=wrong_broker; echo "The signed answer was made for another broker; nothing changed." >&2; exit 1;; esac
   ISSUED="$(printf '%s' "$PAY" | sed -n 's/.*"issued_at":\([0-9]\{1,12\}\),.*/\1/p')"
   NOW="$(date +%s)"; DIFF=$(( NOW - ${ISSUED:-0} )); [ "$DIFF" -ge 0 ] || DIFF=$(( -DIFF ))
-  [ -n "$ISSUED" ] && [ "$DIFF" -le "$MAX_SKEW" ] || { echo "The signed answer is ${DIFF}s away from this machine's clock (limit ${MAX_SKEW}s): replayed, or one of the clocks is wrong; nothing changed." >&2; exit 1; }
+  [ -n "$ISSUED" ] && [ "$DIFF" -le "$MAX_SKEW" ] || { SIG=clock_skew; echo "The signed answer is ${DIFF}s away from this machine's clock (limit ${MAX_SKEW}s): replayed, or one of the clocks is wrong; nothing changed." >&2; exit 1; }
+  SIG=ok   # signature, broker name and age all passed
   FLAT="$PAY"
 fi
 if printf '%s' "$FLAT" | grep -q '"syslog_port":null'; then exit 0; fi

@@ -40,6 +40,14 @@ async function writeSyslogPort(client, tenantId, port, userId = null) {
 // broker's own collector row, so the Brokers page can say Applied, Pending or Rejected instead of only showing the setting.
 const REPORT_FRESH_MS = 15 * 60 * 1000;   // three pull intervals; a report older than this no longer says what the broker is doing
 
+// What a broker says about ASIX's signature on its config (see "Signed config" in docs/broker-vm.md), sent as `signature` in the report:
+//   off        no public key on the broker: it acts on the plain answer and does not check anything
+//   unchecked  it has a public key but did not get as far as checking (could not fetch the answer)
+//   ok         the last answer's signature, broker name and age all passed
+//   everything else: the last answer was REFUSED for that reason (unsigned, bad_signature, wrong_broker, clock_skew, bad_format, no_key_file, no_openssl)
+const SIGNATURE_PROBLEMS = ['unsigned', 'bad_signature', 'wrong_broker', 'clock_skew', 'bad_format', 'no_key_file', 'no_openssl'];
+const SIGNATURE_VALUES = ['off', 'unchecked', 'ok', ...SIGNATURE_PROBLEMS];
+
 const portOrNull = (v) => {
   if (v === null || v === undefined) return { value: null };
   const n = typeof v === 'number' ? v : (typeof v === 'string' && /^[0-9]{1,5}$/.test(v) ? Number(v) : NaN);
@@ -55,17 +63,54 @@ function checkReport(body) {
   const port = portOrNull(b.syslog_port), rej = portOrNull(b.rejected_port);
   if (port.error || port.value === null) return { error: 'syslog_port must be a whole number from 1 to 65535' };
   if (rej.error) return { error: 'rejected_port must be a whole number from 1 to 65535, or null' };
-  return { name, port: port.value, rejected: rej.value };
+  // Optional (scripts older than signature reporting do not send it): what this broker does with ASIX's signature. Stored as sent, from a fixed list.
+  let signature = null;
+  if (b.signature !== undefined && b.signature !== null) {
+    if (typeof b.signature !== 'string' || !SIGNATURE_VALUES.includes(b.signature)) return { error: 'signature must be one of: ' + SIGNATURE_VALUES.join(', ') };
+    signature = b.signature;
+  }
+  return { name, port: port.value, rejected: rej.value, signature };
 }
 
 // Stores a report on the collector row of THE KEY'S OWN broker (same name, key_id = the key that sent it), so one key cannot write
 // another broker's row. Returns true if a row was updated. Nothing is inserted: a broker that has not sent a heartbeat has no row yet.
 async function recordReport(client, tenantId, keyId, report) {
   const r = await client.query(
-    `UPDATE collectors SET config_syslog_port = $4, config_rejected_port = $5, config_reported_at = localtimestamp
-     WHERE tenant_id = $1 AND key_id = $2 AND name = $3`, [tenantId, keyId, report.name, report.port, report.rejected]);
+    `UPDATE collectors SET config_syslog_port = $4, config_rejected_port = $5, config_reported_at = localtimestamp, config_signature = $6
+     WHERE tenant_id = $1 AND key_id = $2 AND name = $3`, [tenantId, keyId, report.name, report.port, report.rejected, report.signature || null]);
   return r.rowCount > 0;
 }
+
+// Whether a broker checks ASIX's signature, from what it last reported. `signingOn` = ASIX has a usable signing key. `row` carries config_signature
+// and config_reported_at. Information only: never a "needs attention" problem and never an alert.
+//   unknown        never reported it (the broker did not opt in with --accept-config, or its config script predates this report)
+//   not_verifying  it has no public key: it acts on unsigned answers (`signing_on` says whether ASIX would sign them)
+//   verifying      it checks, and the last answer passed
+//   waiting        it checks, but has not had an answer to check yet (could not fetch)
+//   refused        it checks, and the last answer was refused: `problem` says why (it changed nothing)
+//   stale          as verifying / waiting / refused but the report is older than 15 minutes: it is not asking any more
+function signatureState(signingOn, row, now = Date.now()) {
+  const sig = row && typeof row.config_signature === 'string' ? row.config_signature : null;
+  const at = row && row.config_reported_at ? tsMs(row.config_reported_at) : NaN;
+  const out = { state: 'unknown', problem: null, signing_on: !!signingOn, reported_at: row && row.config_reported_at ? row.config_reported_at : null };
+  if (sig === null || !SIGNATURE_VALUES.includes(sig)) return out;
+  if (sig === 'off') return { ...out, state: 'not_verifying' };
+  const fresh = !(Number.isFinite(at) && now - at > REPORT_FRESH_MS);
+  if (sig === 'ok') return { ...out, state: fresh ? 'verifying' : 'stale' };
+  if (sig === 'unchecked') return { ...out, state: fresh ? 'waiting' : 'stale' };
+  return { ...out, state: fresh ? 'refused' : 'stale', problem: sig };
+}
+
+// One line an operator can act on for each refusal reason.
+const SIGNATURE_HELP = {
+  unsigned: 'ASIX did not sign its answer. Is the signing key set on ASIX (Secret asix-config-signing)?',
+  bad_signature: 'The signature does not match the public key on this broker: wrong key, or the answer was changed on the way. Compare key ids; see Signed config in docs/broker-vm.md.',
+  wrong_broker: 'The answer was made for another broker name. Check ASIX_BROKER_NAME in broker.env.',
+  clock_skew: 'The answer was too far from this machine\'s clock (replayed, or a clock is wrong). Check time sync on the broker.',
+  bad_format: 'The signed part of the answer could not be read.',
+  no_key_file: 'The public key file named in broker.env cannot be read. Re-run the bootstrap script with --config-pubkey.',
+  no_openssl: 'openssl is not installed on the broker, so it cannot check the signature.',
+};
 
 
 // The state of one broker against the port ASIX is asking for. `row` carries config_syslog_port, config_rejected_port, config_reported_at.
@@ -131,5 +176,5 @@ async function writeExclude(client, tenantId, brokerId, exclude) {
 
 const view = (port) => ({ syslog_port: port, reserved_ports: Object.keys(RESERVED).map(Number) });
 
-module.exports = { RESERVED, REPORT_FRESH_MS, checkSyslogPort, readSyslogPort, writeSyslogPort, view, checkReport, recordReport, configState,
+module.exports = { RESERVED, REPORT_FRESH_MS, SIGNATURE_VALUES, SIGNATURE_PROBLEMS, SIGNATURE_HELP, signatureState, checkSyslogPort, readSyslogPort, writeSyslogPort, view, checkReport, recordReport, configState,
   nameOrNull, effectivePort, portSource, readOverride, writeOverride, readExclude, writeExclude };

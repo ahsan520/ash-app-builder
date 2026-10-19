@@ -1195,12 +1195,16 @@ const UPGRADE_PILL = { behind: (t) => pill('Behind ' + t, 'bad'), current: () =>
 // ---- Broker config signing ----
 // Whether ASIX signs what it tells brokers (src/brokers/config-signing.js). Brokers installed with --config-pubkey act only on signed answers.
 // The public key is shown so it can be copied to a file for bootstrap-broker.sh; compare the key id the bootstrap prints with this one.
-function brokerSigningLine(sg) {
+function brokerSigningLine(sg, sum) {
   if (!sg) return '';
+  // Which brokers check the signature (GET /v1/brokers summary; they report it, see brokerSignatureCell). Information only: nothing here raises an alert.
+  const total = sum ? sum.signature_verifying + sum.signature_not_verifying + sum.signature_refused : 0;
   return el('div', { style: 'margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap' },
     sg.enabled ? pill('Answers signed (key ' + sg.key_id + ')', 'ok') : pill(sg.error ? 'Signing key unusable' : 'Answers not signed', sg.error ? 'bad' : 'off'),
     sg.enabled ? copyBtn(() => sg.public_key, 'Copy public key') : '',
-    el('span', { className: 'mute', style: 'font-size:13px', textContent: sg.error || (sg.enabled ? 'Install it on a broker with bootstrap-broker.sh --accept-config --config-pubkey <file>; that broker then ignores anything unsigned.' : 'Make a key with scripts/deploy/make-config-signing-key.sh --apply to let brokers check where their config comes from.') }));
+    el('span', { className: 'mute', style: 'font-size:13px', textContent: sg.error || (sg.enabled ? 'Install it on a broker with bootstrap-broker.sh --accept-config --config-pubkey <file>; that broker then ignores anything unsigned.' : 'Make a key with scripts/deploy/make-config-signing-key.sh --apply to let brokers check where their config comes from.') }),
+    sg.enabled && total ? (sum.signature_not_verifying ? pill(sum.signature_verifying + ' of ' + total + ' brokers check it', 'bad') : pill('All ' + total + ' reporting brokers check it', 'ok')) : '',
+    sum && sum.signature_refused ? pill(sum.signature_refused + ' refusing the answer', 'bad') : '');
 }
 // ---- Broker config pull ----
 // The syslog port that brokers set up with --accept-config should listen on. Nothing is pushed: those brokers ask ASIX every 5 minutes and
@@ -1217,7 +1221,7 @@ function brokerConfigCard(cfg, sum) {
       (() => { const asked = sum ? sum.config_applied + sum.config_not_applied : 0; return asked ? (sum.config_not_applied ? pill(sum.config_applied + ' of ' + asked + ' applied', 'bad') : pill('All ' + asked + ' applied', 'ok')) : ''; })(),
       sum && sum.port_excluded ? el('span', { className: 'mute', textContent: sum.port_excluded + ' left out' }) : ''),
     el('div', { className: 'mute', style: 'margin:10px 0 0;font-size:13px', textContent: 'A broker can have its own port instead (Port button on its row); that one wins for it alone. Leave out keeps one broker off this port. Only brokers installed with --accept-config ask for this. Each checks the port itself, validates its Vector config, restarts Vector, and goes back to its old settings if that fails. It does not open the firewall: open the new port on the broker VM, and point the devices at it. Reserved: ' + cfg.reserved_ports.join(', ') + '. See the broker\'s journal: journalctl -u asix-broker-config.' }),
-    brokerSigningLine(cfg.signing));
+    brokerSigningLine(cfg.signing, sum));
 }
 // What a broker says about the syslog port (b.config from GET /v1/brokers; src/brokers/config.js). Brokers that opted in report after every pull.
 function brokerConfigCell(b) {
@@ -1231,6 +1235,17 @@ function brokerConfigCell(b) {
   if (c.state === 'stale') return tip('Last report ' + when(c.reported_at) + ' UTC. Check the timer and Vector on the broker.', pill('Not asking', 'bad'), el('span', { className: 'mute', textContent: now }));
   if (c.state === 'unknown') return tip('ASIX asks for port ' + c.configured_port + ' but this broker has not reported. It was not set up with --accept-config, or its config script is older than reporting. Re-run the bootstrap script with --accept-config.', pill('Not reporting', 'off'));
   return c.reported_port != null ? String(c.reported_port) : '-';
+}
+// Whether a broker checks ASIX's signature (b.signature from GET /v1/brokers; src/brokers/config.js signatureState). Brokers that pull their config report it
+// after every pull. Information only: not a problem, no alert. A refusal means the broker changed nothing; the tooltip says what to fix.
+function brokerSignatureCell(b) {
+  const g = b.signature || {}, tip = (t, ...kids) => el('span', { title: t }, ...kids);
+  if (g.state === 'verifying') return tip('The last answer was checked at ' + when(g.reported_at) + ' UTC: signature, broker name and age all passed.', pill('Checks', 'ok'));
+  if (g.state === 'refused') return tip((g.help || '') + ' Reported ' + when(g.reported_at) + ' UTC. The broker changed nothing.', pill('Refused: ' + String(g.problem || '').replace(/_/g, ' '), 'bad'));
+  if (g.state === 'waiting') return tip('This broker has a public key but has not fetched an answer to check yet.', pill('Waiting', 'off'));
+  if (g.state === 'stale') return tip('Last report ' + when(g.reported_at) + ' UTC' + (g.problem ? ' (it was refusing: ' + g.problem.replace(/_/g, ' ') + ')' : '') + '. Check the timer and Vector on the broker.', pill('Not asking', 'off'));
+  if (g.state === 'not_verifying') return tip(g.signing_on ? 'ASIX signs its answers but this broker has no public key, so it acts on unsigned config. Re-run the bootstrap script with --accept-config --config-pubkey <file>.' : 'This broker has no public key, so it checks nothing. ASIX does not sign its answers either.', pill('Not checking', 'off'), el('span', { className: 'mute', textContent: g.signing_on ? ' (ASIX signs)' : '' }));
+  return tip('This broker has not said. It was not set up with --accept-config, or its config script is older than this report. Re-run the bootstrap script with --accept-config.', pill('Not reporting', 'off'));
 }
 // ---- Broker own syslog port ----
 // A syslog port for ONE broker (PUT /v1/brokers/:id/syslog-port). It wins over the tenant-wide port on the card above for that broker only;
@@ -1266,7 +1281,7 @@ async function pgBrokers() {
       { h: 'Name', f: (b) => b.name + (b.alias ? ' (' + b.alias + ')' : '') },
       { h: 'Status', f: (b) => pill(b.status === 'connected' ? '\u2713 Connected' : '\u2715 Disconnected', b.status === 'connected' ? 'ok' : 'off') },
       { h: 'Vector', f: (b) => b.vector_version || '-' }, { h: 'Upgrade', f: (b) => (UPGRADE_PILL[b.upgrade] ? UPGRADE_PILL[b.upgrade](r.vector_target) : '-') },
-      { h: 'Syslog port', f: brokerConfigCell },
+      { h: 'Syslog port', f: brokerConfigCell }, { h: 'Config check', f: brokerSignatureCell },
       { h: 'OS', f: (b) => b.os || '-' }, { h: 'IP address', f: (b) => b.last_ip || '-' },
       { h: 'Last seen (UTC)', f: (b) => when(b.last_seen) }, { h: 'Events (24h)', f: (b) => b.events_24h.toLocaleString() },
       { h: 'Alert if down', f: (b) => pill(b.watch_disconnect ? 'On' : 'Off', b.watch_disconnect ? 'ok' : 'off') },
