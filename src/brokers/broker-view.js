@@ -4,7 +4,7 @@
 // This file recognises those rows and shapes them for the Brokers page. Pure functions, no database.
 const { effectiveMinutes, isCustom, statusOf, tsMs } = require('../collectors/status');
 const { upgradeState } = require('./upgrade');
-const { configState, tlsState, effectivePort, portSource, signatureState, SIGNATURE_HELP } = require('./config');
+const { configState, tlsState, effectivePort, portSource, effectiveTlsPort, tlsSource, signatureState, SIGNATURE_HELP } = require('./config');
 
 const BROKER_VERSION_SQL = 'vector-%';              // the same rule as isBroker(), for the query
 const isBroker = (row) => !!row && /^vector-/i.test(String(row.version || ''));
@@ -38,8 +38,10 @@ function shape(row, { now = Date.now(), events24h = 0, target = null, syslogPort
   const own = row.syslog_port_override != null ? Number(row.syslog_port_override) : null;
   const left = row.syslog_port_exclude === true;   // left out of the tenant-wide port; an own port still applies
   b.config = { ...configState(effectivePort(syslogPort, own, left), row, now), source: portSource(syslogPort, own, left), override_port: own, excluded: left };   // state: none | unknown | applied | rejected | pending | stale; not a problem
-  // The syslog-over-TLS port asked of this broker: the tenant-wide one, unless the broker is left out of the tenant-wide settings (it is then told neither port).
-  b.tls = tlsState(left ? null : tlsPort, row, now);   // state: none | unknown | no_listener | applied | rejected | pending | stale; not a problem
+  // The syslog-over-TLS port asked of this broker: its own if one was set on the Brokers page, else the tenant-wide one, unless the broker is left out of the
+  // tenant-wide settings (it is then told neither tenant-wide port; an own TLS port still applies).
+  const ownTls = row.tls_port_override != null ? Number(row.tls_port_override) : null;
+  b.tls = { ...tlsState(effectiveTlsPort(tlsPort, ownTls, left), row, now), source: tlsSource(tlsPort, ownTls, left), override_port: ownTls };   // state: none | unknown | no_listener | applied | rejected | pending | stale; not a problem
   b.signature = { ...signatureState(signingOn, row, now), help: null };   // state: unknown | not_verifying | verifying | waiting | refused | stale; not a problem
   b.signature.help = b.signature.problem ? SIGNATURE_HELP[b.signature.problem] || null : null;
   return b;
@@ -61,6 +63,7 @@ function summarize(brokers) {
     tls_not_applied: brokers.filter((b) => b.tls && ['unknown', 'rejected', 'pending', 'stale'].includes(b.tls.state)).length,
     tls_no_listener: brokers.filter((b) => b.tls && b.tls.state === 'no_listener').length,
     port_overrides: brokers.filter((b) => b.config && b.config.source === 'broker').length,
+    tls_port_overrides: brokers.filter((b) => b.tls && b.tls.source === 'broker').length,
     port_excluded: brokers.filter((b) => b.config && b.config.excluded && b.config.source !== 'broker').length,
     signature_verifying: brokers.filter((b) => b.signature && b.signature.state === 'verifying').length,
     signature_not_verifying: brokers.filter((b) => b.signature && b.signature.state === 'not_verifying').length,

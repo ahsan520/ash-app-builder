@@ -495,6 +495,8 @@ data:
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS syslog_port_override INTEGER CHECK (syslog_port_override IS NULL OR syslog_port_override BETWEEN 1 AND 65535);
     -- Left out of the tenant-wide syslog port (src/brokers/config.js): the broker is told no port and keeps what it has. An own port (above) still applies.
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS syslog_port_exclude BOOLEAN NOT NULL DEFAULT false;
+    -- A syslog-over-TLS port for ONE broker, set from the Brokers page; it wins over the tenant-wide broker_settings.tls_port for that broker only (src/brokers/config.js). NULL = use the tenant-wide value.
+    ALTER TABLE collectors ADD COLUMN IF NOT EXISTS tls_port_override INTEGER CHECK (tls_port_override IS NULL OR tls_port_override BETWEEN 1 AND 65535);
     CREATE INDEX IF NOT EXISTS idx_collectors_tenant_seen ON collectors(tenant_id, last_seen);
     CREATE INDEX IF NOT EXISTS idx_collectors_key ON collectors(key_id);
 

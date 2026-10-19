@@ -3,8 +3,8 @@
 //   GET /v1/ingest/broker-config     Authorization: Bearer asix_ik_...   (the broker's own ingestion key, same as the heartbeat)
 //   -> { success: true, config: { syslog_port: 1514 | null, tls_port: 6514 | null }, interval_seconds: 300 }
 //   tls_port: the tenant-wide syslog-over-TLS port; only a broker that already has a TLS listener acts on it. A broker left out gets null for both.
-//   Optional ?collector=broker-1: the broker's own port (set on the Brokers page) wins over the tenant-wide one; found by this key AND that name.
-//   A broker that was left out of the tenant-wide port (and has no own port) is answered null: no opinion, it keeps what it has.
+//   Optional ?collector=broker-1: the broker's own port and its own TLS port (set on the Brokers page) win over the tenant-wide ones; found by this key AND that name.
+//   A broker that was left out of the tenant-wide port (and has no own port) is answered null: no opinion, it keeps what it has. The same for its TLS port.
 //   With ASIX_CONFIG_SIGNING_KEY set the answer also has `signed: { v, alg, key_id, payload, signature }` (src/brokers/config-signing.js): a broker
 //   that has the public key acts on the signed payload alone and ignores `config`.
 //   POST /v1/ingest/broker-config/report   { collector: "broker-1", syslog_port: 1514, rejected_port: null }   (same key)
@@ -34,8 +34,10 @@ router.get('/v1/ingest/broker-config', authKey, async (req, res) => {
     try { tenantTls = await db.withTenant(tenantId, (client) => config.readTlsPort(client, tenantId)); } catch (e) { console.error('Broker TLS port read failed:', e.message); }
     let left = false;   // left out of the tenant-wide settings: only asked when it matters (a tenant-wide port set, and either no own port or a TLS port to hold back); a missing column means not left out
     if (name && (tenantTls !== null || (own === null && tenantPort !== null))) { try { left = await db.withTenant(tenantId, (client) => config.readExclude(client, tenantId, req.ingestKey.id, name)); } catch (e) { console.error('Broker port exclusion read failed:', e.message); } }
+    let ownTls = null;   // the broker's own TLS port, in its own transaction too: a missing column (schema job not run) means none
+    if (name) { try { ownTls = await db.withTenant(tenantId, (client) => config.readTlsOverride(client, tenantId, req.ingestKey.id, name)); } catch (e) { console.error('Broker TLS port override read failed:', e.message); } }
     const port = config.effectivePort(tenantPort, own, left);
-    const tlsPort = left ? null : tenantTls;   // a broker left out is told neither tenant-wide port and keeps what it has
+    const tlsPort = config.effectiveTlsPort(tenantTls, ownTls, left);   // its own, else the tenant-wide one; a broker left out is told no tenant-wide port and keeps what it has
     const answer = { success: true, config: { syslog_port: port, tls_port: tlsPort }, interval_seconds: INTERVAL_S };
     // With a signing key set, a signed copy of the same setting is added; brokers given the public key act on that copy only. If signing fails
     // the answer goes out unsigned (a broker that requires signatures refuses it) rather than not at all.

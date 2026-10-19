@@ -240,7 +240,36 @@ async function writeExclude(client, tenantId, brokerId, exclude) {
   return r.rows[0] ? { id: r.rows[0].id, name: r.rows[0].name, syslog_port_exclude: r.rows[0].syslog_port_exclude === true } : null;
 }
 
+// ---- One broker's own syslog-over-TLS port ---------------------------------------------------------------------------------
+// The mirror of the own syslog port (collectors.tls_port_override, set from the Brokers page). It wins over the tenant-wide TLS port for that broker
+// only, and works with no tenant-wide TLS port. It only moves the port of a TLS listener the broker already has: a broker without one ignores it
+// (ASIX never turns TLS on). Unlike the syslog port, leaving a broker out of the tenant-wide settings does NOT hide it: it was chosen for that broker alone.
+const effectiveTlsPort = (tenantTls, ownTls, exclude = false) => (ownTls != null ? Number(ownTls) : exclude ? null : tenantTls != null ? Number(tenantTls) : null);
+// broker = its own TLS port; excluded = a tenant-wide TLS port is set but this broker is left out of it; tenant = follows it; none = nothing asked.
+const tlsSource = (tenantTls, ownTls, exclude = false) => (ownTls != null ? 'broker' : tenantTls != null ? (exclude ? 'excluded' : 'tenant') : 'none');
+
+// Found by key AND name, so one key cannot read another broker's TLS port. No such row = no own TLS port. Its own query (not part of readOverride)
+// so that a database without the new column still answers the syslog port.
+async function readTlsOverride(client, tenantId, keyId, name) {
+  const r = await client.query('SELECT tls_port_override FROM collectors WHERE tenant_id = $1 AND key_id = $2 AND name = $3', [tenantId, keyId, name]);
+  return r.rows[0] && r.rows[0].tls_port_override != null ? Number(r.rows[0].tls_port_override) : null;
+}
+
+// Sets or clears one broker's own TLS port (a broker = a collector whose version reads vector-<version>). Returns { id, name } or null if there is no such broker.
+async function writeTlsOverride(client, tenantId, brokerId, port) {
+  const r = await client.query(
+    "UPDATE collectors SET tls_port_override = $3 WHERE id = $1 AND tenant_id = $2 AND version ILIKE 'vector-%' RETURNING id, name", [brokerId, tenantId, port]);
+  return r.rows[0] ? { id: r.rows[0].id, name: r.rows[0].name } : null;
+}
+
+// What the portal route needs to check a new TLS port against: this broker's own syslog port and exclusion flag. Null = no such broker.
+async function readBrokerPorts(client, tenantId, brokerId) {
+  const r = await client.query("SELECT syslog_port_override, syslog_port_exclude FROM collectors WHERE id = $1 AND tenant_id = $2 AND version ILIKE 'vector-%'", [brokerId, tenantId]);
+  return r.rows[0] ? { own: r.rows[0].syslog_port_override != null ? Number(r.rows[0].syslog_port_override) : null, excluded: r.rows[0].syslog_port_exclude === true } : null;
+}
+
 const view = (port) => ({ syslog_port: port, reserved_ports: Object.keys(RESERVED).map(Number) });
 
 module.exports = { RESERVED, checkTlsPort, readTlsPort, writeTlsPort, REPORT_FRESH_MS, SIGNATURE_VALUES, SIGNATURE_PROBLEMS, SIGNATURE_HELP, signatureState, checkSyslogPort, readSyslogPort, writeSyslogPort, view, checkReport, recordReport, configState, tlsState,
-  nameOrNull, effectivePort, portSource, readOverride, writeOverride, readExclude, writeExclude };
+  nameOrNull, effectivePort, portSource, readOverride, writeOverride, readExclude, writeExclude,
+  effectiveTlsPort, tlsSource, readTlsOverride, writeTlsOverride, readBrokerPorts };
