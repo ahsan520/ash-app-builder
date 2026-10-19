@@ -34,6 +34,33 @@ async function writeSyslogPort(client, tenantId, port, userId = null) {
   return port;
 }
 
+// ---- The syslog-over-TLS port (tenant-wide) ---------------------------------------------------------------------------------
+// A broker that was installed WITH a TLS listener (bootstrap-broker.sh --tls-cert/--tls-key, see docs/broker-vm.md) can be told which port that
+// listener uses (broker_settings.tls_port). ASIX can only move the port: it never turns TLS on or off, because that needs certificates on the
+// broker. A broker without a TLS listener ignores the value. Same rules as the syslog port, plus: not the same number as the tenant-wide syslog
+// port (UDP and plain TCP use that one). `syslogPort` is the tenant-wide syslog port as it will be after this save, or null.
+function checkTlsPort(v, syslogPort = null) {
+  if (v === null || v === undefined || (typeof v === 'string' && v.trim() === '')) return { value: null };
+  const p = checkSyslogPort(v);
+  if (p.error) return { error: p.error.replace(/^Syslog port/, 'Syslog-over-TLS port').replace(/ and cannot be a syslog port$/, ' and cannot be a TLS port') };
+  if (syslogPort !== null && syslogPort !== undefined && p.value === Number(syslogPort)) return { error: `Syslog-over-TLS port ${p.value} is the same as the syslog port (UDP and plain TCP); choose a different one` };
+  return p;
+}
+
+async function readTlsPort(client, tenantId) {
+  const r = await client.query('SELECT tls_port FROM broker_settings WHERE tenant_id = $1', [tenantId]);
+  return r.rows[0] && r.rows[0].tls_port != null ? Number(r.rows[0].tls_port) : null;
+}
+
+// Touches only tls_port, so the syslog port and the Vector version target on the same row are kept.
+async function writeTlsPort(client, tenantId, port, userId = null) {
+  await client.query(
+    `INSERT INTO broker_settings (tenant_id, tls_port, updated_by) VALUES ($1, $2, $3)
+     ON CONFLICT (tenant_id) DO UPDATE SET tls_port = EXCLUDED.tls_port, updated_at = localtimestamp, updated_by = EXCLUDED.updated_by`,
+    [tenantId, port, userId ? String(userId) : null]);
+  return port;
+}
+
 // ---- What each broker says it applied ------------------------------------------------------------------------------------
 // A broker that pulls its config also tells ASIX, after every pull, which syslog port it is listening on and which one it rejected
 // (POST /v1/ingest/broker-config/report). That is information, never an instruction: it changes no setting and is stored on the
@@ -176,5 +203,5 @@ async function writeExclude(client, tenantId, brokerId, exclude) {
 
 const view = (port) => ({ syslog_port: port, reserved_ports: Object.keys(RESERVED).map(Number) });
 
-module.exports = { RESERVED, REPORT_FRESH_MS, SIGNATURE_VALUES, SIGNATURE_PROBLEMS, SIGNATURE_HELP, signatureState, checkSyslogPort, readSyslogPort, writeSyslogPort, view, checkReport, recordReport, configState,
+module.exports = { RESERVED, checkTlsPort, readTlsPort, writeTlsPort, REPORT_FRESH_MS, SIGNATURE_VALUES, SIGNATURE_PROBLEMS, SIGNATURE_HELP, signatureState, checkSyslogPort, readSyslogPort, writeSyslogPort, view, checkReport, recordReport, configState,
   nameOrNull, effectivePort, portSource, readOverride, writeOverride, readExclude, writeExclude };

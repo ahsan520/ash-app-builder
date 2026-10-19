@@ -41,29 +41,29 @@ async function main() {
     const put = (id, body) => call('PUT', '/v1/brokers/' + id + '/syslog-port', body);
 
     // nothing set anywhere: no opinion, with or without a name
-    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: null });
+    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: null, tls_port: null });
     let l = await listed(); assert.strictEqual(mine(l, 'broker-a').config.source, 'none'); assert.strictEqual(mine(l, 'broker-a').config.override_port, null); assert.strictEqual(l.summary.port_overrides, 0);
 
     // an own port for broker-a: only broker-a is told, and only when it names itself
     let r = await put(A, { syslog_port: 2514 }); assert.strictEqual(r.status, 200); assert.deepStrictEqual(r.json, { success: true, broker: { id: A, name: 'broker-a' }, syslog_port: 2514 });
     assert.strictEqual(await colOf(TENANT, 'broker-a'), 2514);
-    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: 2514 }, 'an own port needs no tenant-wide port');
-    assert.deepStrictEqual((await pull(keyA)).json.config, { syslog_port: null }, 'an older script that sends no name gets the tenant-wide answer');
-    assert.deepStrictEqual((await pull(keyC, 'broker-c')).json.config, { syslog_port: null }, 'another broker is not affected');
+    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: 2514, tls_port: null }, 'an own port needs no tenant-wide port');
+    assert.deepStrictEqual((await pull(keyA)).json.config, { syslog_port: null, tls_port: null }, 'an older script that sends no name gets the tenant-wide answer');
+    assert.deepStrictEqual((await pull(keyC, 'broker-c')).json.config, { syslog_port: null, tls_port: null }, 'another broker is not affected');
     r = await put(A, { syslog_port: '2515' }); assert.strictEqual(r.json.syslog_port, 2515, 'a second save updates the same broker');
 
     // with a tenant-wide port: the broker with its own keeps it, the others follow the tenant
     assert.strictEqual((await call('PUT', '/v1/broker-config', { syslog_port: 1514 })).status, 200);
-    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: 2515 });
-    assert.deepStrictEqual((await pull(keyC, 'broker-c')).json.config, { syslog_port: 1514 });
-    assert.deepStrictEqual((await pull(keyA)).json.config, { syslog_port: 1514 });
-    assert.deepStrictEqual((await pull(keyA, 'no-such-broker')).json.config, { syslog_port: 1514 }, 'a name with no row falls back to the tenant-wide port');
+    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: 2515, tls_port: null });
+    assert.deepStrictEqual((await pull(keyC, 'broker-c')).json.config, { syslog_port: 1514, tls_port: null });
+    assert.deepStrictEqual((await pull(keyA)).json.config, { syslog_port: 1514, tls_port: null });
+    assert.deepStrictEqual((await pull(keyA, 'no-such-broker')).json.config, { syslog_port: 1514, tls_port: null }, 'a name with no row falls back to the tenant-wide port');
 
     // a key reads only its own broker's override: broker-a's key naming broker-c, and another tenant's key naming broker-a
     assert.strictEqual((await put(C, { syslog_port: 3514 })).status, 200);
-    assert.deepStrictEqual((await pull(keyA, 'broker-c')).json.config, { syslog_port: 1514 }, 'not broker-c\'s 3514');
-    assert.deepStrictEqual((await pull(keyB, 'broker-a')).json.config, { syslog_port: null }, 'another tenant sees nothing of it');
-    assert.deepStrictEqual((await pull(keyC, 'broker-c')).json.config, { syslog_port: 3514 });
+    assert.deepStrictEqual((await pull(keyA, 'broker-c')).json.config, { syslog_port: 1514, tls_port: null }, 'not broker-c\'s 3514');
+    assert.deepStrictEqual((await pull(keyB, 'broker-a')).json.config, { syslog_port: null, tls_port: null }, 'another tenant sees nothing of it');
+    assert.deepStrictEqual((await pull(keyC, 'broker-c')).json.config, { syslog_port: 3514, tls_port: null });
 
     // the Brokers page: source, own port, and the state is judged against the port THIS broker is asked for
     l = await listed(); assert.strictEqual(l.summary.port_overrides, 2); assert.strictEqual(l.syslog_port, 1514);
@@ -83,7 +83,7 @@ async function main() {
 
     // clearing goes back to following the tenant-wide port
     for (const clear of [{ syslog_port: null }, { syslog_port: '' }]) { assert.strictEqual((await put(A, { syslog_port: 2515 })).status, 200); r = await put(A, clear); assert.strictEqual(r.status, 200); assert.strictEqual(r.json.syslog_port, null); assert.strictEqual(await colOf(TENANT, 'broker-a'), null); }
-    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: 1514 });
+    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: 1514, tls_port: null });
     assert.strictEqual(mine(await listed(), 'broker-a').config.source, 'tenant');
 
     // refused: bad values, a bad id, another tenant's broker, a collector that is not a broker. None of it writes anything.

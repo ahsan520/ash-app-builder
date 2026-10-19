@@ -151,7 +151,7 @@ Plain syslog is readable and forgeable by anyone on the path. For sources that c
 - The connected/disconnected threshold is 15 minutes unless you set one for that collector (Collectors page, **Threshold**; 1 to 10080 minutes). A broker
   with a long quiet spell does not need it: the heartbeat keeps it Connected. It is for slow senders such as a nightly job.
 
-## Config from ASIX (optional, syslog port only)
+## Config from ASIX (optional: the syslog port and the syslog-over-TLS port)
 ASIX never connects to a broker. A broker that was installed with `--accept-config` asks ASIX for its config instead, and only that kind of broker:
 ```bash
 sudo ./scripts/deploy/bootstrap-broker.sh --url https://asix1:30443/v1/ingest/http --key asix_ik_... --name broker-1 --accept-config
@@ -207,7 +207,7 @@ The broker now asks with its name, `GET /v1/ingest/broker-config?collector=broke
 
 **It does not open the firewall and does not move your devices:** after a change, open the new port (UDP and TCP) on the broker VM and point the senders at it; until they are changed they send to a port nobody listens on. Check what happened with `journalctl -u asix-broker-config -n 20`.
 Seen working on broker-1 (vm1, Ubuntu aarch64, Vector 0.59.0, 2026-10-18): after the port was set to 1514 one pull applied it, Vector was healthy, and it listened on 1514 UDP and TCP with nothing on 514; with no port set the pull changes nothing. The way back (setting 514 again) and the failure paths have only run against stubs. Under systemd the service runs as root with `StateDirectory=asix-broker`; the journal shows its lines under `asix-broker-config.sh`.
-The TLS port, the key, the certificates and the ASIX URL are never changed this way.
+The key, the certificates, the ASIX URL and whether a TLS listener exists at all are never changed this way; the port of a TLS listener a broker already has can be (next section).
 
 **What the Brokers page shows (done 2026-10-18):** a **Syslog port** column, and an "N of M applied" line on the port card. The broker's script sends a report at the end of **every** run that asked ASIX, whatever happened (an `EXIT` trap, best effort: if the report cannot be sent nothing else changes, and the exit status stays the script's own). The report carries the port read from `broker.env` after any change or put-back, and the port in `/var/lib/asix-broker/config-rejected` if there is one. ASIX keeps it on that broker's own row (`collectors.config_syslog_port`, `config_rejected_port`, `config_reported_at`; the row is found by the sending key AND the name, so one key cannot write another broker's row, and a report never creates a row). The column compares it with the port ASIX asks for:
 
@@ -221,6 +221,27 @@ The TLS port, the key, the certificates and the ASIX URL are never changed this 
 | **Not reporting** | a port is set but the broker never reported: it was not installed with `--accept-config`, or its `asix-broker-config.sh` is older than reporting. Copy the new script and re-run the bootstrap script with `--accept-config` |
 
 None of these is a "needs attention" problem and none raises an alert. **Applied** means the broker says it is listening, not that devices send to it: that is still on you (firewall and senders), and the test line from `logger -n <broker> -P 1514 -T test` arriving in Events is the real proof.
+
+## The syslog-over-TLS port (done 2026-10-18)
+**What it does:** moves the port of the syslog-over-TLS listener on brokers that already have one (installed with `--tls-cert` and `--tls-key`, see "Syslog over TLS" above), the same way the syslog port is moved. It does **not** turn TLS on or off: that needs a certificate and key on the broker, which ASIX never sends. A broker without a TLS listener ignores the value with a note in its journal and exits 0.
+
+**Setting it:** Brokers page, **Syslog port for brokers** card, the **Syslog-over-TLS port** row (`PUT /v1/broker-config` with `{ "tls_port": 6514 | null }` on its own, or together with `syslog_port`; a key that is left out is not touched; `GET /v1/broker-config` returns `tls_port`; `collectors:write`, no role change). One value for the whole tenant, stored in `broker_settings.tls_port` (new nullable column with a 1 to 65535 CHECK, added by the schema job on deploy, safe to re-run). It follows the syslog port's rules (not 22, 443, 8686, 30443) and must differ from the tenant-wide syslog port; the save is refused with 400 `INVALID_TLS_PORT` (or `INVALID_SYSLOG_PORT` when the syslog port is the one that now clashes). A broker's own syslog port can still be changed to equal it: the broker refuses that itself.
+
+**What the broker is told:** `GET /v1/ingest/broker-config` answers `{ "config": { "syslog_port": ..., "tls_port": 6514 | null } }`, and the signed copy carries `"tls_port"` after `"syslog_port"` as the last field of the signed text (so a script from before this reads the same fields it always read and simply never looks at the new one). A broker **left out** of the tenant-wide port is told `null` for both; there is no per-broker TLS port. An answer signed before the field existed reads as `null`.
+
+**What the broker does with it** (`asix-broker-config.sh`; the two settings are applied one after the other, the syslog port first, each with its own backup, validate, restart, health check and way back):
+1. `null`, no field, or the port already in use: nothing. A value that is neither a number nor `null`: exit 1, nothing changed.
+2. Its own checks, whatever ASIX sent: 1 to 65535, not 22, 443, 8686 or 30443, not the syslog port the broker uses **now** (after step 1 of the same run), and the broker must have a TLS listener (`ASIX_SYSLOG_TLS_PORT` in `broker.env` and `/etc/vector/vector-tls.yaml` present), else it logs "has no TLS listener" and stops.
+3. Edits only the `ASIX_SYSLOG_TLS_PORT` line of `broker.env` (previous file kept as `broker.env.before-config`), runs `vector validate` **with the TLS file**, restarts Vector, waits for its health check.
+4. Any failure puts the old file back (restarting Vector on it if it had been restarted) and remembers the port in `/var/lib/asix-broker/config-tls-rejected`, so it is not retried until ASIX asks for another one. A rejected TLS port never undoes a syslog port applied in the same run; the run exits 1.
+
+**Needs the new `asix-broker-config.sh` on each broker** (re-run the bootstrap from the updated checkout, see "Updating a broker after an ASIX deploy" above); an older script ignores the field.
+
+**It does not open the firewall and does not move your devices:** open the new port (TCP) on the VM and point the senders at it. Check on the broker: `sudo systemctl start asix-broker-config.service; sudo journalctl -u asix-broker-config -n 15 --no-pager; ss -tln | grep <port>; openssl s_client -connect 127.0.0.1:<port> </dev/null`.
+
+**Not built:** the Brokers page does not show whether a broker applied the TLS port (the report still carries only the syslog port; use the journal and `ss`), a per-broker TLS port, turning TLS on from ASIX.
+
+**Checked:** unit and route tests (`tests/broker-config.test.js`, `tests/config-signing.test.js`), the real script against stubbed `id`, `vector`, `systemctl`, `curl` and, for signed answers, the real signer and real openssl (`tests/broker-config-tls-script.test.js`, 14 tests; the existing script tests still pass), and real PostgreSQL 16 with the schema applied twice (`tests/broker-config-db.test.js`: saved alone and with the syslog port, answered next to it, refused clashes, the CHECK, another tenant, a left-out broker; the left-out check fails with the rule removed). **Not yet run on the k3s box or broker-1, the new row has not been seen in a browser, the TLS change has not been tried on a real broker with Vector.** To try it: deploy; on a broker with TLS re-run the bootstrap with its usual options plus `--accept-config`; set a TLS port on the card (say 6515); run the service by hand and see "Done: syslog-over-TLS port 6514 -> 6515"; `ss -tln` shows it listening; set it back to 6514 (the first real try of the way back); then on a broker without TLS see "has no TLS listener".
 
 ## Signed config (optional)
 Without this, the only protection on the config a broker pulls is the HTTPS connection and the broker's ingestion key. With it, ASIX **signs** what it tells a broker, and a broker that has been given ASIX's public key acts only on a valid signature. An answer from something that is not ASIX, one edited on the way, one made for another broker and an old one that is replayed are all refused (nothing changes, the reason is in `journalctl -u asix-broker-config`).

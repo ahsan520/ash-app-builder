@@ -1220,6 +1220,18 @@ function brokerConfigCard(cfg, sum) {
       cfg.syslog_port ? pill('Asking brokers for ' + cfg.syslog_port, 'ok') : el('span', { className: 'mute', textContent: 'No port set: brokers keep what they have.' }),
       (() => { const asked = sum ? sum.config_applied + sum.config_not_applied : 0; return asked ? (sum.config_not_applied ? pill(sum.config_applied + ' of ' + asked + ' applied', 'bad') : pill('All ' + asked + ' applied', 'ok')) : ''; })(),
       sum && sum.port_excluded ? el('span', { className: 'mute', textContent: sum.port_excluded + ' left out' }) : ''),
+    // The port of the syslog-over-TLS listener. Moves only the port of a listener a broker already has; it never turns TLS on (that needs certificates on the broker).
+    (() => {
+      const tin = el('input', { value: cfg.tls_port || '', placeholder: 'for example 6514', style: 'width:130px', inputMode: 'numeric' });
+      const tsave = async (v) => { try { await api('/v1/broker-config', { method: 'PUT', body: { tls_port: v } }); route(); } catch (e) { alert(e.message); } };
+      return el('div', { style: 'margin-top:12px' },
+        el('div', { className: 'mute', style: 'font-size:13px;margin-bottom:6px', textContent: 'Syslog-over-TLS port' }),
+        el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, tin,
+          el('button', { className: 'btn pri', textContent: 'Set TLS port', onclick: () => tsave(tin.value.trim() === '' ? null : tin.value.trim()) }),
+          cfg.tls_port ? el('button', { className: 'btn', textContent: 'Clear', onclick: () => tsave(null) }) : '',
+          cfg.tls_port ? pill('Asking brokers for ' + cfg.tls_port, 'ok') : el('span', { className: 'mute', textContent: 'No TLS port set: brokers keep what they have.' })),
+        el('div', { className: 'mute', style: 'margin-top:6px;font-size:13px', textContent: 'Only brokers that already have a TLS listener (installed with --tls-cert and --tls-key) act on this; the others ignore it. It cannot turn TLS on or off, and it must differ from the syslog port. A broker left out of the tenant-wide port is left out of this too. This page does not show whether a broker applied it yet: check journalctl -u asix-broker-config on the broker and ss -tln | grep <port>.' }));
+    })(),
     el('div', { className: 'mute', style: 'margin:10px 0 0;font-size:13px', textContent: 'A broker can have its own port instead (Port button on its row); that one wins for it alone. Leave out keeps one broker off this port. Only brokers installed with --accept-config ask for this. Each checks the port itself, validates its Vector config, restarts Vector, and goes back to its old settings if that fails. It does not open the firewall: open the new port on the broker VM, and point the devices at it. Reserved: ' + cfg.reserved_ports.join(', ') + '. See the broker\'s journal: journalctl -u asix-broker-config.' }),
     brokerSigningLine(cfg.signing, sum));
 }

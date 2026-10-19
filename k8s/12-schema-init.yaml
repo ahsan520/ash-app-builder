@@ -527,6 +527,8 @@ data:
     GRANT SELECT, INSERT, UPDATE, DELETE ON broker_settings TO asix_admin;
     -- Broker config pull (src/brokers/config.js): the syslog port brokers that opted in should listen on. NULL = leave the broker alone.
     ALTER TABLE broker_settings ADD COLUMN IF NOT EXISTS syslog_port INTEGER CHECK (syslog_port IS NULL OR syslog_port BETWEEN 1 AND 65535);
+    -- The port of the syslog-over-TLS listener on brokers that have one (src/brokers/config.js, checkTlsPort). NULL = leave the broker alone.
+    ALTER TABLE broker_settings ADD COLUMN IF NOT EXISTS tls_port INTEGER CHECK (tls_port IS NULL OR tls_port BETWEEN 1 AND 65535);
 
     -- ============================================================
     -- Alert notifications: channels (email / Slack / webhook) and the delivery outbox

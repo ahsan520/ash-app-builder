@@ -4,7 +4,7 @@
 // the matching public key (bootstrap-broker.sh --config-pubkey) acts on the signed copy only: an answer from something that is not ASIX, or
 // one edited on the way, is refused. Nothing changes for a broker without a public key, or for an ASIX without a signing key.
 //
-// What is signed: the bytes of one small JSON text, `{"v":1,"collector":"broker-1"|null,"issued_at":<epoch seconds>,"syslog_port":N|null}`
+// What is signed: the bytes of one small JSON text, `{"v":1,"collector":"broker-1"|null,"issued_at":<epoch seconds>,"syslog_port":N|null,"tls_port":N|null}`
 // (this key order, no spaces), sent base64-encoded so the broker verifies exactly the bytes that were signed.
 //   - collector: the broker the answer was made for, so an answer for one broker cannot be replayed to another
 //   - issued_at: the broker refuses an answer more than ASIX_CONFIG_MAX_SKEW_S (default 600) seconds away from its own clock
@@ -53,12 +53,16 @@ function status(env = process.env) {
 
 const NAME_RE = /^[A-Za-z0-9._:-]{1,100}$/;
 // The exact text that is signed. `collector` is the validated broker name or null; `port` a number or null.
-function payloadText(collector, port, nowMs) {
-  return JSON.stringify({ v: 1, collector: collector !== null && NAME_RE.test(collector) ? collector : null, issued_at: Math.floor(nowMs / 1000), syslog_port: port === undefined ? null : port });
+// `tlsPort` (number or null) is appended AFTER syslog_port when given, so a broker's script from before the TLS port still finds everything it reads;
+// leaving it out (undefined) gives the text as it was before the TLS port existed.
+function payloadText(collector, port, nowMs, tlsPort) {
+  const o = { v: 1, collector: collector !== null && NAME_RE.test(collector) ? collector : null, issued_at: Math.floor(nowMs / 1000), syslog_port: port === undefined ? null : port };
+  if (tlsPort !== undefined) o.tls_port = tlsPort;
+  return JSON.stringify(o);
 }
 
-function signedDocument(key, collector, port, nowMs = Date.now()) {
-  const payload = Buffer.from(payloadText(collector, port, nowMs), 'utf8');
+function signedDocument(key, collector, port, nowMs = Date.now(), tlsPort) {
+  const payload = Buffer.from(payloadText(collector, port, nowMs, tlsPort), 'utf8');
   const signature = crypto.sign('sha256', payload, key.privateKey);   // EC key: DER-encoded ECDSA
   return { v: 1, alg: ALG, key_id: key.keyId, payload: payload.toString('base64'), signature: signature.toString('base64') };
 }
@@ -78,7 +82,8 @@ function verify(publicPems, doc, { expectCollector = null, nowMs = Date.now(), m
   if (p.collector !== expectCollector) return fail('made for another broker');
   if (!Number.isInteger(p.issued_at) || Math.abs(nowMs / 1000 - p.issued_at) > maxSkewS) return fail('outside the allowed clock difference');
   if (p.syslog_port !== null && !Number.isInteger(p.syslog_port)) return fail('unreadable port');
-  return { ok: true, port: p.syslog_port };
+  if (p.tls_port !== undefined && p.tls_port !== null && !Number.isInteger(p.tls_port)) return fail('unreadable port');
+  return { ok: true, port: p.syslog_port, tls_port: p.tls_port === undefined ? null : p.tls_port };   // an answer from before the TLS port has none: null
 }
 
 module.exports = { ALG, load, current, reset, status, keyIdOf, payloadText, signedDocument, verify };

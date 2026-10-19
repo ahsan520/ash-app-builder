@@ -37,7 +37,7 @@ async function main() {
     assert.strictEqual((await call('PUT', '/v1/broker-config', { syslog_port: 1514 })).json.config.syslog_port, 1514);
     assert.strictEqual((await db.query('SELECT count(*)::int AS n FROM broker_settings WHERE tenant_id = $1', [TENANT])).rows[0].n, 1);
     assert.strictEqual((await db.query('SELECT updated_by FROM broker_settings WHERE tenant_id = $1', [TENANT])).rows[0].updated_by, 'tester');
-    r = await pull(keyA); assert.deepStrictEqual(r.json.config, { syslog_port: 1514 }); assert.strictEqual(r.json.interval_seconds, 300);
+    r = await pull(keyA); assert.deepStrictEqual(r.json.config, { syslog_port: 1514, tls_port: null }); assert.strictEqual(r.json.interval_seconds, 300);
 
     // the Vector target on the same row is not disturbed by either setting, in either order
     assert.strictEqual((await call('PUT', '/v1/broker-settings', { vector_target: '0.60.0' })).status, 200);
@@ -109,6 +109,39 @@ async function main() {
     await assert.rejects(() => db.query('UPDATE collectors SET config_syslog_port = 70000 WHERE tenant_id = $1', [TENANT]), /violates check/);
     await assert.rejects(() => db.query('UPDATE collectors SET config_rejected_port = 0 WHERE tenant_id = $1', [TENANT]), /violates check/);
     assert.strictEqual((await call('PUT', '/v1/broker-config', { syslog_port: 2514 })).status, 200);   // the section below expects the port set
+
+    // the syslog-over-TLS port: its own column on the same row, saved alone or with the syslog port, answered next to it, never mixed up with the other settings
+    assert.strictEqual((await call('GET', '/v1/broker-config')).json.config.tls_port, null);
+    assert.strictEqual((await call('PUT', '/v1/broker-config', { tls_port: 6514 })).status, 200);
+    r = await pull(keyA); assert.deepStrictEqual(r.json.config, { syslog_port: 2514, tls_port: 6514 }, 'saving the TLS port keeps the syslog port');
+    assert.strictEqual((await call('GET', '/v1/broker-settings')).json.settings.vector_target, '0.60.0', 'and the Vector target');
+    assert.strictEqual((await call('PUT', '/v1/broker-config', { syslog_port: 1514 })).json.config.tls_port, 6514, 'a syslog-only save keeps the TLS port');
+    assert.strictEqual((await call('PUT', '/v1/broker-config', { syslog_port: 2514 })).status, 200);
+    for (const bad of [{ tls_port: 22 }, { tls_port: 'abc' }, { tls_port: 70000 }, { tls_port: 2514 }, { syslog_port: 6514 }, { syslog_port: 2514, tls_port: 2514 }]) assert.strictEqual((await call('PUT', '/v1/broker-config', bad)).status, 400, JSON.stringify(bad));
+    assert.deepStrictEqual((await pull(keyA)).json.config, { syslog_port: 2514, tls_port: 6514 }, 'refused values change nothing');
+    assert.strictEqual((await call('PUT', '/v1/broker-config', { syslog_port: 7000, tls_port: 7001 })).status, 200); assert.deepStrictEqual((await pull(keyA)).json.config, { syslog_port: 7000, tls_port: 7001 });
+    assert.strictEqual((await call('PUT', '/v1/broker-config', { syslog_port: 2514, tls_port: 6514 })).status, 200);
+    await assert.rejects(() => db.withTenant(TENANT, (c) => c.query('UPDATE broker_settings SET tls_port = 70000 WHERE tenant_id = $1', [TENANT])), /broker_settings_tls_port_check|violates check/);
+    assert.strictEqual((await pull(keyB)).json.config.tls_port, null, 'another tenant does not see it');
+    // a broker left out of the tenant-wide port is told neither tenant-wide port; its own syslog port still applies, the TLS port is never per broker
+    const askAs = (key, name) => call('GET', '/v1/ingest/broker-config?collector=' + name, undefined, { authorization: 'Bearer ' + key });
+    assert.strictEqual((await beat(keyA, 'broker-a')).status, 200);
+    assert.deepStrictEqual((await askAs(keyA, 'broker-a')).json.config, { syslog_port: 2514, tls_port: 6514 });
+    await db.query("UPDATE collectors SET syslog_port_exclude = true WHERE tenant_id = $1 AND name = 'broker-a'", [TENANT]);
+    assert.deepStrictEqual((await askAs(keyA, 'broker-a')).json.config, { syslog_port: null, tls_port: null }, 'left out: no opinion on either');
+    await db.query("UPDATE collectors SET syslog_port_override = 3514 WHERE tenant_id = $1 AND name = 'broker-a'", [TENANT]);
+    assert.deepStrictEqual((await askAs(keyA, 'broker-a')).json.config, { syslog_port: 3514, tls_port: null }, 'own syslog port wins; still left out of the TLS port');
+    await db.query("UPDATE collectors SET syslog_port_exclude = false, syslog_port_override = NULL WHERE tenant_id = $1 AND name = 'broker-a'", [TENANT]);
+    assert.deepStrictEqual((await askAs(keyA, 'broker-a')).json.config, { syslog_port: 2514, tls_port: 6514 });
+    // a TLS port alone, with no syslog port set, reaches a broker left out or not the same way
+    assert.strictEqual((await call('PUT', '/v1/broker-config', { syslog_port: null })).status, 200);
+    assert.deepStrictEqual((await askAs(keyA, 'broker-a')).json.config, { syslog_port: null, tls_port: 6514 });
+    await db.query("UPDATE collectors SET syslog_port_exclude = true WHERE tenant_id = $1 AND name = 'broker-a'", [TENANT]);
+    assert.deepStrictEqual((await askAs(keyA, 'broker-a')).json.config, { syslog_port: null, tls_port: null });
+    await db.query("UPDATE collectors SET syslog_port_exclude = false WHERE tenant_id = $1 AND name = 'broker-a'", [TENANT]);
+    assert.strictEqual((await call('PUT', '/v1/broker-config', { syslog_port: 2514 })).status, 200);   // the section below expects the syslog port set
+    // cleared: null again
+    assert.strictEqual((await call('PUT', '/v1/broker-config', { tls_port: null })).status, 200); assert.deepStrictEqual((await pull(keyA)).json.config, { syslog_port: 2514, tls_port: null });
 
     // keys: none, unknown and revoked are refused; a revoked key stops getting config
     assert.strictEqual((await pull()).status, 401); assert.strictEqual((await pull('asix_ik_' + 'z'.repeat(40))).status, 401);

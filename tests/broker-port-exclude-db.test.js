@@ -48,18 +48,18 @@ async function main() {
 
     // with a tenant-wide port both brokers are told it; leaving broker-a out stops that for broker-a alone
     assert.strictEqual((await call('PUT', '/v1/broker-config', { syslog_port: 1514 })).status, 200);
-    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: 1514 });
+    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: 1514, tls_port: null });
     let r = await excl(A, true); assert.strictEqual(r.status, 200); assert.deepStrictEqual(r.json, { success: true, broker: { id: A, name: 'broker-a', syslog_port_exclude: true } });
     assert.strictEqual(await colOf(TENANT, 'broker-a'), true);
-    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: null }, 'left out: no opinion, it keeps what it has');
-    assert.deepStrictEqual((await pull(keyC, 'broker-c')).json.config, { syslog_port: 1514 }, 'another broker still follows the tenant-wide port');
-    assert.deepStrictEqual((await pull(keyA)).json.config, { syslog_port: 1514 }, 'an older script that sends no name is told the tenant-wide port');
+    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: null, tls_port: null }, 'left out: no opinion, it keeps what it has');
+    assert.deepStrictEqual((await pull(keyC, 'broker-c')).json.config, { syslog_port: 1514, tls_port: null }, 'another broker still follows the tenant-wide port');
+    assert.deepStrictEqual((await pull(keyA)).json.config, { syslog_port: 1514, tls_port: null }, 'an older script that sends no name is told the tenant-wide port');
 
     // a key reads only its own broker's flag: broker-a's key naming broker-c, broker-c's key naming broker-a, another tenant's key naming broker-a
     assert.strictEqual((await excl(C, true)).status, 200); assert.strictEqual((await excl(C, false)).status, 200);
-    assert.deepStrictEqual((await pull(keyC, 'broker-a')).json.config, { syslog_port: 1514 }, 'broker-c\'s key does not see broker-a\'s flag');
-    assert.deepStrictEqual((await pull(keyB, 'broker-a')).json.config, { syslog_port: null }, 'another tenant sees nothing of it');
-    assert.deepStrictEqual((await pull(keyA, 'no-such-broker')).json.config, { syslog_port: 1514 }, 'a name with no row is not left out');
+    assert.deepStrictEqual((await pull(keyC, 'broker-a')).json.config, { syslog_port: 1514, tls_port: null }, 'broker-c\'s key does not see broker-a\'s flag');
+    assert.deepStrictEqual((await pull(keyB, 'broker-a')).json.config, { syslog_port: null, tls_port: null }, 'another tenant sees nothing of it');
+    assert.deepStrictEqual((await pull(keyA, 'no-such-broker')).json.config, { syslog_port: 1514, tls_port: null }, 'a name with no row is not left out');
 
     // the Brokers page: nothing asked, state none, what it listens on is still shown, and the summary counts it
     l = await listed(); let a = mine(l, 'broker-a').config;
@@ -70,25 +70,25 @@ async function main() {
 
     // an own port wins over being left out; clearing the own port returns to being left out
     assert.strictEqual((await own(A, 2514)).status, 200);
-    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: 2514 });
+    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: 2514, tls_port: null });
     l = await listed(); a = mine(l, 'broker-a').config; assert.strictEqual(a.source, 'broker'); assert.strictEqual(a.excluded, true); assert.strictEqual(a.state, 'pending'); assert.strictEqual(l.summary.port_excluded, 0, 'it has its own port, so it is not counted as left out');
     assert.strictEqual((await own(A, null)).status, 200);
-    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: null }); assert.strictEqual(mine(await listed(), 'broker-a').config.source, 'excluded');
+    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: null, tls_port: null }); assert.strictEqual(mine(await listed(), 'broker-a').config.source, 'excluded');
 
     // a heartbeat, a report and a tenant-wide save leave the flag alone, and so does changing the tenant-wide port
     assert.strictEqual((await beat(keyA, 'broker-a')).status, 200); assert.strictEqual(await colOf(TENANT, 'broker-a'), true);
     assert.strictEqual((await call('PUT', '/v1/broker-config', { syslog_port: 4514 })).status, 200); assert.strictEqual(await colOf(TENANT, 'broker-a'), true);
-    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: null }); assert.deepStrictEqual((await pull(keyC, 'broker-c')).json.config, { syslog_port: 4514 });
+    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: null, tls_port: null }); assert.deepStrictEqual((await pull(keyC, 'broker-c')).json.config, { syslog_port: 4514, tls_port: null });
 
     // with no tenant-wide port the flag is kept but there is nothing to be left out of
     assert.strictEqual((await call('PUT', '/v1/broker-config', { syslog_port: null })).status, 200);
-    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: null });
+    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: null, tls_port: null });
     a = mine(await listed(), 'broker-a').config; assert.strictEqual(a.excluded, true); assert.strictEqual(a.source, 'none');
     assert.strictEqual((await call('PUT', '/v1/broker-config', { syslog_port: 1514 })).status, 200);
 
     // putting it back: asked for the tenant-wide port again
     r = await excl(A, false); assert.strictEqual(r.status, 200); assert.strictEqual(r.json.broker.syslog_port_exclude, false); assert.strictEqual(await colOf(TENANT, 'broker-a'), false);
-    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: 1514 }); assert.strictEqual(mine(await listed(), 'broker-a').config.source, 'tenant');
+    assert.deepStrictEqual((await pull(keyA, 'broker-a')).json.config, { syslog_port: 1514, tls_port: null }); assert.strictEqual(mine(await listed(), 'broker-a').config.source, 'tenant');
 
     // refused: bad body, a bad id, another tenant's broker, a collector that is not a broker. None of it writes anything.
     for (const bad of [{}, { exclude: 'true' }, { exclude: 1 }, { exclude: null }]) assert.strictEqual((await call('PUT', '/v1/brokers/' + C + '/syslog-port-exclude', bad)).status, 400, JSON.stringify(bad));

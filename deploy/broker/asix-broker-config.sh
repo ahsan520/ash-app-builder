@@ -3,7 +3,8 @@
 # asix-broker-config.timer, which scripts/deploy/bootstrap-broker.sh installs ONLY when given --accept-config (ASIX_ACCEPT_CONFIG=true
 # in broker.env). A broker set up without that flag never runs this and ASIX cannot change it.
 #
-# One setting so far: the syslog port (one value for the tenant, or a port set for this broker alone). What it does, in this order, and stops at the first failure:
+# Two settings: the syslog port (one value for the tenant, or a port set for this broker alone) and the syslog-over-TLS port (one value for the tenant;
+# acted on only by a broker that already HAS a TLS listener, see below). Each is applied on its own, the syslog port first. What it does, in this order, and stops at the first failure:
 #   1. fetches GET <ingest URL>/../broker-config?collector=<this broker's name> with this broker's own ingestion key (nothing is sent but the key and the name)
 #   2. null or the port already in use: does nothing
 #   3. checks the port itself, whatever ASIX sent: 1-65535, not SSH (22), HTTPS (443), Vector's health API (8686) or ASIX's HTTPS (30443),
@@ -22,6 +23,7 @@
 # the reason in the journal). The unsigned `config` part of the answer is ignored in this mode.
 # The report also says whether this broker checks signatures (`signature`): off (no public key), unchecked (it has one but got no answer to check), ok (the
 # last answer passed) or the reason the last answer was refused (unsigned, bad_signature, wrong_broker, clock_skew, bad_format, no_key_file, no_openssl).
+# The TLS port is moved only on a broker that has a TLS listener (ASIX_SYSLOG_TLS_PORT in broker.env and vector-tls.yaml present); otherwise it is ignored with a note.
 # It does not open the firewall: the new port must be opened on this VM by hand. Results go to the journal (journalctl -u asix-broker-config).
 set -uo pipefail
 
@@ -95,47 +97,87 @@ if [ -n "${ASIX_CONFIG_PUBKEY_FILE:-}" ]; then
   SIG=ok   # signature, broker name and age all passed
   FLAT="$PAY"
 fi
-if printf '%s' "$FLAT" | grep -q '"syslog_port":null'; then exit 0; fi
-PORT="$(printf '%s' "$FLAT" | sed -n 's/.*"syslog_port":\([0-9]\{1,5\}\)[,}].*/\1/p')"
-[ -n "$PORT" ] || { echo "Unexpected answer from ASIX (no syslog_port); nothing changed." >&2; exit 1; }
+PORT=""
+if ! printf '%s' "$FLAT" | grep -q '"syslog_port":null'; then
+  PORT="$(printf '%s' "$FLAT" | sed -n 's/.*"syslog_port":\([0-9]\{1,5\}\)[,}].*/\1/p')"
+  [ -n "$PORT" ] || { echo "Unexpected answer from ASIX (no syslog_port); nothing changed." >&2; exit 1; }
 
-# The broker's own rules, independent of what ASIX sent.
-[[ "$PORT" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$PORT" -le 65535 ] || { echo "ASIX asked for syslog port $PORT, which is not a valid port; ignored." >&2; exit 1; }
-case "$PORT" in 22|443|8686|30443) echo "ASIX asked for syslog port $PORT, which this broker never uses for syslog; ignored." >&2; exit 1;; esac
-[ "$PORT" != "${ASIX_SYSLOG_TLS_PORT:-}" ] || { echo "ASIX asked for syslog port $PORT, which is this broker's syslog-over-TLS port; ignored." >&2; exit 1; }
-
-CUR="${ASIX_SYSLOG_PORT:-514}"
-[ "$PORT" != "$CUR" ] || exit 0
-if [ -r "$STATE_DIR/config-rejected" ] && [ "$(cat "$STATE_DIR/config-rejected" 2>/dev/null)" = "$PORT" ]; then
-  echo "Syslog port $PORT was tried before and failed on this broker; not trying again until ASIX asks for a different port."; exit 0
+  # The broker's own rules, independent of what ASIX sent.
+  [[ "$PORT" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$PORT" -le 65535 ] || { echo "ASIX asked for syslog port $PORT, which is not a valid port; ignored." >&2; exit 1; }
+  case "$PORT" in 22|443|8686|30443) echo "ASIX asked for syslog port $PORT, which this broker never uses for syslog; ignored." >&2; exit 1;; esac
+  [ "$PORT" != "${ASIX_SYSLOG_TLS_PORT:-}" ] || { echo "ASIX asked for syslog port $PORT, which is this broker's syslog-over-TLS port; ignored." >&2; exit 1; }
 fi
+# The syslog-over-TLS port: absent or null (an ASIX or a signed answer from before it existed, or none set) means no opinion.
+TPORT="$(printf '%s' "$FLAT" | sed -n 's/.*"tls_port":\([0-9]\{1,5\}\)[,}].*/\1/p')"
+if [ -z "$TPORT" ] && printf '%s' "$FLAT" | grep -q '"tls_port":[^n]'; then echo "Unexpected syslog-over-TLS port in the answer from ASIX (neither a port nor null); nothing changed." >&2; exit 1; fi
 
-echo "ASIX asks for syslog port $PORT (now $CUR). Applying."
 BACKUP="$ENV_FILE.before-config"
-TMP="$(mktemp "$ENV_FILE.XXXXXX")" || { echo "Cannot write next to $ENV_FILE; nothing changed." >&2; exit 1; }
-cp -p "$ENV_FILE" "$BACKUP" && cp -p "$ENV_FILE" "$TMP" || { rm -f "$TMP"; echo "Cannot make a backup of $ENV_FILE; nothing changed." >&2; exit 1; }
-if grep -q '^ASIX_SYSLOG_PORT=' "$TMP"; then sed -i "s/^ASIX_SYSLOG_PORT=.*/ASIX_SYSLOG_PORT=$PORT/" "$TMP"; else echo "ASIX_SYSLOG_PORT=$PORT" >> "$TMP"; fi
-mv "$TMP" "$ENV_FILE"
 
-reject() {  # $1 = why. Puts the old env back, restarts Vector on it if it was already restarted, remembers the port.
-  echo "$1 Putting the old settings back." >&2
-  cp -p "$BACKUP" "$ENV_FILE"
-  mkdir -p "$STATE_DIR" && echo "$PORT" > "$STATE_DIR/config-rejected"
-  if [ "${2:-}" = restart ]; then systemctl restart vector || echo "Restarting Vector on the old settings failed: journalctl -u vector -n 50" >&2; fi
-  exit 1
+# apply_env VAR VALUE REJECTED_FILE LABEL DONE_HINT: puts VAR=VALUE in broker.env, validates the result, restarts Vector, waits for health. Any failure puts the
+# old broker.env back (restarting Vector on it if it had already been restarted), remembers VALUE in REJECTED_FILE so it is not retried every 5 minutes, returns 1.
+apply_env() {
+  local VAR="$1" VAL="$2" REJ="$STATE_DIR/$3" LABEL="$4" HINT="$5" TMP CURV TLS ok HEALTH
+  CURV="$( . "$ENV_FILE" >/dev/null 2>&1; eval "printf '%s' \"\${$VAR:-}\"" )"
+  echo "ASIX asks for $LABEL $VAL (now ${CURV:-not set}). Applying."
+  TMP="$(mktemp "$ENV_FILE.XXXXXX")" || { echo "Cannot write next to $ENV_FILE; nothing changed." >&2; return 1; }
+  cp -p "$ENV_FILE" "$BACKUP" && cp -p "$ENV_FILE" "$TMP" || { rm -f "$TMP"; echo "Cannot make a backup of $ENV_FILE; nothing changed." >&2; return 1; }
+  if grep -q "^$VAR=" "$TMP"; then sed -i "s/^$VAR=.*/$VAR=$VAL/" "$TMP"; else echo "$VAR=$VAL" >> "$TMP"; fi
+  mv "$TMP" "$ENV_FILE"
+
+  reject() {  # $1 = why, $2 = restart if Vector was already restarted
+    echo "$1 Putting the old settings back." >&2
+    cp -p "$BACKUP" "$ENV_FILE"
+    mkdir -p "$STATE_DIR" && echo "$VAL" > "$REJ"
+    if [ "${2:-}" = restart ]; then systemctl restart vector || echo "Restarting Vector on the old settings failed: journalctl -u vector -n 50" >&2; fi
+    return 1
+  }
+
+  TLS=""; [ -r "$VECTOR_DIR/vector-tls.yaml" ] && TLS="$VECTOR_DIR/vector-tls.yaml"
+  ( set -a; . "$ENV_FILE"; set +a; vector validate --no-environment ${TLS:+"$TLS"} "$VECTOR_DIR/vector.yaml" ) >/dev/null 2>&1 \
+    || { reject "The config does not pass 'vector validate' with $LABEL $VAL."; return 1; }
+  systemctl restart vector || { reject "systemctl restart vector failed with $LABEL $VAL." restart; return 1; }
+  HEALTH="${ASIX_VECTOR_HEALTH_URL:-http://127.0.0.1:8686/health}"
+  ok=0
+  for _ in $(seq 1 "$WAIT_S"); do
+    if curl -fsS -m 3 "$HEALTH" >/dev/null 2>&1; then ok=1; break; fi
+    sleep 1
+  done
+  [ "$ok" -eq 1 ] || { reject "Vector did not become healthy within ${WAIT_S}s on $LABEL $VAL (is something else using it?)." restart; return 1; }
+
+  rm -f "$REJ"
+  echo "Done: $LABEL ${CURV:-not set} -> $VAL, Vector healthy. $HINT"
+  return 0
 }
 
-TLS=""; [ -r "$VECTOR_DIR/vector-tls.yaml" ] && TLS="$VECTOR_DIR/vector-tls.yaml"
-( set -a; . "$ENV_FILE"; set +a; vector validate --no-environment ${TLS:+"$TLS"} "$VECTOR_DIR/vector.yaml" ) >/dev/null 2>&1 \
-  || reject "The config does not pass 'vector validate' with syslog port $PORT."
-systemctl restart vector || reject "systemctl restart vector failed with syslog port $PORT." restart
-HEALTH="${ASIX_VECTOR_HEALTH_URL:-http://127.0.0.1:8686/health}"
-ok=0
-for _ in $(seq 1 "$WAIT_S"); do
-  if curl -fsS -m 3 "$HEALTH" >/dev/null 2>&1; then ok=1; break; fi
-  sleep 1
-done
-[ "$ok" -eq 1 ] || reject "Vector did not become healthy within ${WAIT_S}s on syslog port $PORT (is something else using it?)." restart
+RC=0
+# ---- 1. The syslog port ----
+if [ -n "$PORT" ]; then
+  CUR="${ASIX_SYSLOG_PORT:-514}"
+  if [ "$PORT" = "$CUR" ]; then :
+  elif [ -r "$STATE_DIR/config-rejected" ] && [ "$(cat "$STATE_DIR/config-rejected" 2>/dev/null)" = "$PORT" ]; then
+    echo "Syslog port $PORT was tried before and failed on this broker; not trying again until ASIX asks for a different port."
+  else
+    apply_env ASIX_SYSLOG_PORT "$PORT" config-rejected "syslog port" "Open $PORT/udp and $PORT/tcp on this VM's firewall; senders must use the new port." || exit 1
+  fi
+fi
 
-rm -f "$STATE_DIR/config-rejected"
-echo "Done: syslog port $CUR -> $PORT, Vector healthy. Open $PORT/udp and $PORT/tcp on this VM's firewall; senders must use the new port."
+# ---- 2. The syslog-over-TLS port ----
+# Only moves the port of a TLS listener this broker ALREADY has (bootstrap-broker.sh --tls-cert/--tls-key). ASIX cannot turn TLS on or off: that needs
+# certificates here. The broker's own rules apply whatever ASIX sent: a valid port, not a reserved one, not the syslog port it now uses.
+if [ -n "$TPORT" ]; then
+  [[ "$TPORT" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$TPORT" -le 65535 ] || { echo "ASIX asked for syslog-over-TLS port $TPORT, which is not a valid port; ignored." >&2; exit 1; }
+  case "$TPORT" in 22|443|8686|30443) echo "ASIX asked for syslog-over-TLS port $TPORT, which this broker never uses for syslog; ignored." >&2; exit 1;; esac
+  CURT="$( . "$ENV_FILE" >/dev/null 2>&1; printf '%s' "${ASIX_SYSLOG_TLS_PORT:-}" )"   # read again: step 1 may just have changed the file
+  NOWP="$( . "$ENV_FILE" >/dev/null 2>&1; printf '%s' "${ASIX_SYSLOG_PORT:-514}" )"
+  if [ -z "$CURT" ] || [ ! -r "$VECTOR_DIR/vector-tls.yaml" ]; then
+    echo "ASIX asks for syslog-over-TLS port $TPORT, but this broker has no TLS listener (bootstrap-broker.sh --tls-cert and --tls-key); ignored."
+  elif [ "$TPORT" = "$NOWP" ]; then
+    echo "ASIX asked for syslog-over-TLS port $TPORT, which is the syslog port this broker uses; ignored." >&2; exit 1
+  elif [ "$TPORT" = "$CURT" ]; then :
+  elif [ -r "$STATE_DIR/config-tls-rejected" ] && [ "$(cat "$STATE_DIR/config-tls-rejected" 2>/dev/null)" = "$TPORT" ]; then
+    echo "Syslog-over-TLS port $TPORT was tried before and failed on this broker; not trying again until ASIX asks for a different port."
+  else
+    apply_env ASIX_SYSLOG_TLS_PORT "$TPORT" config-tls-rejected "syslog-over-TLS port" "Open $TPORT/tcp on this VM's firewall; senders must use the new port." || RC=1
+  fi
+fi
+exit $RC

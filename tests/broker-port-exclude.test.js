@@ -121,20 +121,20 @@ describe('routes', () => {
     failDb = true; try { const r = await put(ID, { exclude: true }); assert.strictEqual(r.status, 500); assert.strictEqual(r.json.error.code, 'BROKER_CONFIG_ERROR'); } finally { failDb = false; }
   });
   it('the pull: a left-out broker is told null, one that is not still gets the tenant-wide port', async () => {
-    tenantPort = 1514; ownPort = null; excluded = true; assert.deepStrictEqual((await pull()).json.config, { syslog_port: null });
-    excluded = false; assert.deepStrictEqual((await pull()).json.config, { syslog_port: 1514 });
+    tenantPort = 1514; ownPort = null; excluded = true; assert.deepStrictEqual((await pull()).json.config, { syslog_port: null, tls_port: null });
+    excluded = false; assert.deepStrictEqual((await pull()).json.config, { syslog_port: 1514, tls_port: null });
   });
   it('the pull: an own port wins over being left out, and the flag is not even read then', async () => {
     tenantPort = 1514; ownPort = 2514; excluded = true;
-    excludeFails = true; try { assert.deepStrictEqual((await pull()).json.config, { syslog_port: 2514 }); } finally { excludeFails = false; }
+    excludeFails = true; try { assert.deepStrictEqual((await pull()).json.config, { syslog_port: 2514, tls_port: null }); } finally { excludeFails = false; }
   });
   it('the pull: nothing to be left out of (no tenant-wide port), or no name, is answered as before', async () => {
-    tenantPort = null; ownPort = null; excluded = true; assert.deepStrictEqual((await pull()).json.config, { syslog_port: null });
-    tenantPort = 1514; assert.deepStrictEqual((await pull('')).json.config, { syslog_port: 1514 }, 'an older script that sends no name is told the tenant-wide port');
-    assert.deepStrictEqual((await pull('?collector=a%20b')).json.config, { syslog_port: 1514 }, 'a name that is not a plain name is ignored');
+    tenantPort = null; ownPort = null; excluded = true; assert.deepStrictEqual((await pull()).json.config, { syslog_port: null, tls_port: null });
+    tenantPort = 1514; assert.deepStrictEqual((await pull('')).json.config, { syslog_port: 1514, tls_port: null }, 'an older script that sends no name is told the tenant-wide port');
+    assert.deepStrictEqual((await pull('?collector=a%20b')).json.config, { syslog_port: 1514, tls_port: null }, 'a name that is not a plain name is ignored');
   });
   it('if the column is not there yet the tenant-wide port still answers; a key still has to be valid', async () => {
-    tenantPort = 1514; ownPort = null; excluded = true; excludeFails = true; try { assert.deepStrictEqual((await pull()).json.config, { syslog_port: 1514 }); } finally { excludeFails = false; }
+    tenantPort = 1514; ownPort = null; excluded = true; excludeFails = true; try { assert.deepStrictEqual((await pull()).json.config, { syslog_port: 1514, tls_port: null }); } finally { excludeFails = false; }
     assert.strictEqual((await call('GET', '/v1/ingest/broker-config?collector=broker-1')).status, 401);
     failKey = true; try { assert.strictEqual((await pull()).status, 401); } finally { failKey = false; }
     failDb = true; try { assert.strictEqual((await pull()).status, 500); } finally { failDb = false; }

@@ -27,6 +27,29 @@ describe('checkSyslogPort', () => {
   });
 });
 
+describe('checkTlsPort', () => {
+  it('same port rules as the syslog port, with its own wording', () => {
+    assert.deepStrictEqual(config.checkTlsPort(6514), { value: 6514 });
+    assert.deepStrictEqual(config.checkTlsPort(' 6515 '), { value: 6515 });
+    for (const v of [null, undefined, '', '  ']) assert.deepStrictEqual(config.checkTlsPort(v, 514), { value: null });
+    for (const v of [0, 65536, '0514', '6514; ls', 'x', 1.5, true, {}]) assert.ok(config.checkTlsPort(v).error, JSON.stringify(v));
+    for (const p of [22, 443, 8686, 30443]) { const r = config.checkTlsPort(p); assert.match(r.error, /TLS port/); assert.match(r.error, new RegExp('Port ' + p)); }
+    assert.match(config.checkTlsPort('x').error, /^Syslog-over-TLS port must be a whole number/);
+  });
+  it('refuses the same number as the syslog port, but only when one is given', () => {
+    assert.match(config.checkTlsPort(1514, 1514).error, /same as the syslog port/);
+    assert.deepStrictEqual(config.checkTlsPort(1514, 514), { value: 1514 });
+    assert.deepStrictEqual(config.checkTlsPort(1514, null), { value: 1514 });
+    assert.deepStrictEqual(config.checkTlsPort(null, 1514), { value: null }, 'clearing is always fine');
+  });
+  it('read and write touch only tls_port', async () => {
+    const q = (rows) => ({ query: async () => ({ rows }) });
+    assert.strictEqual(await config.readTlsPort(q([]), 't'), null); assert.strictEqual(await config.readTlsPort(q([{ tls_port: null }]), 't'), null); assert.strictEqual(await config.readTlsPort(q([{ tls_port: 6514 }]), 't'), 6514);
+    const seen = []; await config.writeTlsPort({ query: async (sql, args) => { seen.push({ sql, args }); } }, 'tenant-1', 6514, 'u1');
+    assert.match(seen[0].sql, /DO UPDATE SET tls_port = EXCLUDED\.tls_port/); assert.doesNotMatch(seen[0].sql, /syslog_port|vector_target/); assert.deepStrictEqual(seen[0].args, ['tenant-1', 6514, 'u1']);
+  });
+});
+
 describe('database helpers', () => {
   it('read: no row and a null column both mean no opinion; a number comes back as a number', async () => {
     const q = (rows) => ({ query: async () => ({ rows }) });
@@ -97,13 +120,14 @@ describe('broker reports (what a broker says it applied)', () => {
 });
 
 describe('routes', () => {
-  let srv, base, stored = null, failDb = false, failKey = false, updates = [], reportRows = 1;
+  let srv, base, stored = null, storedTls = null, failDb = false, failKey = false, updates = [], reportRows = 1;
   before(() => {
     const dbPath = require.resolve('../src/db');
     require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: {
       withTenant: async (tenant, fn) => { if (failDb) throw new Error('boom'); return fn({ query: async (sql, args) => {
         if (/^\s*UPDATE collectors/.test(sql)) { updates.push({ sql, args }); return { rowCount: reportRows, rows: [] }; }
-        if (/^SELECT/.test(sql)) return { rows: [{ syslog_port: stored }] };
+        if (/^SELECT/.test(sql)) return { rows: [{ syslog_port: stored, tls_port: storedTls }] };
+        if (/tls_port/.test(sql)) { storedTls = args[1]; return { rows: [] }; }
         stored = args[1]; return { rows: [] }; } }); },
       query: async () => ({ rows: failKey ? [] : [{ id: 'k1', tenant_id: 't1', name: 'broker-1', platform: 'linux' }] }),
     } };
@@ -125,6 +149,29 @@ describe('routes', () => {
     assert.strictEqual(stored, 1514, 'a refused value changes nothing');
     r = await call('PUT', '/v1/broker-config', { syslog_port: null }); assert.strictEqual(r.status, 200); assert.strictEqual(stored, null);
   });
+  it('the portal route saves the TLS port alone, with the syslog port alone, or both; keys left out are not touched', async () => {
+    stored = null; storedTls = null;
+    let r = await call('PUT', '/v1/broker-config', { tls_port: 6514 }); assert.strictEqual(r.status, 200); assert.strictEqual(r.json.config.tls_port, 6514); assert.strictEqual(r.json.config.syslog_port, null); assert.strictEqual(storedTls, 6514); assert.strictEqual(stored, null);
+    r = await call('PUT', '/v1/broker-config', { syslog_port: 1514 }); assert.strictEqual(r.status, 200); assert.strictEqual(stored, 1514); assert.strictEqual(storedTls, 6514, 'a syslog-only save keeps the TLS port'); assert.strictEqual(r.json.config.tls_port, 6514);
+    r = await call('PUT', '/v1/broker-config', { syslog_port: 2514, tls_port: 7514 }); assert.strictEqual(r.status, 200); assert.strictEqual(stored, 2514); assert.strictEqual(storedTls, 7514);
+    assert.strictEqual((await call('GET', '/v1/broker-config')).json.config.tls_port, 7514);
+    r = await call('PUT', '/v1/broker-config', { tls_port: null }); assert.strictEqual(r.status, 200); assert.strictEqual(storedTls, null); assert.strictEqual(stored, 2514, 'clearing one leaves the other');
+    stored = null; storedTls = null;
+  });
+  it('the portal route refuses a bad TLS port, a TLS port equal to the syslog port, and the reverse, writing nothing', async () => {
+    stored = 1514; storedTls = 6514;
+    for (const bad of [{ tls_port: 22 }, { tls_port: 'x' }, { tls_port: 70000 }, { tls_port: 1514 }, { syslog_port: 6514 }, { syslog_port: 2514, tls_port: 2514 }]) {
+      const r = await call('PUT', '/v1/broker-config', bad); assert.strictEqual(r.status, 400, JSON.stringify(bad));
+      assert.ok(['INVALID_TLS_PORT', 'INVALID_SYSLOG_PORT'].includes(r.json.error.code), JSON.stringify(bad));
+    }
+    assert.strictEqual(stored, 1514); assert.strictEqual(storedTls, 6514, 'a refused value changes nothing');
+    const r = await call('PUT', '/v1/broker-config', {}); assert.strictEqual(r.status, 400); assert.strictEqual(r.json.error.code, 'INVALID_BODY');
+    stored = null; storedTls = null;
+  });
+  it('the broker route answers with the TLS port next to the syslog port', async () => {
+    stored = 1514; storedTls = 6514; const r = await call('GET', '/v1/ingest/broker-config', undefined, { authorization: KEY });
+    assert.deepStrictEqual(r.json.config, { syslog_port: 1514, tls_port: 6514 }); stored = null; storedTls = null;
+  });
   it('a database failure is a 500 with a code, not a crash', async () => {
     failDb = true; try { const r = await call('PUT', '/v1/broker-config', { syslog_port: 1514 }); assert.strictEqual(r.status, 500); assert.strictEqual(r.json.error.code, 'BROKER_CONFIG_ERROR'); } finally { failDb = false; }
   });
@@ -132,8 +179,8 @@ describe('routes', () => {
     assert.strictEqual((await call('GET', '/v1/ingest/broker-config')).status, 401);
     failKey = true; assert.strictEqual((await call('GET', '/v1/ingest/broker-config', undefined, { authorization: KEY })).status, 401); failKey = false;
     stored = null; let r = await call('GET', '/v1/ingest/broker-config', undefined, { authorization: KEY });
-    assert.strictEqual(r.status, 200); assert.deepStrictEqual(r.json.config, { syslog_port: null }); assert.strictEqual(r.json.interval_seconds, 300);
-    stored = 1514; r = await call('GET', '/v1/ingest/broker-config', undefined, { authorization: KEY }); assert.deepStrictEqual(r.json.config, { syslog_port: 1514 });
+    assert.strictEqual(r.status, 200); assert.deepStrictEqual(r.json.config, { syslog_port: null, tls_port: null }); assert.strictEqual(r.json.interval_seconds, 300);
+    stored = 1514; r = await call('GET', '/v1/ingest/broker-config', undefined, { authorization: KEY }); assert.deepStrictEqual(r.json.config, { syslog_port: 1514, tls_port: null });
   });
   it('the broker route is read only and a database failure is a 500', async () => {
     assert.ok([404, 405].includes((await fetch(base + '/v1/ingest/broker-config', { method: 'POST', headers: { authorization: KEY } })).status));

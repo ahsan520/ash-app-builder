@@ -118,25 +118,25 @@ describe('routes', () => {
   });
   it('the pull without a name answers the tenant-wide port exactly as before', async () => {
     tenantPort = 1514; ownPort = 2514;
-    let r = await call('GET', '/v1/ingest/broker-config', undefined, KEY); assert.strictEqual(r.status, 200); assert.deepStrictEqual(r.json.config, { syslog_port: 1514 });
-    tenantPort = null; r = await call('GET', '/v1/ingest/broker-config', undefined, KEY); assert.deepStrictEqual(r.json.config, { syslog_port: null });
+    let r = await call('GET', '/v1/ingest/broker-config', undefined, KEY); assert.strictEqual(r.status, 200); assert.deepStrictEqual(r.json.config, { syslog_port: 1514, tls_port: null });
+    tenantPort = null; r = await call('GET', '/v1/ingest/broker-config', undefined, KEY); assert.deepStrictEqual(r.json.config, { syslog_port: null, tls_port: null });
   });
   it('the pull with its name answers its own port, else the tenant-wide one, else null', async () => {
     const get = () => call('GET', '/v1/ingest/broker-config?collector=broker-1', undefined, KEY);
-    tenantPort = 1514; ownPort = 2514; assert.deepStrictEqual((await get()).json.config, { syslog_port: 2514 });
-    ownPort = null; assert.deepStrictEqual((await get()).json.config, { syslog_port: 1514 });
-    tenantPort = null; assert.deepStrictEqual((await get()).json.config, { syslog_port: null });
-    tenantPort = null; ownPort = 2514; assert.deepStrictEqual((await get()).json.config, { syslog_port: 2514 }, 'an own port needs no tenant-wide port');
+    tenantPort = 1514; ownPort = 2514; assert.deepStrictEqual((await get()).json.config, { syslog_port: 2514, tls_port: null });
+    ownPort = null; assert.deepStrictEqual((await get()).json.config, { syslog_port: 1514, tls_port: null });
+    tenantPort = null; assert.deepStrictEqual((await get()).json.config, { syslog_port: null, tls_port: null });
+    tenantPort = null; ownPort = 2514; assert.deepStrictEqual((await get()).json.config, { syslog_port: 2514, tls_port: null }, 'an own port needs no tenant-wide port');
   });
   it('a name that is not a plain name is ignored, and so is a repeated one', async () => {
     tenantPort = 1514; ownPort = 2514;
     for (const q of ['collector=a%20b', 'collector=a%2Fb', 'collector=', 'collector=broker-1&collector=broker-2']) {
-      const r = await call('GET', '/v1/ingest/broker-config?' + q, undefined, KEY); assert.strictEqual(r.status, 200, q); assert.deepStrictEqual(r.json.config, { syslog_port: 1514 }, q);
+      const r = await call('GET', '/v1/ingest/broker-config?' + q, undefined, KEY); assert.strictEqual(r.status, 200, q); assert.deepStrictEqual(r.json.config, { syslog_port: 1514, tls_port: null }, q);
     }
   });
   it('if the column is not there yet the tenant-wide port still answers; a key still has to be valid', async () => {
     tenantPort = 1514; ownFails = true; try {
-      const r = await call('GET', '/v1/ingest/broker-config?collector=broker-1', undefined, KEY); assert.strictEqual(r.status, 200); assert.deepStrictEqual(r.json.config, { syslog_port: 1514 });
+      const r = await call('GET', '/v1/ingest/broker-config?collector=broker-1', undefined, KEY); assert.strictEqual(r.status, 200); assert.deepStrictEqual(r.json.config, { syslog_port: 1514, tls_port: null });
     } finally { ownFails = false; }
     assert.strictEqual((await call('GET', '/v1/ingest/broker-config?collector=broker-1')).status, 401);
     failKey = true; try { assert.strictEqual((await call('GET', '/v1/ingest/broker-config?collector=broker-1', undefined, KEY)).status, 401); } finally { failKey = false; }

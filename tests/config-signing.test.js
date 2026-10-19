@@ -50,11 +50,17 @@ describe('what is signed and how it is checked', () => {
     assert.strictEqual(signing.payloadText(null, null, NOW), '{"v":1,"collector":null,"issued_at":1760000000,"syslog_port":null}');
     assert.strictEqual(signing.payloadText('bad"name', 1, NOW).includes('bad'), false, 'an odd name is never put in the text');
   });
+  it('the text signed with a TLS port, and verify refuses an unreadable one', () => {
+    assert.strictEqual(signing.payloadText('broker-1', 1514, NOW, 6514), '{"v":1,"collector":"broker-1","issued_at":1760000000,"syslog_port":1514,"tls_port":6514}');
+    assert.strictEqual(signing.payloadText('broker-1', null, NOW, null), '{"v":1,"collector":"broker-1","issued_at":1760000000,"syslog_port":null,"tls_port":null}');
+    assert.deepStrictEqual(signing.verify(A.publicKey, signing.signedDocument(keyOf(A), 'broker-1', 1514, NOW, 6514), { expectCollector: 'broker-1', nowMs: NOW }), { ok: true, port: 1514, tls_port: 6514 });
+    refused('unreadable port', A.publicKey, signing.signedDocument(keyOf(A), 'broker-1', 1514, NOW, 'x'));
+  });
   it('a good answer verifies and gives back the port (or null)', () => {
     for (const port of [1514, null]) {
       const d = signing.signedDocument(keyOf(A), 'broker-1', port, NOW);
       assert.deepStrictEqual(Object.keys(d), ['v', 'alg', 'key_id', 'payload', 'signature']);
-      assert.deepStrictEqual(signing.verify(A.publicKey, d, { expectCollector: 'broker-1', nowMs: NOW }), { ok: true, port });
+      assert.deepStrictEqual(signing.verify(A.publicKey, d, { expectCollector: 'broker-1', nowMs: NOW }), { ok: true, port, tls_port: null });
     }
   });
   const refused = (why, pub, doc, opts) => assert.deepStrictEqual(signing.verify(pub, doc, { expectCollector: 'broker-1', nowMs: NOW, ...opts }), { ok: false, reason: why });
@@ -83,12 +89,12 @@ describe('what is signed and how it is checked', () => {
 });
 
 describe('the routes carry the signed copy', () => {
-  let srv, base, stored = null;
+  let srv, base, stored = null, storedTls = null;
   const saved = process.env.ASIX_CONFIG_SIGNING_KEY;
   before(() => {
     const dbPath = require.resolve('../src/db');
     require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: {
-      withTenant: async (tenant, fn) => fn({ query: async (sql) => (/^SELECT/.test(sql) ? { rows: [{ syslog_port: stored }] } : { rows: [] }) }),
+      withTenant: async (tenant, fn) => fn({ query: async (sql) => (/^SELECT/.test(sql) ? { rows: [{ syslog_port: stored, tls_port: storedTls }] } : { rows: [] }) }),
       query: async () => ({ rows: [{ id: 'k1', tenant_id: 't1', name: 'broker-1', platform: 'linux' }] }),
     } };
     const shared = require('../src/gateway/shared');
@@ -97,20 +103,29 @@ describe('the routes carry the signed copy', () => {
     srv = app.listen(0); base = 'http://127.0.0.1:' + srv.address().port;
   });
   after(() => { srv.close(); if (saved === undefined) delete process.env.ASIX_CONFIG_SIGNING_KEY; else process.env.ASIX_CONFIG_SIGNING_KEY = saved; signing.reset(); });
-  beforeEach(() => { delete process.env.ASIX_CONFIG_SIGNING_KEY; signing.reset(); stored = null; });
+  beforeEach(() => { delete process.env.ASIX_CONFIG_SIGNING_KEY; signing.reset(); stored = null; storedTls = null; });
   const KEY = 'Bearer asix_ik_' + 'a'.repeat(40);
   const pull = async (q = '') => (await fetch(base + '/v1/ingest/broker-config' + q, { headers: { authorization: KEY } })).json();
 
   it('without a signing key the answer is exactly what it was before', async () => {
-    stored = 1514; const r = await pull('?collector=broker-1'); assert.deepStrictEqual(r, { success: true, config: { syslog_port: 1514 }, interval_seconds: 300 });
+    stored = 1514; const r = await pull('?collector=broker-1'); assert.deepStrictEqual(r, { success: true, config: { syslog_port: 1514, tls_port: null }, interval_seconds: 300 });
   });
   it('with a signing key the answer adds a signed copy of the same setting, bound to the name sent', async () => {
     process.env.ASIX_CONFIG_SIGNING_KEY = A.privateKey; stored = 1514;
-    const r = await pull('?collector=broker-1'); assert.deepStrictEqual(r.config, { syslog_port: 1514 });
-    assert.deepStrictEqual(signing.verify(A.publicKey, r.signed, { expectCollector: 'broker-1' }), { ok: true, port: 1514 });
-    const none = await pull(); assert.deepStrictEqual(signing.verify(A.publicKey, none.signed, { expectCollector: null }), { ok: true, port: 1514 }, 'no name sent: made for none');
+    const r = await pull('?collector=broker-1'); assert.deepStrictEqual(r.config, { syslog_port: 1514, tls_port: null });
+    assert.deepStrictEqual(signing.verify(A.publicKey, r.signed, { expectCollector: 'broker-1' }), { ok: true, port: 1514, tls_port: null });
+    const none = await pull(); assert.deepStrictEqual(signing.verify(A.publicKey, none.signed, { expectCollector: null }), { ok: true, port: 1514, tls_port: null }, 'no name sent: made for none');
     assert.strictEqual(signing.verify(A.publicKey, none.signed, { expectCollector: 'broker-1' }).ok, false);
-    stored = null; assert.deepStrictEqual(signing.verify(A.publicKey, (await pull('?collector=broker-1')).signed, { expectCollector: 'broker-1' }), { ok: true, port: null });
+    stored = null; assert.deepStrictEqual(signing.verify(A.publicKey, (await pull('?collector=broker-1')).signed, { expectCollector: 'broker-1' }), { ok: true, port: null, tls_port: null });
+  });
+  it('the signed copy carries the TLS port, and an answer from before it reads as none', async () => {
+    process.env.ASIX_CONFIG_SIGNING_KEY = A.privateKey; stored = 1514; storedTls = 6514;
+    const r = await pull('?collector=broker-1'); assert.deepStrictEqual(r.config, { syslog_port: 1514, tls_port: 6514 });
+    assert.deepStrictEqual(signing.verify(A.publicKey, r.signed, { expectCollector: 'broker-1' }), { ok: true, port: 1514, tls_port: 6514 });
+    assert.match(Buffer.from(r.signed.payload, 'base64').toString(), /"syslog_port":1514,"tls_port":6514\}$/, 'appended after the syslog port, last');
+    const old = signing.signedDocument(keyOf(A), 'broker-1', 1514, Date.now()); assert.doesNotMatch(Buffer.from(old.payload, 'base64').toString(), /tls_port/);
+    assert.deepStrictEqual(signing.verify(A.publicKey, old, { expectCollector: 'broker-1' }), { ok: true, port: 1514, tls_port: null });
+    storedTls = null; assert.deepStrictEqual(signing.verify(A.publicKey, (await pull('?collector=broker-1')).signed, { expectCollector: 'broker-1' }), { ok: true, port: 1514, tls_port: null });
   });
   it('an unusable key leaves the answer unsigned and the pull working', async () => {
     process.env.ASIX_CONFIG_SIGNING_KEY = 'garbage'; stored = 1514; const r = await pull('?collector=broker-1');
