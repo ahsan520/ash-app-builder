@@ -616,6 +616,10 @@ data:
 
     GRANT SELECT, INSERT, UPDATE, DELETE ON notification_recoveries TO asix_admin;
 
+    -- Per-channel switch for "Resolved" messages: NULL = follow ASIX_NOTIFY_RECOVERED (the old, tenant-wide behaviour),
+    -- true = this channel gets them even when the variable is off, false = this channel never gets them.
+    ALTER TABLE notification_channels ADD COLUMN IF NOT EXISTS notify_recovered BOOLEAN;
+
     -- ============================================================
     -- Storage & retention
     --   * events becomes a table partitioned by DAY (received_at). Old data is removed by

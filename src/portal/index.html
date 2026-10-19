@@ -868,6 +868,8 @@ function openChannelDialog(c) {
   const sev = el('select', {}, ['critical', 'high', 'medium', 'low'].map((s) => el('option', { value: s, textContent: s + ' and above' }))); sev.value = c ? c.min_severity : 'high';
   const rf = inp({ value: (c && c.rule_filter) || '', placeholder: 'optional, e.g. IOC' });
   const en = el('input', { type: 'checkbox', checked: c ? c.enabled : true });
+  const rec = el('select', {}, [['', 'Follow the server setting'], ['on', 'Always send'], ['off', 'Never send']].map(([v, t]) => el('option', { value: v, textContent: t })));
+  rec.value = !c || c.notify_recovered == null ? '' : c.notify_recovered ? 'on' : 'off';
   const f = {};   // per-type inputs
   f.host = inp({ value: cfg.host || '', placeholder: 'smtp.example.com' }); f.port = inp({ type: 'number', value: cfg.port || 587 });
   f.security = el('select', {}, [['starttls', 'STARTTLS (587)'], ['tls', 'TLS (465)'], ['none', 'None (not recommended)']].map(([v, t]) => el('option', { value: v, textContent: t }))); f.security.value = cfg.security || 'starttls';
@@ -899,10 +901,11 @@ function openChannelDialog(c) {
   };
   const m = openModal(el('h2', { textContent: isNew ? 'Add notification channel' : 'Edit channel: ' + c.name }),
     el('div', { className: 'row2' }, el('div', {}, fld('Name *', name), fld('Channel type', type)), el('div', {}, fld('Notify when severity is', sev), fld('Only rules whose name contains', rf))),
-    typed, el('label', { className: 'fld', style: 'flex-direction:row;align-items:center;gap:8px' }, en, 'Enabled'), err);
+    typed, fld('Resolved messages', rec, 'When ASIX closes one of its own alerts (a collector is back), tell this channel it is over. \"Follow the server setting\" uses ASIX_NOTIFY_RECOVERED.'),
+    el('label', { className: 'fld', style: 'flex-direction:row;align-items:center;gap:8px' }, en, 'Enabled'), err);
   const save = el('button', { className: 'btn pri', textContent: 'Save', onclick: async () => {
     err.textContent = ''; save.disabled = true;
-    const body = { name: name.value.trim(), min_severity: sev.value, rule_filter: rf.value.trim() || null, enabled: en.checked, config: config() };
+    const body = { name: name.value.trim(), min_severity: sev.value, rule_filter: rf.value.trim() || null, enabled: en.checked, notify_recovered: rec.value === '' ? null : rec.value === 'on', config: config() };
     try {
       if (isNew) await api('/v1/notifications/channels', { method: 'POST', body: { ...body, type: type.value } });
       else await api('/v1/notifications/channels/' + c.id, { method: 'PATCH', body });
@@ -924,6 +927,7 @@ async function pgNotify() {
     card('', table([
       { h: 'Name', f: (c) => c.name }, { h: 'Type', f: (c) => pill(NOTIFY_LABEL[c.type] || c.type) }, { h: 'State', f: (c) => pill(c.enabled ? 'Enabled' : 'Disabled', c.enabled ? 'ok' : 'off') },
       { h: 'Notify when', f: (c) => el('span', {}, sevPill(c.min_severity), ' and above', c.rule_filter ? el('span', { className: 'mute', textContent: '  |  rule contains "' + c.rule_filter + '"' }) : '') },
+      { h: 'Resolved messages', f: (c) => el('span', {}, pill(c.recovered_sending ? 'On' : 'Off', c.recovered_sending ? 'ok' : 'off'), c.notify_recovered == null ? el('span', { className: 'mute', textContent: ' server setting' }) : '') },
       { h: 'Target', cls: 'mono', f: (c) => c.target }, { h: 'Last delivery', f: (c) => (c.last_delivery_status ? el('span', {}, delivPill(c.last_delivery_status), ' ', el('span', { className: 'mute', textContent: when(c.last_delivery_at) })) : 'none yet') },
       { h: '', f: (c) => el('span', { style: 'white-space:nowrap' },
         el('button', { className: 'btn', textContent: 'Test', onclick: (e) => test(c, e.target) }), ' ', el('button', { className: 'btn', textContent: 'Edit', onclick: () => openChannelDialog(c) }), ' ',
@@ -932,18 +936,21 @@ async function pgNotify() {
     ], r.channels, 'No channels yet. Click "Add channel" to send alerts to email, Slack or a webhook.'))];
 }
 
-let delF = { status: '', offset: 0 };
+let delF = { status: '', kind: '', offset: 0 };
 async function pgDeliveries() {
-  const PAGE = 50, p = new URLSearchParams({ limit: PAGE, offset: delF.offset }); if (delF.status) p.set('status', delF.status);
+  const PAGE = 50, p = new URLSearchParams({ limit: PAGE, offset: delF.offset }); if (delF.status) p.set('status', delF.status); if (delF.kind) p.set('kind', delF.kind);
   const r = await api('/v1/notifications/deliveries?' + p);
   const act = async (fn) => { try { await fn(); route(); } catch (e) { alert(e.message); } };
-  const st = el('select', { onchange: () => { delF = { status: st.value, offset: 0 }; route(); } }, [['', 'Status: all'], ['sent', 'Sent'], ['pending', 'Pending'], ['failed', 'Failed'], ['skipped', 'Skipped']].map(([v, t]) => el('option', { value: v, textContent: t })));
+  const kd = el('select', { onchange: () => { delF = { status: st.value, kind: kd.value, offset: 0 }; route(); } }, [['', 'Messages: all'], ['alert', 'Alert messages'], ['resolved', 'Resolved messages']].map(([v, t]) => el('option', { value: v, textContent: t })));
+  kd.value = delF.kind;
+  const st = el('select', { onchange: () => { delF = { status: st.value, kind: kd.value, offset: 0 }; route(); } }, [['', 'Status: all'], ['sent', 'Sent'], ['pending', 'Pending'], ['failed', 'Failed'], ['skipped', 'Skipped']].map(([v, t]) => el('option', { value: v, textContent: t })));
   st.value = delF.status;
   return [el('div', { style: 'display:flex;align-items:baseline;gap:12px' }, el('h2', { textContent: 'Delivery log' }), el('span', { className: 'mute', textContent: r.total.toLocaleString() + ' deliveries' })),
-    el('p', { className: 'desc', textContent: 'Every attempt to send an alert to a channel. Failed deliveries can be retried by hand.' }),
-    card('', el('div', { style: 'display:flex;gap:8px;margin-bottom:12px' }, st, el('button', { className: 'btn', textContent: 'Refresh', onclick: () => route() })),
+    el('p', { className: 'desc', textContent: 'Every attempt to send an alert, or a Resolved message, to a channel. Failed deliveries can be retried by hand.' }),
+    card('', el('div', { style: 'display:flex;gap:8px;margin-bottom:12px' }, kd, st, el('button', { className: 'btn', textContent: 'Refresh', onclick: () => route() })),
       table([
         { h: 'Queued (UTC)', f: (d) => when(d.created_at) }, { h: 'Channel', f: (d) => d.channel_name + ' (' + (NOTIFY_LABEL[d.channel_type] || d.channel_type) + ')' },
+        { h: 'Message', f: (d) => (d.kind === 'resolved' ? pill('Resolved', 'ok') : pill('Alert', 'off')) },
         { h: 'Alert', f: (d) => el('span', {}, sevPill(d.severity), ' ', d.title) }, { h: 'Status', f: (d) => delivPill(d.status) }, { h: 'Attempts', f: (d) => d.attempts },
         { h: 'Sent / next try (UTC)', f: (d) => (d.status === 'sent' ? when(d.sent_at) : d.status === 'pending' ? when(d.next_attempt_at) : '-') }, { h: 'Error', cls: 'mono', f: (d) => d.last_error || '' },
         { h: '', f: (d) => (d.status === 'failed' || d.status === 'skipped' ? el('button', { className: 'btn', textContent: 'Retry', onclick: () => act(() => api('/v1/notifications/deliveries/' + d.id + '/retry', { method: 'POST' })) }) : '') },

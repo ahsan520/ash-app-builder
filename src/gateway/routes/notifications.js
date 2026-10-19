@@ -9,6 +9,7 @@ const {
 const notifyBox = require('../../notifications/secret-box');
 const notifyCh = require('../../notifications/channels');
 const { testMessage, sendToChannel } = require('../../notifications/senders');
+const recovered = require('../../notifications/recovered');
 
 const CHANNEL_SELECT = `
   SELECT c.*,
@@ -16,8 +17,8 @@ const CHANNEL_SELECT = `
     (SELECT COALESCE(d.sent_at, d.created_at) FROM notification_deliveries d WHERE d.channel_id = c.id ORDER BY d.created_at DESC LIMIT 1) AS last_delivery_at
   FROM notification_channels c`;
 const publicChannel = (row) => {
-  try { return notifyCh.toPublic(row, notifyBox.decrypt(row.config_enc)); }
-  catch { return { ...notifyCh.toPublic({ ...row }, { to: [] }), config: {}, target: '(cannot be decrypted - encryption key changed?)', config_error: true }; }
+  try { return notifyCh.toPublic(row, notifyBox.decrypt(row.config_enc), recovered.enabled()); }
+  catch { return { ...notifyCh.toPublic({ ...row }, { to: [] }, recovered.enabled()), config: {}, target: '(cannot be decrypted - encryption key changed?)', config_error: true }; }
 };
 const notifyError = (res, e, fallback) => {
   if (e.code === 'INVALID_CONFIG') return apiError(res, 400, 'INVALID_CONFIG', e.message);
@@ -41,8 +42,8 @@ router.post('/v1/notifications/channels', ...guarded('notify:write'), async (req
     const config = notifyCh.normalizeConfig(b.type, b.config);
     const enc = notifyBox.encrypt(config);
     const r = await db.withTenant(req.tenant_id, (c) => c.query(
-      `INSERT INTO notification_channels (tenant_id, name, type, enabled, min_severity, rule_filter, config_enc)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`, [req.tenant_id, common.name, b.type, common.enabled, common.min_severity, common.rule_filter, enc]));
+      `INSERT INTO notification_channels (tenant_id, name, type, enabled, min_severity, rule_filter, config_enc, notify_recovered)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`, [req.tenant_id, common.name, b.type, common.enabled, common.min_severity, common.rule_filter, enc, common.notify_recovered]));
     const row = (await db.withTenant(req.tenant_id, (c) => c.query(`${CHANNEL_SELECT} WHERE c.id = $1`, [r.rows[0].id]))).rows[0];
     res.status(201).json({ success: true, channel: publicChannel(row) });
   } catch (e) { notifyError(res, e, 'Failed to create channel'); }
@@ -58,8 +59,8 @@ router.patch('/v1/notifications/channels/:id', ...guarded('notify:write'), async
     let enc = cur.config_enc;
     if (b.config !== undefined) enc = notifyBox.encrypt(notifyCh.normalizeConfig(cur.type, b.config, notifyBox.decrypt(cur.config_enc)));
     await db.withTenant(req.tenant_id, (c) => c.query(
-      `UPDATE notification_channels SET name=$2, enabled=$3, min_severity=$4, rule_filter=$5, config_enc=$6, updated_at=localtimestamp WHERE id=$1 AND tenant_id=$7`,
-      [cur.id, common.name, common.enabled, common.min_severity, common.rule_filter, enc, req.tenant_id]));
+      `UPDATE notification_channels SET name=$2, enabled=$3, min_severity=$4, rule_filter=$5, config_enc=$6, notify_recovered=$8, updated_at=localtimestamp WHERE id=$1 AND tenant_id=$7`,
+      [cur.id, common.name, common.enabled, common.min_severity, common.rule_filter, enc, req.tenant_id, common.notify_recovered]));
     const row = (await db.withTenant(req.tenant_id, (c) => c.query(`${CHANNEL_SELECT} WHERE c.id = $1`, [cur.id]))).rows[0];
     res.status(200).json({ success: true, channel: publicChannel(row) });
   } catch (e) { notifyError(res, e, 'Failed to update channel'); }
@@ -91,22 +92,35 @@ router.post('/v1/notifications/channels/:id/test', ...guarded('notify:write'), a
   } catch (e) { notifyError(res, e, 'Failed to send test notification'); }
 });
 
+// The delivery log lists alert messages and, since "Resolved" messages exist, those too (kind 'alert' or 'resolved'; ?kind= filters).
+// If the notification_recoveries table is not there yet (schema job not run) the log shows alert messages only instead of failing.
+const DELIVERY_COLS = (kind) => `d.id, '${kind}'::text AS kind, d.status, d.attempts, d.last_error, d.sent_at, d.created_at, d.next_attempt_at,
+                ch.name AS channel_name, ch.type AS channel_type, a.id AS alert_id, a.title, a.severity`;
+const deliveryPart = (table, kind) => `SELECT ${DELIVERY_COLS(kind)}
+         FROM ${table} d JOIN notification_channels ch ON ch.id = d.channel_id JOIN alerts a ON a.id = d.alert_id
+         WHERE d.tenant_id = $1 AND ($2::text IS NULL OR d.status = $2)`;
+
 router.get('/v1/notifications/deliveries', ...guarded('notify:read'), async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
   const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
   const status = ['pending', 'sent', 'failed', 'skipped'].includes(req.query.status) ? req.query.status : null;
-  try {
-    const r = await db.withTenant(req.tenant_id, async (c) => {
-      const rows = await c.query(
-        `SELECT d.id, d.status, d.attempts, d.last_error, d.sent_at, d.created_at, d.next_attempt_at,
-                ch.name AS channel_name, ch.type AS channel_type, a.id AS alert_id, a.title, a.severity
-         FROM notification_deliveries d
-         JOIN notification_channels ch ON ch.id = d.channel_id JOIN alerts a ON a.id = d.alert_id
-         WHERE d.tenant_id = $1 AND ($2::text IS NULL OR d.status = $2)
-         ORDER BY d.created_at DESC LIMIT ${limit} OFFSET ${offset}`, [req.tenant_id, status]);
-      const total = await c.query('SELECT COUNT(*)::int AS n FROM notification_deliveries WHERE tenant_id = $1 AND ($2::text IS NULL OR status = $2)', [req.tenant_id, status]);
+  const kind = ['alert', 'resolved'].includes(req.query.kind) ? req.query.kind : null;
+  const list = (withResolved) => {
+    const parts = [];
+    if (kind !== 'resolved') parts.push(deliveryPart('notification_deliveries', 'alert'));
+    if (kind !== 'alert' && withResolved) parts.push(deliveryPart('notification_recoveries', 'resolved'));
+    if (!parts.length) return Promise.resolve({ deliveries: [], total: 0 });
+    const union = parts.join(' UNION ALL ');
+    return db.withTenant(req.tenant_id, async (c) => {
+      const rows = await c.query(`SELECT * FROM (${union}) u ORDER BY created_at DESC, id LIMIT ${limit} OFFSET ${offset}`, [req.tenant_id, status]);
+      const total = await c.query(`SELECT COUNT(*)::int AS n FROM (${union}) u`, [req.tenant_id, status]);
       return { deliveries: rows.rows, total: total.rows[0].n };
     });
+  };
+  try {
+    let r;
+    try { r = await list(true); }
+    catch (e) { if (e.code !== '42P01') throw e; r = await list(false); }
     res.status(200).json({ success: true, limit, offset, ...r });
   } catch (e) { notifyError(res, e, 'Failed to list deliveries'); }
 });
@@ -114,9 +128,13 @@ router.get('/v1/notifications/deliveries', ...guarded('notify:read'), async (req
 router.post('/v1/notifications/deliveries/:id/retry', ...guarded('notify:write'), async (req, res) => {
   if (!UUID_RE.test(req.params.id)) return apiError(res, 400, 'INVALID_ID', 'Invalid delivery id');
   try {
-    const r = await db.withTenant(req.tenant_id, (c) => c.query(
-      `UPDATE notification_deliveries SET status='pending', attempts=0, next_attempt_at=localtimestamp, last_error=NULL
+    const retry = (table) => db.withTenant(req.tenant_id, (c) => c.query(
+      `UPDATE ${table} SET status='pending', attempts=0, next_attempt_at=localtimestamp, last_error=NULL
        WHERE id=$1 AND tenant_id=$2 AND status IN ('failed','skipped') RETURNING id`, [req.params.id, req.tenant_id]));
+    let r = await retry('notification_deliveries');
+    if (!r.rows.length) {   // ids are UUIDs, so the id belongs to at most one of the two tables; try the Resolved messages next
+      try { r = await retry('notification_recoveries'); } catch (e) { if (e.code !== '42P01') throw e; }
+    }
     if (!r.rows.length) return apiError(res, 404, 'NOT_FOUND', 'Delivery not found or not retryable');
     res.status(200).json({ success: true });
   } catch (e) { notifyError(res, e, 'Failed to retry delivery'); }

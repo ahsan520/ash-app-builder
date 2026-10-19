@@ -72,11 +72,15 @@ function validateCommon(b, previous = {}) {
   const rf = b.rule_filter === undefined ? previous.rule_filter : b.rule_filter;
   const rule_filter = rf ? str(rf, 100) : null;
   const enabled = b.enabled === undefined ? previous.enabled ?? true : b.enabled === true;
-  return { name, min_severity, rule_filter, enabled };
+  // "Resolved" messages: null = follow the server setting (ASIX_NOTIFY_RECOVERED), true = always, false = never.
+  const nr = b.notify_recovered === undefined ? previous.notify_recovered ?? null : b.notify_recovered;
+  if (nr !== null && typeof nr !== 'boolean') throw bad('notify_recovered must be true, false or null (follow the server setting)');
+  return { name, min_severity, rule_filter, enabled, notify_recovered: nr };
 }
 
 // What the API returns: no secret values, only which ones are set, and a safe target summary.
-function toPublic(row, config) {
+// recoveredOn = the server-wide ASIX_NOTIFY_RECOVERED value, so the answer can say whether this channel gets Resolved messages now.
+function toPublic(row, config, recoveredOn = false) {
   const secrets = SECRET_FIELDS[row.type] || [];
   const cfg = { ...config };
   const set = secrets.filter((s) => cfg[s]);
@@ -89,6 +93,8 @@ function toPublic(row, config) {
     if (row.type === 'webhook') target = `${new URL(config.url).hostname} (${config.format})`;
   } catch { target = '(unreadable)'; }
   return { id: row.id, name: row.name, type: row.type, enabled: row.enabled, min_severity: row.min_severity, rule_filter: row.rule_filter,
+    notify_recovered: row.notify_recovered === true || row.notify_recovered === false ? row.notify_recovered : null,
+    recovered_sending: row.notify_recovered === true || row.notify_recovered === false ? row.notify_recovered : recoveredOn === true,
     created_at: row.created_at, updated_at: row.updated_at, config: cfg, secrets_set: set, target,
     last_delivery_status: row.last_delivery_status || null, last_delivery_at: row.last_delivery_at || null };
 }

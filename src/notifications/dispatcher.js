@@ -71,17 +71,19 @@ async function deliverOne(tenantId, d, deps) {
   }
 }
 
+const warned = new Set();
+function warnOnce(line) { if (!warned.has(line)) { warned.add(line); console.error(`[notify] ${line} (logged once; the schema job runs on deploy)`); } }
+
 async function runTenant(tenantId, deps = {}) {
   const queued = await enqueue(tenantId);
   const due = await claim(tenantId);
   for (let i = 0; i < due.length; i += CONCURRENCY) await Promise.all(due.slice(i, i + CONCURRENCY).map((d) => deliverOne(tenantId, d, deps)));
-  // "Resolved" messages for alerts ASIX closed itself (off until ASIX_NOTIFY_RECOVERED is "true"). Its own try/catch: a problem here
-  // (for example the schema job has not created the table yet) never stops the alert messages above.
+  // "Resolved" messages for alerts ASIX closed itself. Which channels get them is decided inside (a channel's own setting, else
+  // ASIX_NOTIFY_RECOVERED, which is off by default), so this runs every cycle. Its own try/catch: a problem here (for example the
+  // schema job has not created the table or column yet) never stops the alert messages above, and is logged once, not every cycle.
   let resolved = 0;
-  if (recovered.enabled()) {
-    try { const r = await recovered.runTenant(tenantId, deps); resolved = r.queued; }
-    catch (e) { console.error(`[notify] resolved messages for tenant ${tenantId} failed: ${e.message}`); }
-  }
+  try { const r = await recovered.runTenant(tenantId, deps); resolved = r.queued; }
+  catch (e) { warnOnce(`resolved messages failed: ${e.message}`); }
   return { queued, attempted: due.length, resolved };
 }
 

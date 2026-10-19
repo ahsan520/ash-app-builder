@@ -12,7 +12,8 @@
 // carrying a note written by ASIX itself (author_id NULL, author_name 'ASIX', not the "Merged ..." note of the dedupe
 // tool). An alert an analyst closed by hand has no such note, so it sends nothing. Called from the dispatcher cycle.
 //
-// Off until ASIX_NOTIFY_RECOVERED is "true" (k8s/30-asix-api.yaml), so deploying this changes nothing by itself.
+// Off until ASIX_NOTIFY_RECOVERED is "true" (k8s/30-asix-api.yaml), so deploying this changes nothing by itself. A channel can
+// override that: notification_channels.notify_recovered is NULL (follow the variable), true (always) or false (never).
 
 const db = require('../db');
 const box = require('./secret-box');
@@ -25,6 +26,9 @@ const CONCURRENCY = 5;
 
 const enabled = (env = process.env) => String(env.ASIX_NOTIFY_RECOVERED || '').toLowerCase() === 'true';
 
+// Does a channel get Resolved messages? Its own setting wins; with none (NULL) the server-wide variable decides.
+const channelWants = (setting, env = process.env) => (setting === true || setting === false ? setting : enabled(env));
+
 // The message a channel gets. Same shape as an alert message (so every sender keeps working) with kind 'recovered':
 // the title says Resolved, the summary is ASIX's own closing note, and the status is closed.
 function recoveredMessage(alert, note, ctx = {}) {
@@ -35,18 +39,18 @@ function recoveredMessage(alert, note, ctx = {}) {
 
 const ASIX_NOTE = `EXISTS (SELECT 1 FROM alert_notes n WHERE n.alert_id = a.id AND n.author_id IS NULL AND n.author_name = 'ASIX' AND n.body NOT LIKE 'Merged %')`;
 
-async function enqueue(tenantId) {
+async function enqueue(tenantId, env = process.env) {
   return db.withTenant(tenantId, async (client) => (await client.query(
     `INSERT INTO notification_recoveries (tenant_id, channel_id, alert_id)
      SELECT d.tenant_id, d.channel_id, a.id
      FROM alerts a
      JOIN notification_deliveries d ON d.alert_id = a.id AND d.tenant_id = a.tenant_id AND d.status = 'sent'
-     JOIN notification_channels c ON c.id = d.channel_id AND c.enabled
+     JOIN notification_channels c ON c.id = d.channel_id AND c.enabled AND COALESCE(c.notify_recovered, $2::boolean)
      WHERE a.tenant_id = $1 AND a.status = 'closed' AND a.rule_id IS NULL AND a.merged_into_id IS NULL
        AND a.updated_at > localtimestamp - interval '1 day'
        AND ${ASIX_NOTE}
      ON CONFLICT (channel_id, alert_id) DO NOTHING
-     RETURNING id`, [tenantId])).rowCount);
+     RETURNING id`, [tenantId, enabled(env)])).rowCount);
 }
 
 async function claim(tenantId) {
@@ -63,7 +67,7 @@ async function claim(tenantId) {
 
 async function load(tenantId, d) {
   return db.withTenant(tenantId, async (client) => {
-    const ch = (await client.query('SELECT type, enabled, config_enc FROM notification_channels WHERE id = $1', [d.channel_id])).rows[0];
+    const ch = (await client.query('SELECT type, enabled, notify_recovered, config_enc FROM notification_channels WHERE id = $1', [d.channel_id])).rows[0];
     const al = (await client.query('SELECT * FROM alerts WHERE id = $1', [d.alert_id])).rows[0];
     const tn = (await client.query('SELECT name FROM tenants WHERE id = $1', [tenantId])).rows[0];
     const note = (await client.query(
@@ -78,6 +82,8 @@ async function deliverOne(tenantId, d, deps) {
   try {
     const { ch, al, note, tenantName } = await load(tenantId, d);
     if (!ch || !al || !ch.enabled) return finish(tenantId, d.id, "UPDATE notification_recoveries SET status = 'skipped', last_error = $2 WHERE id = $1", [ch ? 'channel disabled' : 'channel or alert removed']);
+    // Switched off after the row was queued (the channel's own setting, or the variable it follows): not sent.
+    if (!channelWants(ch.notify_recovered, deps.env)) return finish(tenantId, d.id, "UPDATE notification_recoveries SET status = 'skipped', last_error = $2 WHERE id = $1", ['resolved messages are off for this channel']);
     const message = recoveredMessage(al, note, { tenantName, baseUrl: process.env.ASIX_PUBLIC_URL });
     await (deps.send || sendToChannel)(ch.type, box.decrypt(ch.config_enc), message, deps.sendDeps);
     return finish(tenantId, d.id, "UPDATE notification_recoveries SET status = 'sent', sent_at = localtimestamp, last_error = NULL WHERE id = $1", []);
@@ -90,10 +96,10 @@ async function deliverOne(tenantId, d, deps) {
 }
 
 async function runTenant(tenantId, deps = {}) {
-  const queued = await enqueue(tenantId);
+  const queued = await enqueue(tenantId, deps.env);
   const due = await claim(tenantId);
   for (let i = 0; i < due.length; i += CONCURRENCY) await Promise.all(due.slice(i, i + CONCURRENCY).map((d) => deliverOne(tenantId, d, deps)));
   return { queued, attempted: due.length };
 }
 
-module.exports = { enabled, recoveredMessage, enqueue, runTenant, MAX_ATTEMPTS };
+module.exports = { enabled, channelWants, recoveredMessage, enqueue, runTenant, MAX_ATTEMPTS };
