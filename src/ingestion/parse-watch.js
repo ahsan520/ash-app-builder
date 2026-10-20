@@ -11,6 +11,12 @@
 // notification channels), and reads the count through the event store, so it works on PostgreSQL and ClickHouse. The only schema is the
 // optional parse_alert_settings table: if it is missing (schema job not yet run) the environment settings are used.
 //
+// The window is measured on WHEN ASIX RECEIVED the event (_insert_time), not on the event's own time stamp: a syslog line carries the sender's local
+// time without a zone, so an event can say it happened hours ago while it was stored a second ago, and a window on that time never sees a burst of
+// failures. XQL cannot filter on _insert_time, so the newest-received events with a parse error are read (the limit, at least 100, at most 5000) and
+// counted in the window here; the query is bounded on event time by the window plus LOOKBACK_EXTRA_H hours, which covers every time zone behind UTC
+// (an event whose own time is further back is not seen). Past the limit the exact count does not matter, so a big burst is reported as "at least".
+// A limit above 5000 cannot be read this way and keeps counting by event time (unparsedCounts), as before.
 // The events themselves are never lost: an unparsed event is stored raw. The alert says how many, why (by reason) and where to look.
 // One alert at a time: it stays while the count stays at or above the limit, closes (with an "ASIX" note) when it drops below, or when the alert is
 // turned off. If an analyst closes it by hand while the count is still above the limit it is not raised again for 60 minutes (COOLDOWN_MIN);
@@ -18,7 +24,9 @@
 
 const db = require('../db');
 const { getEventStore } = require('../events');
-const { unparsedCounts } = require('./parser-status');
+const { unparsedCounts, REASONS } = require('./parser-status');
+const xql = require('../search/xql');
+const { tsMs } = require('../collectors/status');
 const { severity } = require('../collectors/watchdog');
 const parseAlert = require('./parse-alert');
 
@@ -26,6 +34,8 @@ const RULE_NAME = 'Events stored unparsed';
 const GROUP_KEY = 'parser:unparsed';
 const COOLDOWN_MIN = 60;
 const { MAX_EVENTS, MIN_WINDOW, MAX_WINDOW, DEFAULT_WINDOW } = parseAlert.LIMITS;
+const LOOKBACK_EXTRA_H = 12;   // see the note at the top
+const MIN_READ = 100;          // rows read at least, so the reasons in the alert are a fair sample
 
 function config(env = process.env) {
   const n = Number(env.ASIX_PARSE_ALERT_MIN_EVENTS);
@@ -76,10 +86,30 @@ async function tenantConfig(tenantId, env = process.env) {
   return parseAlert.resolve(row, server);
 }
 
+// Unparsed events RECEIVED in the last `cfg.windowMin` minutes: { total, by_reason, at_least }. Newest received first; when every row read is inside the
+// window the real count may be higher (at_least), which only matters for the number shown, since the limit is already reached.
+async function countRecent(store, tenantId, cfg, now = Date.now()) {
+  if (cfg.threshold > xql.MAX_LIMIT) return { ...(await unparsedCounts(store, tenantId, cfg.windowMin / 60, now)), at_least: false };
+  const n = Math.min(Math.max(cfg.threshold, MIN_READ), xql.MAX_LIMIT);
+  const from = new Date(now - (cfg.windowMin * 60000 + LOOKBACK_EXTRA_H * 3600000)).toISOString();
+  const plan = xql.parse(`filter _parse_error != null | fields _insert_time, _parse_error | sort desc _insert_time | limit ${n}`, { from, limit: n });
+  const rows = (await store.search(tenantId, plan)).rows || [];
+  const since = now - cfg.windowMin * 60000;
+  const by = {}; let total = 0;
+  for (const r of rows) {
+    const t = typeof r._insert_time === 'string' && !/Z$|[+-]\d\d:?\d\d$/.test(r._insert_time) ? tsMs(r._insert_time) : Date.parse(r._insert_time);   // "2026-10-19 22:44:27" is UTC, as everywhere in ASIX
+    if (!(t >= since)) continue;
+    const reason = String(r._parse_error ?? 'UNKNOWN');
+    by[reason] = (by[reason] || 0) + 1; total += 1;
+  }
+  for (const k of REASONS) if (!(k in by)) by[k] = 0;
+  return { total, by_reason: by, at_least: rows.length >= n && total === rows.length };
+}
+
 async function runTenant(tenantId, { now = Date.now(), raiseAllowed = true, sev = severity(), cfg, store = getEventStore() } = {}) {
   if (!cfg) cfg = await tenantConfig(tenantId);
   let counts = { total: 0, by_reason: {} };
-  if (cfg.threshold) counts = await unparsedCounts(store, tenantId, cfg.windowMin / 60, now);   // a count that fails throws: the watchdog logs it and tries again next cycle
+  if (cfg.threshold) counts = await countRecent(store, tenantId, cfg, now);   // a count that fails throws: the watchdog logs it and tries again next cycle
   return db.withTenant(tenantId, async (client) => {
     const active = (await client.query(
       "SELECT id FROM alerts WHERE tenant_id = $1 AND rule_name = $2 AND status IN ('open','acknowledged')", [tenantId, RULE_NAME])).rows;
@@ -103,4 +133,4 @@ async function runTenant(tenantId, { now = Date.now(), raiseAllowed = true, sev 
   });
 }
 
-module.exports = { RULE_NAME, GROUP_KEY, COOLDOWN_MIN, config, tenantConfig, plan, raiseText, runTenant };
+module.exports = { RULE_NAME, GROUP_KEY, COOLDOWN_MIN, config, tenantConfig, plan, raiseText, countRecent, runTenant };

@@ -17,6 +17,8 @@ const box = require('../src/notifications/secret-box');
 const MIN = 60000, HOUR = 3600000;
 const ev = (age, parsed) => ({ source_type: 'syslog', collector_id: null, raw: 'line', parsed, received_at: new Date(Date.now() - age).toISOString() });
 const bad = (age, reason) => ev(age, { _parse_error: reason });
+// received `age` ago, but the event's own time says 4 hours earlier (a sender's local time read as UTC): it must still count
+const skewed = (age, reason) => ({ ...bad(age, reason), event_time: new Date(Date.now() - age - 4 * HOUR).toISOString() });
 
 async function main() {
   const stamp = Date.now();
@@ -39,7 +41,7 @@ async function main() {
     assert.deepStrictEqual(await cycle({ cfg: { threshold: 0, windowMin: 15 } }), { raised: 0, closed: 0 });
 
     // the fifth one reaches the limit: start-up grace raises nothing, then exactly one alert with the reasons
-    await store.insertBatch(T, [bad(5 * MIN, 'PARSE_QUARANTINED')]);
+    await store.insertBatch(T, [skewed(5 * MIN, 'PARSE_QUARANTINED')]);
     assert.deepStrictEqual(await cycle({ raiseAllowed: false }), { raised: 0, closed: 0 });
     assert.deepStrictEqual(await cycle(), { raised: 1, closed: 0 });
     let al = await alerts(); assert.strictEqual(al.length, 1);
@@ -56,7 +58,7 @@ async function main() {
     assert.strictEqual((await dispatcher.runTenant(T, { send: async () => { throw new Error('must not send again'); } })).queued, 0);
 
     // more events, acknowledged: still one alert
-    await store.insertBatch(T, [bad(1 * MIN, 'PARSE_TIMEOUT'), bad(1 * MIN, 'PARSE_TIMEOUT')]);
+    await store.insertBatch(T, [skewed(1 * MIN, 'PARSE_TIMEOUT'), skewed(1 * MIN, 'PARSE_TIMEOUT')]);
     await db.query("UPDATE alerts SET status = 'acknowledged' WHERE id = $1", [al[0].id]);
     assert.deepStrictEqual(await cycle(), { raised: 0, closed: 0 });
 

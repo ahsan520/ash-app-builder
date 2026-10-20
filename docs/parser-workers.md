@@ -97,3 +97,22 @@ Those two variables are the **server setting**. Settings, Parser pool also has a
 - The watchdog reads the limit every cycle, so a change applies within about a minute. Lowering the limit below the current count raises the alert on the next cycle; raising it above the count closes an open alert with an "ASIX" note. Nothing else about the alert changes (one at a time, 60 minute cooldown after you close it by hand, severity, channels, Resolved messages).
 - API: `GET /v1/parser/alert` (needs `capacity:read`) and `PUT /v1/parser/alert` (needs `parsing:rules:write`; body `{ "min_events": N, "window_min": M }`, `window_min` optional, or `{ "follow_server": true }`). No role change.
 - Needs the schema job (table `parse_alert_settings`, created on a normal deploy). Until it has run the card says **Not ready** and the server setting decides.
+
+### Checking why the unparsed-events alert did not fire
+The alert counts events by when ASIX **received** them, not by the time written in the log line (a sender in another time zone can write a time hours off). To see what it sees, on the ASIX VM:
+```bash
+k3s kubectl -n asix-platform exec -i deploy/asix-api -- node - <<'EOF'
+const db = require('./src/db');
+const pw = require('./src/ingestion/parse-watch');
+const { getEventStore } = require('./src/events');
+(async () => {
+  for (const t of (await db.query("SELECT id FROM tenants WHERE status = 'active'")).rows) {
+    const cfg = await pw.tenantConfig(t.id);
+    console.log(t.id, 'settings', JSON.stringify(cfg));
+    if (cfg.threshold) console.log(t.id, 'received in window', JSON.stringify(await pw.countRecent(getEventStore(), t.id, cfg)));
+  }
+  process.exit(0);
+})().catch((e) => { console.error('ERROR', e.message); process.exit(1); });
+EOF
+```
+`settings` shows the limit and window in force (the portal value if set, else the server setting; `threshold` 0 means off). `received in window` shows the count the watchdog uses: at or above `threshold` and the alert is raised within a minute (after the 5 minute start-up grace). The count is read-only; this command never raises or closes an alert.

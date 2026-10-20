@@ -62,11 +62,46 @@ describe('raiseText', () => {
   });
 });
 
+describe('countRecent (store replaced)', () => {
+  const NOW = Date.parse('2026-10-19T22:48:45Z');
+  const mk = (rows) => { const asked = []; return { asked, store: { search: async (t, plan) => { asked.push({ t, plan }); return { rows }; } } }; };
+  const row = (minAgo, reason, fmt = 'pg') => { const d = new Date(NOW - minAgo * 60000); return { _insert_time: fmt === 'pg' ? d.toISOString().slice(0, 19).replace('T', ' ') : d.toISOString(), _parse_error: reason }; };
+
+  it('counts what was RECEIVED in the window, whatever time the events say, in both time formats', async () => {
+    const { store, asked } = mk([row(1, 'PARSE_TIMEOUT'), row(5, 'PARSE_TIMEOUT', 'iso'), row(14, 'PARSE_FAILED'), row(16, 'PARSE_TIMEOUT'), row(300, 'PARSE_TIMEOUT')]);
+    const c = await pw.countRecent(store, 't1', cfg, NOW);
+    assert.strictEqual(c.total, 3); assert.deepStrictEqual(c.by_reason, { PARSE_TIMEOUT: 2, PARSE_FAILED: 1, PARSE_WORKER_CRASH: 0, PARSE_QUARANTINED: 0 }); assert.strictEqual(c.at_least, false);
+    // the query: newest received first, bounded on event time by the window plus 12 hours (every zone behind UTC), no time filter in the text
+    const plan = asked[0].plan;
+    assert.strictEqual(plan.from, new Date(NOW - 15 * 60000 - 12 * 3600000).toISOString());
+    assert.deepStrictEqual(plan.stages.map((x) => x.op), ['filter', 'fields', 'sort', 'limit']); assert.strictEqual(plan.limit, 100);
+  });
+  it('reads at most the limit (at least 100, at most 5000) and says "at least" when every row read is inside the window', async () => {
+    const rows = Array.from({ length: 100 }, (_, i) => row(i % 10, 'PARSE_TIMEOUT'));
+    const { store, asked } = mk(rows);
+    const c = await pw.countRecent(store, 't1', { threshold: 5, windowMin: 15 }, NOW);
+    assert.strictEqual(c.total, 100); assert.strictEqual(c.at_least, true);
+    assert.strictEqual(asked[0].plan.limit, 100);
+    await pw.countRecent(mk([]).store, 't1', { threshold: 3000, windowMin: 15 }, NOW);
+    const m = mk([]); await pw.countRecent(m.store, 't1', { threshold: 3000, windowMin: 15 }, NOW); assert.strictEqual(m.asked[0].plan.limit, 3000);
+  });
+  it('a limit above 5000 cannot be read newest-first, so it counts by event time as before', async () => {
+    const m = mk([{ _parse_error: 'PARSE_TIMEOUT', n: 7000 }]);
+    const c = await pw.countRecent(m.store, 't1', { threshold: 6000, windowMin: 15 }, NOW);
+    assert.strictEqual(c.total, 7000); assert.strictEqual(c.at_least, false); assert.strictEqual(m.asked[0].plan.stages.some((x) => x.op === 'comp'), true);
+  });
+  it('an empty answer is zero with every known reason listed', async () => {
+    const c = await pw.countRecent(mk([]).store, 't1', cfg, NOW);
+    assert.deepStrictEqual(c, { total: 0, by_reason: { PARSE_TIMEOUT: 0, PARSE_WORKER_CRASH: 0, PARSE_FAILED: 0, PARSE_QUARANTINED: 0 }, at_least: false });
+  });
+});
+
 describe('runTenant (database and store replaced)', () => {
   const dbPath = require.resolve('../src/db');
   const saved = require.cache[dbPath].exports;
   let calls, rows, asked;
-  const store = { search: async (t, plan) => { asked.push({ t, plan }); return { rows: [{ _parse_error: 'PARSE_TIMEOUT', n: 12 }] }; } };
+  const NOW = Date.parse('2026-10-19T12:00:00Z');
+  const store = { search: async (t, plan) => { asked.push({ t, plan }); return { rows: Array.from({ length: 12 }, (_, i) => ({ _insert_time: new Date(NOW - (i + 1) * 30000).toISOString(), _parse_error: 'PARSE_TIMEOUT' })) }; } };
   before(() => {
     require.cache[dbPath].exports = { ...saved, withTenant: async (t, fn) => fn({ query: async (sql, args) => {
       calls.push({ sql, args });
@@ -80,7 +115,7 @@ describe('runTenant (database and store replaced)', () => {
 
   it('counts in the window through the store, then raises', async () => {
     calls = []; asked = []; rows = { active: [], latest: [] };
-    const r = await require('../src/ingestion/parse-watch').runTenant('t1', { cfg, store, sev: 'high', now: Date.parse('2026-10-19T12:00:00Z') });
+    const r = await require('../src/ingestion/parse-watch').runTenant('t1', { cfg, store, sev: 'high', now: NOW });
     assert.deepStrictEqual(r, { raised: 1, closed: 0 });
     assert.strictEqual(asked.length, 1); assert.strictEqual(asked[0].t, 't1');
     const ins = calls.find((c) => /INSERT INTO alerts/.test(c.sql));
