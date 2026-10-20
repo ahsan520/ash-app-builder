@@ -6,7 +6,11 @@
 #   ./scripts/deploy/bootstrap-broker.sh --url https://asix1:30443/v1/ingest/http --key asix_ik_... \
 #       --name broker-1 [--port 514] [--ca /path/to/cert.pem] [--no-install]
 #       [--tls-cert server.crt --tls-key server.key [--tls-port 6514] [--tls-client-ca ca.pem]] [--accept-config [--config-pubkey config-signing.pub]]
+#       [--timezone America/Toronto]
 #
+# --timezone       The time zone (IANA name, default UTC) that senders write in on syslog lines that carry none (RFC 3164). Vector reads those as
+#                  UTC, so a sender in another zone shows hours off in search and detections. Written as ASIX_SYSLOG_TIMEZONE. Like every option here it
+#                  is only kept if given again on a re-run. RFC 5424 lines carry their own offset and are not touched.
 # --no-install     Vector is already installed (offline or pinned install); skip the package repo.
 # --tls-cert/key   Also accept syslog over TLS (RFC 5425) on --tls-port (default 6514), with this server certificate.
 #                  Both are needed together. Re-running without them turns the TLS listener off again.
@@ -21,7 +25,7 @@
 
 set -euo pipefail
 
-URL=""; KEY=""; NAME=""; PORT="514"; CA=""; INSTALL=1; TLS_CERT=""; TLS_KEY=""; TLS_PORT="6514"; TLS_CLIENT_CA=""; ACCEPT_CONFIG=0; CONFIG_PUBKEY=""
+URL=""; KEY=""; NAME=""; PORT="514"; CA=""; INSTALL=1; TLS_CERT=""; TLS_KEY=""; TLS_PORT="6514"; TLS_CLIENT_CA=""; ACCEPT_CONFIG=0; CONFIG_PUBKEY=""; TIMEZONE="UTC"
 while [ $# -gt 0 ]; do
   case "$1" in
     --url) URL="$2"; shift 2;;
@@ -36,6 +40,7 @@ while [ $# -gt 0 ]; do
     --tls-client-ca) TLS_CLIENT_CA="$2"; shift 2;;
     --accept-config) ACCEPT_CONFIG=1; shift;;
     --config-pubkey) CONFIG_PUBKEY="$2"; shift 2;;
+    --timezone) TIMEZONE="$2"; shift 2;;
     *) echo "Unknown option: $1" >&2; exit 2;;
   esac
 done
@@ -46,6 +51,8 @@ done
 [[ "$PORT" =~ ^[0-9]{1,5}$ ]] || { echo "Port must be a number." >&2; exit 2; }
 
 [[ "$TLS_PORT" =~ ^[0-9]{1,5}$ ]] || { echo "--tls-port must be a number." >&2; exit 2; }
+[[ "$TIMEZONE" =~ ^[A-Za-z0-9_+./-]{1,64}$ && "$TIMEZONE" != *..* ]] || { echo "--timezone must be an IANA zone name such as America/Toronto (or UTC)." >&2; exit 2; }
+[ "$TIMEZONE" = "UTC" ] || [ ! -d /usr/share/zoneinfo ] || [ -f "/usr/share/zoneinfo/$TIMEZONE" ] || { echo "--timezone: $TIMEZONE is not a time zone on this machine (see: timedatectl list-timezones)." >&2; exit 2; }
 if [ -n "$TLS_CERT$TLS_KEY$TLS_CLIENT_CA" ]; then
   [ -n "$TLS_CERT" ] && [ -n "$TLS_KEY" ] || { echo "--tls-cert and --tls-key are needed together (also with --tls-client-ca)." >&2; exit 2; }
   [ -r "$TLS_CERT" ] || { echo "Cannot read $TLS_CERT" >&2; exit 2; }
@@ -100,6 +107,7 @@ fi
   echo "ASIX_INGEST_KEY=$KEY"
   echo "ASIX_BROKER_NAME=$NAME"
   echo "ASIX_SYSLOG_PORT=$PORT"
+  [ "$TIMEZONE" = "UTC" ] || echo "ASIX_SYSLOG_TIMEZONE=$TIMEZONE"
   # Vector 0.59 and newer leave ${VAR} in the config as plain text unless this is set (older versions ignore it and always substitute).
   # The substituted values are this file's own settings, readable only by root and the vector user.
   echo "VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION=true"

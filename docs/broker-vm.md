@@ -115,10 +115,84 @@ Plain syslog is readable and forgeable by anyone on the path. For sources that c
   tried:** on a real broker VM under systemd, and with real devices (rsyslog, syslog-ng, network gear). Vector is still not in CI.
 - Not covered: the in-cluster Node collector (`src/ingestion/syslog-server.js`) has no TLS listener; use a broker VM for TLS sources.
 
+## Broker setup commands (cheat sheet)
+Everything needed to set up or update a broker that takes syslog over TLS and requires signed config, in the order it is used. Details for each step are in the sections named. Replace `asix1`, `broker-1` and the paths with yours.
+
+**1. Make the ASIX CA file, `asix-ca.pem` (once, on the ASIX VM, then copy it to the broker).** The broker trusts ASIX's self-signed nginx certificate, so the "CA" is that certificate:
+```bash
+# on the ASIX VM (asix1): the public copy that make-nginx-tls.sh already saved ...
+sudo cp /root/asix-nginx-tls.crt /root/asix-ca.pem
+# ... or fetch it from the running nginx
+echo | openssl s_client -connect asix1:30443 2>/dev/null | openssl x509 > /root/asix-ca.pem
+scp /root/asix-ca.pem ash@192.168.68.54:/tmp/asix-ca.pem        # to the broker
+```
+Re-making the nginx certificate (`ASIX_TLS_REGENERATE=1 scripts/deploy/make-nginx-tls.sh`) means a new `asix-ca.pem` on every broker.
+
+**2. Make the signing key pair, and copy `config-signing.pub` to the broker (once).** Only the public file goes to the broker; keep a copy of `config-signing.key` somewhere safe (see "Signed config"):
+```bash
+# on the ASIX VM
+sudo scripts/deploy/make-config-signing-key.sh --dir /root/asix-config-signing --apply
+scp /root/asix-config-signing/config-signing.pub ash@192.168.68.54:/tmp/config-signing.pub   # to the broker
+```
+The Brokers page, Syslog port card, **Copy public key** gives the same text. On the broker keep a copy outside `/etc/asix-broker/` (for example `/root/config-signing.pub`): the bootstrap installs it as `/etc/asix-broker/config-signing.pub` and cannot copy a file onto itself.
+
+**3. Make the broker's own TLS certificate (once, on the broker).** The certificate is the broker's own; devices must trust it and its name or IP must match what they connect to. `-addext` adds the broker's address, which newer TLS clients require:
+```bash
+sudo openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj "/CN=broker-1" \
+  -addext "subjectAltName=DNS:broker-1,IP:192.168.68.54" \
+  -keyout /root/tls.key -out /root/tls.crt
+sudo chmod 600 /root/tls.key
+sudo mv /tmp/asix-ca.pem /root/asix-ca.pem; sudo mv /tmp/config-signing.pub /root/config-signing.pub   # the files from steps 1 and 2
+```
+Certificates are not renewed for you: after 365 days make a new one and re-run step 4.
+
+**4. Download the repo and set the broker up (or update it after an ASIX deploy).** The bootstrap rewrites `broker.env` from the flags you give it, so every option the broker uses must be passed again: the port and the TLS port (read back from `broker.env`, so a port set from the Brokers page is not reset), the CA, the TLS files, the signing key and the time zone (`--timezone`, see "Syslog times from senders in another time zone").
+```bash
+cd /home/ash/ash-app-builder
+git pull && find . -name '*.sh' -not -path './node_modules/*' -exec chmod +x {} +
+
+. /etc/asix-broker/broker.env
+sudo ./scripts/deploy/bootstrap-broker.sh \
+  --url "$ASIX_INGEST_URL" --key "$ASIX_INGEST_KEY" --name "$ASIX_BROKER_NAME" \
+  --port "${ASIX_SYSLOG_PORT:-514}" --ca /root/asix-ca.pem \
+  --no-install --accept-config --config-pubkey /root/config-signing.pub \
+  --tls-cert /root/tls.crt --tls-key /root/tls.key --tls-port "${ASIX_SYSLOG_TLS_PORT:-6514}" \\
+  --timezone "${ASIX_SYSLOG_TIMEZONE:-UTC}"
+```
+`--no-install` because Vector is already there (leave it out on a new VM; on a new VM `broker.env` does not exist yet, so give `--url`, `--key`, `--name`, `--port` by hand as in "Install"). If the CA was kept from the first install, `cp /etc/asix-broker/ca.pem /root/asix-ca.pem` instead of step 1. It validates the Vector config before restarting and ends with the key id it now trusts: compare it with the one on the Brokers page.
+
+**5. Check the ports on the broker:**
+```bash
+ss -tln | grep 6514          # the TLS port in use (6514 by default; the Brokers page shows the one in use)
+ss -lunt | grep -E ':514|:1514'   # the syslog port, UDP and TCP
+```
+Open the same ports (TCP, and UDP for the plain syslog port) on the VM's firewall. See "Syslog over TLS" for a test line over TLS.
+
+**6. The clock.** A signed answer is refused when it is more than 10 minutes from the broker's own clock (`ASIX_CONFIG_MAX_SKEW_S`, default 600), which the Brokers page shows as **Refused: clock skew**. A VirtualBox VM often drifts after the Mac sleeps or the VM is paused. On the broker:
+```bash
+sudo chronyc makestep                       # step the clock now
+date -u                                     # compare with another machine
+chronyc tracking                            # "System time ... seconds slow/fast of NTP time" should be tiny
+timedatectl status                          # "System clock synchronized: yes"
+```
+Then retry the signed update without waiting for the timer:
+```bash
+sudo systemctl start asix-broker-config.service
+sudo journalctl -u asix-broker-config -n 15 --no-pager -o cat
+```
+The page should move to **Checks** within a pull. **Do the same on the ASIX VM**, because it stamps every answer and a wrong clock there refuses every broker:
+```bash
+date -u
+chronyc tracking
+chronyc sources -v                          # at least one source marked ^* (selected) or ^+
+```
+If chrony keeps drifting, make it step big errors by itself (add `makestep 1 -1` to `/etc/chrony/chrony.conf` and restart chrony, see "Upgrading Vector"). Prefer fixing the clock to raising `ASIX_CONFIG_MAX_SKEW_S`, which weakens the protection against a replayed answer.
+
 ## Files
 | File | Purpose |
 |---|---|
 | `deploy/broker/vector.yaml` | Vector config: syslog sources, line rewrite, HTTP sink with disk buffer |
+| `deploy/broker/vector-tests-timezone.yaml` | Vector unit tests for `ASIX_SYSLOG_TIMEZONE`: run with the zone set, see "Syslog times from senders in another time zone" |
 | `deploy/broker/vector-tests.yaml` | Vector unit tests for the line format: `vector test deploy/broker/vector.yaml deploy/broker/vector-tests.yaml` |
 | `deploy/broker/vector-tls.yaml` | Optional second Vector config: the syslog-over-TLS source (installed only with `--tls-cert`) |
 | `deploy/broker/broker.env.example` | Settings (`/etc/asix-broker/broker.env` on the VM, mode 640) |
@@ -331,6 +405,32 @@ When ASIX signs its config answers (see "Signed config"), a watched broker that 
 | Checks (`ok`), waiting, never reported, or a refusal report older than 15 minutes | No | Nothing; a broker that stopped reporting is the disconnect alert's job |
 
 Nothing is raised while ASIX does not sign, and an open alert closes (with an "ASIX" note) when it stops. It closes by itself when the broker checks again. If you close it while the same problem is still there it is not raised again for that problem. It is the broker describing itself: an old or edited script can say anything.
+
+## Syslog times from senders in another time zone (done 2026-10-20)
+
+**The problem.** A classic (RFC 3164) syslog line looks like `Oct 19 18:44:27 laptop sshd[9]: ...` and carries **no time zone**. Vector reads that clock as UTC, whatever zone the broker VM or the sender is in (Vector's own `timezone` setting does not apply to the syslog source; checked on Vector 0.59.0). A sender in Toronto (UTC-4 in summer) therefore shows up four hours early: events stored a second ago say they happened hours ago, search and the time picker look wrong, and a detection rule that looks at "the last 15 minutes by event time" never sees them. RFC 5424 lines carry their own offset and are right. Found on broker-1 2026-10-20: 26 events received minutes earlier were 4 hours old by their own time.
+
+**The fix.** Tell the broker which zone its RFC 3164 senders write in:
+```bash
+# on the broker, as part of the usual bootstrap command (see "Broker setup commands", step 4)
+sudo ./scripts/deploy/bootstrap-broker.sh ... --timezone America/Toronto
+# or by hand: add this line to /etc/asix-broker/broker.env and restart Vector
+ASIX_SYSLOG_TIMEZONE=America/Toronto
+sudo systemctl restart vector
+```
+The same wall-clock time is then read in that zone (summer and winter time are handled: 18:44:27 in Toronto is 22:44:27Z in October and 23:44:27Z in January). Unset, empty or `UTC` changes nothing. `bootstrap-broker.sh` checks the name against `/usr/share/zoneinfo` and, like every option, keeps it only if you give it again on a re-run (the config pull from ASIX edits only the port lines of `broker.env`, so it keeps it).
+
+**Check it worked.** Send a line and look at its time in Log search:
+```bash
+logger -n 192.168.68.54 -P 1514 -T "asix time test"
+```
+The event time should be the sender's real time converted to UTC, close to the received time (`filter _raw contains "asix time test" | fields _time, _insert_time`).
+
+**Limits, stated plainly.**
+- **One zone per broker** for RFC 3164 lines. Senders in several zones behind one broker cannot all be right: put the ones in another zone behind another broker, or set those devices to send RFC 5424 or to use UTC.
+- **Events already stored keep the time they were stored with.** Nothing rewrites them.
+- A name Vector cannot use, or a local time that does not exist (the hour clocks skip in spring), keeps the UTC reading for that line; the broker still runs.
+- Checked on real Vector 0.59.0: `vector test` on both test files, `vector validate`, and a real syslog UDP packet through the real source and HTTP sink (RFC 3164 `Oct 19 18:44:27` came out `18:44:27Z` before and `22:44:27Z` with `America/Toronto`; the RFC 5424 line was `22:44:27Z` in both). **Not yet applied on broker-1.**
 
 ## Getting an alert when a broker goes quiet
 A broker that stops (Vector down, VM off, network cut) shows as Disconnected on the Collectors and Brokers pages, but nothing tells you unless you look. On the

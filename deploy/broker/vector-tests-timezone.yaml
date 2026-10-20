@@ -1,0 +1,67 @@
+# Run with the zone set (the config reads it from the environment):
+#   VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION=true ASIX_SYSLOG_TIMEZONE=America/Toronto ASIX_SYSLOG_PORT=5514 \
+#     ASIX_INGEST_URL=http://x ASIX_INGEST_KEY=k ASIX_BROKER_NAME=b vector test deploy/broker/vector.yaml deploy/broker/vector-tests-timezone.yaml
+# (Any values will do for the ASIX_INGEST_* ones: the config needs them to load.) vector-tests.yaml, run without ASIX_SYSLOG_TIMEZONE, checks that nothing changes by default.
+tests:
+  - name: rfc3164 line (no version) is read in the broker's zone, summer time
+    inputs:
+      - insert_at: to_asix_line
+        type: log
+        log_fields:
+          timestamp: "2026-10-19T18:44:27Z"
+          hostname: laptop
+          appname: sshd
+          procid: "9"
+          message: "Failed password for root"
+    outputs:
+      - extract_from: to_asix_line
+        conditions:
+          - type: vrl
+            source: |
+              .message == "2026-10-19T22:44:27+00:00 laptop sshd[9]: Failed password for root"
+
+  - name: rfc3164 line is read in the broker's zone, winter time (one hour different)
+    inputs:
+      - insert_at: to_asix_line
+        type: log
+        log_fields:
+          timestamp: "2026-01-15T18:44:27Z"
+          hostname: laptop
+          appname: sshd
+          message: "x"
+    outputs:
+      - extract_from: to_asix_line
+        conditions:
+          - type: vrl
+            source: |
+              .message == "2026-01-15T23:44:27+00:00 laptop sshd: x"
+
+  - name: rfc5424 line (has a version and its own offset) is not touched
+    inputs:
+      - insert_at: to_asix_line
+        type: log
+        log_fields:
+          timestamp: "2026-10-19T22:44:27Z"
+          version: 1
+          hostname: laptop
+          appname: sshd
+          message: "x"
+    outputs:
+      - extract_from: to_asix_line
+        conditions:
+          - type: vrl
+            source: |
+              .message == "2026-10-19T22:44:27+00:00 laptop sshd: x"
+
+  - name: a line with no time at all keeps the time it arrived
+    inputs:
+      - insert_at: to_asix_line
+        type: log
+        log_fields:
+          message: "hello"
+    outputs:
+      - extract_from: to_asix_line
+        conditions:
+          - type: vrl
+            source: |
+              match(string!(.message), r'^\d{4}-\d{2}-\d{2}T\S+ unknown-host syslog: hello$')

@@ -33,6 +33,19 @@ transforms:
     source: |
       # The syslog source gives a timestamp; a string is also accepted so the tests can set one.
       t = timestamp(.timestamp) ?? parse_timestamp(.timestamp, format: "%+") ?? now()
+
+      # An RFC 3164 line ("Oct 19 18:44:27 host app: msg") carries no time zone, and Vector reads its clock as UTC whatever its own
+      # `timezone` setting says. A sender in another zone then looks hours early (or late). ASIX_SYSLOG_TIMEZONE (an IANA name such as
+      # America/Toronto, in broker.env) says which zone those senders write in; the same wall-clock time is read in that zone instead.
+      # RFC 5424 lines carry their own offset (they have .version) and are left alone. Unset means UTC: nothing changes.
+      # A name Vector cannot use, or a local time that does not exist (the hour clocks skip in spring), keeps the UTC reading.
+      if !exists(.version) && exists(.timestamp) {
+        tz = "${ASIX_SYSLOG_TIMEZONE:-UTC}"
+        if tz != "UTC" {
+          wall = format_timestamp(t, format: "%Y-%m-%dT%H:%M:%S") ?? ""
+          t = parse_timestamp(wall, format: "%Y-%m-%dT%H:%M:%S", timezone: tz) ?? t
+        }
+      }
       ts, err = format_timestamp(t, format: "%+")
       if err != null { ts = format_timestamp!(now(), format: "%+") }
 
