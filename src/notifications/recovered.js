@@ -10,7 +10,9 @@
 //
 // Which alerts count: closed, no detection rule behind them (watchdog alerts only), not merged into another alert, and
 // carrying a note written by ASIX itself (author_id NULL, author_name 'ASIX', not the "Merged ..." note of the dedupe
-// tool). An alert an analyst closed by hand has no such note, so it sends nothing. Called from the dispatcher cycle.
+// tool). An alert an analyst closed by hand has no such note, so it sends nothing - unless ASIX_NOTIFY_RECOVERED_MANUAL is
+// "true", which also counts a watchdog alert that a person closed within the last hour (see manualEnabled). Called from the
+// dispatcher cycle.
 //
 // Off until ASIX_NOTIFY_RECOVERED is "true" (k8s/30-asix-api.yaml), so deploying this changes nothing by itself. A channel can
 // override that: notification_channels.notify_recovered is NULL (follow the variable), true (always) or false (never); a channel
@@ -26,6 +28,16 @@ const BATCH = 50;
 const CONCURRENCY = 5;
 
 const enabled = (env = process.env) => String(env.ASIX_NOTIFY_RECOVERED || '').toLowerCase() === 'true';
+
+// Off by default: an alert a person closes sends nothing. With ASIX_NOTIFY_RECOVERED_MANUAL = "true", a watchdog alert that a
+// person closed (no ASIX note on it) also gets the Resolved message, so a channel that was told "broker-1 is down" hears that
+// someone dealt with it and a PagerDuty incident closes. It only widens WHICH alerts count; a channel still has to want
+// Resolved messages (channelWants) and to have been sent the original alert.
+const manualEnabled = (env = process.env) => String(env.ASIX_NOTIFY_RECOVERED_MANUAL || '').toLowerCase() === 'true';
+
+// A person's close is only announced shortly after it happens, so switching the setting on does not send a day of old closes.
+const MANUAL_WINDOW = '1 hour';
+const HAND_NOTE = 'An analyst closed this alert in ASIX.';
 
 // Does a channel get Resolved messages? Its own setting wins; with none (NULL) the server-wide variable decides.
 const channelWants = (setting, env = process.env) => (setting === true || setting === false ? setting : enabled(env));
@@ -50,9 +62,9 @@ async function enqueue(tenantId, env = process.env) {
        AND (c.notify_recovered_at IS NULL OR a.updated_at >= c.notify_recovered_at)   -- a channel switched on later hears only about alerts closed after that
      WHERE a.tenant_id = $1 AND a.status = 'closed' AND a.rule_id IS NULL AND a.merged_into_id IS NULL
        AND a.updated_at > localtimestamp - interval '1 day'
-       AND ${ASIX_NOTE}
+       AND (${ASIX_NOTE} OR ($3::boolean AND a.updated_at > localtimestamp - interval '${MANUAL_WINDOW}'))   -- closed by a person: only when switched on, and only if recent
      ON CONFLICT (channel_id, alert_id) DO NOTHING
-     RETURNING id`, [tenantId, enabled(env)])).rowCount);
+     RETURNING id`, [tenantId, enabled(env), manualEnabled(env)])).rowCount);
 }
 
 async function claim(tenantId) {
@@ -86,7 +98,9 @@ async function deliverOne(tenantId, d, deps) {
     if (!ch || !al || !ch.enabled) return finish(tenantId, d.id, "UPDATE notification_recoveries SET status = 'skipped', last_error = $2 WHERE id = $1", [ch ? 'channel disabled' : 'channel or alert removed']);
     // Switched off after the row was queued (the channel's own setting, or the variable it follows): not sent.
     if (!channelWants(ch.notify_recovered, deps.env)) return finish(tenantId, d.id, "UPDATE notification_recoveries SET status = 'skipped', last_error = $2 WHERE id = $1", ['resolved messages are off for this channel']);
-    const message = recoveredMessage(al, note, { tenantName, baseUrl: process.env.ASIX_PUBLIC_URL });
+    // No ASIX note means a person closed it; if that is switched off now (it was on when the row was queued), do not send.
+    if (!note && !manualEnabled(deps.env)) return finish(tenantId, d.id, "UPDATE notification_recoveries SET status = 'skipped', last_error = $2 WHERE id = $1", ['resolved messages for alerts closed by a person are off']);
+    const message = recoveredMessage(al, note || HAND_NOTE, { tenantName, baseUrl: process.env.ASIX_PUBLIC_URL });
     await (deps.send || sendToChannel)(ch.type, box.decrypt(ch.config_enc), message, deps.sendDeps);
     return finish(tenantId, d.id, "UPDATE notification_recoveries SET status = 'sent', sent_at = localtimestamp, last_error = NULL WHERE id = $1", []);
   } catch (err) {
@@ -104,4 +118,4 @@ async function runTenant(tenantId, deps = {}) {
   return { queued, attempted: due.length };
 }
 
-module.exports = { enabled, channelWants, recoveredMessage, enqueue, runTenant, MAX_ATTEMPTS };
+module.exports = { enabled, manualEnabled, channelWants, recoveredMessage, enqueue, runTenant, MAX_ATTEMPTS, HAND_NOTE };

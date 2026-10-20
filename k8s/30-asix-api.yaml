@@ -90,9 +90,15 @@ spec:
               value: "15"
             # "Resolved" messages (src/notifications/recovered.js): "true" sends one short message to the channels that were sent an alert
             # when ASIX itself closes that alert because the problem went away (PagerDuty channels get a resolve). Alerts an analyst closes
-            # by hand send nothing. "false" = off (the previous behaviour). This is the default for every channel; a channel can override
+            # by hand send nothing unless ASIX_NOTIFY_RECOVERED_MANUAL below is "true". "false" = off (the previous behaviour). This is the default for every channel; a channel can override
             # it in the portal (Settings, Notification channels, Edit, "Resolved messages": always send / never send).
             - name: ASIX_NOTIFY_RECOVERED
+              value: "false"
+            # "true" also sends the Resolved message when a PERSON closes a watchdog alert (Alerts page, status Closed, or bulk close), so the
+            # channels that were told about it hear it was dealt with and a PagerDuty incident resolves. Only closes from the last hour count,
+            # so switching it on does not send old ones. Needs Resolved messages to be on for the channel (the variable above or the channel's
+            # own setting). Alerts from detection rules and alerts merged into another one never send. "false" = off (the previous behaviour).
+            - name: ASIX_NOTIFY_RECOVERED_MANUAL
               value: "false"
             # Event store (src/events): "postgres" (default) or "clickhouse". Switching does NOT copy existing events: run
             # src/events/copy-events.js first (docs/clickhouse-server.md, "Switching the API to ClickHouse"). The nightly backup
