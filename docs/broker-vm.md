@@ -430,14 +430,13 @@ The event time should be the sender's real time converted to UTC, close to the r
 - **One zone per broker** for RFC 3164 lines. Senders in several zones behind one broker cannot all be right: put the ones in another zone behind another broker, or set those devices to send RFC 5424 or to use UTC.
 - **Events already stored keep the time they were stored with.** Nothing rewrites them.
 - A name Vector cannot use, or a local time that does not exist (the hour clocks skip in spring), keeps the UTC reading for that line; the broker still runs.
-- Checked on real Vector 0.59.0: `vector test` on both test files, `vector validate`, and a real syslog UDP packet through the real source and HTTP sink (RFC 3164 `Oct 19 18:44:27` came out `18:44:27Z` before and `22:44:27Z` with `America/Toronto`; the RFC 5424 line was `22:44:27Z` in both). **Not yet applied on broker-1.**
+- Checked on real Vector 0.59.0: `vector test` on both test files, `vector validate`, and a real syslog UDP packet through the real source and HTTP sink (RFC 3164 `Oct 19 18:44:27` came out `18:44:27Z` before and `22:44:27Z` with `America/Toronto`; the RFC 5424 line was `22:44:27Z` in both). Applied on broker-1 on 2026-10-20 (bootstrap re-run with `--timezone America/Toronto`, config validated, services restarted); the event-time check above passed the same day (a test line sent to broker-1 showed an event time 5 seconds before its received time, instead of about 4 hours early).
 
 ## Getting an alert when a broker goes quiet
 A broker that stops (Vector down, VM off, network cut) shows as Disconnected on the Collectors and Brokers pages, but nothing tells you unless you look. On the
 Collectors page, press **Alert if down** on the broker's row: ASIX then raises a `Collector disconnected: <broker name>` alert (severity high) once the broker has
-The Brokers page's **Alert if down** column shows the same state: **On** (this broker's own button), **On (all)** (covered by **Watch everything**), **Left out** or **Off**.
 been silent longer than its connected threshold, and closes it when the broker's heartbeat returns. Add a notification channel (Settings, Notifications) to be told
-by email, Slack or webhook. It is off until you press the button; a slow or rarely used broker should get a longer threshold first (**Threshold** button). Details:
+by email, Slack or webhook. It is off until you press the button; a slow or rarely used broker should get a longer threshold first (**Threshold** button). The Brokers page's **Alert if down** column shows the same state: **On** (this broker's own button), **On (all)** (covered by **Watch everything**), **Left out** or **Off**. Details:
 `docs/product-plan.md`, "Collector disconnect alerts".
 
 ## Replacing a broker's key
