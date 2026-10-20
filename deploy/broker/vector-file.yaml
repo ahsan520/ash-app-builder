@@ -1,0 +1,82 @@
+# Optional third config file: the broker also reads log FILES on this VM (application logs, files another tool drops here) and
+# sends each new line to ASIX with source type "file". bootstrap-broker.sh installs it only when run with --file-glob, and then
+# starts Vector with
+#   VECTOR_CONFIG=/etc/vector/vector.yaml,/etc/vector/vector-file.yaml        (set in broker.env; the TLS and HTTP files join the same list)
+#
+# One glob, ASIX_FILE_GLOB (for example /var/log/myapp/*.log). The vector user must be able to read the files (group or ACL).
+# Where it stops and starts again Vector carries on from where it was (offsets are kept in /var/lib/vector). On the first start
+# files that already exist are read from their END, so turning this on does not send years of old lines; a file that appears later
+# is read from its start. Lines longer than 8 KB are cut.
+#
+# Each line becomes "ISO-time host app: line", the shape the ASIX HTTP lane already parses (host, app name, event time), so nothing
+# changes on the server. The time is the one at the start of the line when it is an ISO 8601 time WITH a zone (2026-10-20T14:03:11Z or
+# +00:00), otherwise the moment the broker read the line. The app name is the file's name. Own parsing rules (Settings, Parsing) can be
+# attached to the source type "file".
+#
+# Test without a network:   vector validate --no-environment deploy/broker/vector.yaml deploy/broker/vector-file.yaml
+sources:
+  file_in:
+    type: file
+    include:
+      - "${ASIX_FILE_GLOB}"
+    read_from: end
+    max_line_bytes: 8192
+    ignore_older_secs: 604800
+
+transforms:
+  file_to_line:
+    type: remap
+    inputs: [file_in]
+    source: |
+      msg = string(.message) ?? ""
+      msg = replace(msg, r'[\r\n]+', " ")
+
+      # An explicit-zone ISO time at the start of the line is the event time; anything else is the time it was read.
+      t = now()
+      lead = parse_regex(msg, r'^(?P<t>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))\s') ?? null
+      if lead != null {
+        t = parse_timestamp(lead.t, format: "%+") ?? t
+      }
+      ts, err = format_timestamp(t, format: "%+")
+      if err != null { ts = format_timestamp!(now(), format: "%+") }
+
+      host = string(.host) ?? "unknown-host"
+      host = replace(host, r'\s+', "_")
+      app = replace(string(.file) ?? "file", r'^.*/', "")
+      app = replace(app, r'[\s:\[\]]+', "_")
+      if app == "" { app = "file" }
+
+      .message = ts + " " + host + " " + app + ": " + msg
+
+sinks:
+  asix_file:
+    type: http
+    inputs: [file_to_line]
+    uri: ${ASIX_INGEST_URL}
+    method: post
+    encoding:
+      codec: text
+    framing:
+      method: newline_delimited
+    request:
+      headers:
+        Authorization: "Bearer ${ASIX_INGEST_KEY}"
+        Content-Type: text/plain
+        X-ASIX-Collector: ${ASIX_BROKER_NAME}
+        X-ASIX-Platform: linux
+        X-ASIX-Source-Type: file
+        X-ASIX-Version: vector-broker
+      retry_attempts: 100000
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 60
+      timeout_secs: 30
+    batch:
+      max_events: 500
+      max_bytes: 900000
+      timeout_secs: 5
+    buffer:
+      type: disk
+      max_size: 536870912
+      when_full: block
+    tls:
+      ca_file: ${ASIX_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}

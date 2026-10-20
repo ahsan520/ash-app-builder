@@ -7,10 +7,18 @@
 #       --name broker-1 [--port 514] [--ca /path/to/cert.pem] [--no-install]
 #       [--tls-cert server.crt --tls-key server.key [--tls-port 6514] [--tls-client-ca ca.pem]] [--accept-config [--config-pubkey config-signing.pub]]
 #       [--timezone America/Toronto]
+#       [--file-glob '/var/log/myapp/*.log'] [--http-user svc --http-password-file /root/http.pw [--http-port 8088] [--http-tls]]
 #
 # --timezone       The time zone (IANA name, default UTC) that senders write in on syslog lines that carry none (RFC 3164). Vector reads those as
 #                  UTC, so a sender in another zone shows hours off in search and detections. Written as ASIX_SYSLOG_TIMEZONE. Like every option here it
 #                  is only kept if given again on a re-run. RFC 5424 lines carry their own offset and are not touched.
+# --file-glob      Also read log FILES on this machine: one absolute glob (letters, digits and . _ - / * ? [ ] only). Each new line is sent to ASIX
+#                  with source type "file". The vector user must be able to read the files. Written as ASIX_FILE_GLOB; installs vector-file.yaml.
+#                  Re-running without it turns file reading off again. See docs/broker-vm.md, "More inputs: files and HTTP".
+# --http-user      Also accept events over HTTP (POST JSON to http://THIS-VM:8088/events with basic authentication), source type "http". Needs
+#   --http-password-file  a file holding the password on ONE line (12 to 128 of letters, digits and . _ ~ @ % + = : , - ; not on the command
+#                  line, where `ps` would show it). Both are needed together. --http-port changes 8088. --http-tls serves HTTPS with the
+#                  certificate of --tls-cert/--tls-key (needs them). Installs vector-http.yaml; re-running without them turns it off.
 # --no-install     Vector is already installed (offline or pinned install); skip the package repo.
 # --tls-cert/key   Also accept syslog over TLS (RFC 5425) on --tls-port (default 6514), with this server certificate.
 #                  Both are needed together. Re-running without them turns the TLS listener off again.
@@ -25,7 +33,7 @@
 
 set -euo pipefail
 
-URL=""; KEY=""; NAME=""; PORT="514"; CA=""; INSTALL=1; TLS_CERT=""; TLS_KEY=""; TLS_PORT="6514"; TLS_CLIENT_CA=""; ACCEPT_CONFIG=0; CONFIG_PUBKEY=""; TIMEZONE="UTC"
+URL=""; KEY=""; NAME=""; PORT="514"; CA=""; INSTALL=1; TLS_CERT=""; TLS_KEY=""; TLS_PORT="6514"; TLS_CLIENT_CA=""; ACCEPT_CONFIG=0; CONFIG_PUBKEY=""; TIMEZONE="UTC"; FILE_GLOB=""; HTTP_USER=""; HTTP_PW_FILE=""; HTTP_PORT="8088"; HTTP_TLS=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --url) URL="$2"; shift 2;;
@@ -41,6 +49,11 @@ while [ $# -gt 0 ]; do
     --accept-config) ACCEPT_CONFIG=1; shift;;
     --config-pubkey) CONFIG_PUBKEY="$2"; shift 2;;
     --timezone) TIMEZONE="$2"; shift 2;;
+    --file-glob) FILE_GLOB="$2"; shift 2;;
+    --http-user) HTTP_USER="$2"; shift 2;;
+    --http-password-file) HTTP_PW_FILE="$2"; shift 2;;
+    --http-port) HTTP_PORT="$2"; shift 2;;
+    --http-tls) HTTP_TLS=1; shift;;
     *) echo "Unknown option: $1" >&2; exit 2;;
   esac
 done
@@ -78,6 +91,25 @@ if [ -n "$CONFIG_PUBKEY" ]; then
   for k in "${PKFILES[@]}"; do
     openssl pkey -pubin -in "$k" -noout -text 2>/dev/null | grep -q 'prime256v1\|P-256' || { echo "A key in $CONFIG_PUBKEY is not an EC P-256 public key." >&2; exit 2; }
   done
+fi
+
+# Extra inputs: files and HTTP. Checked before anything is written; the values go into broker.env and into a quoted YAML string, so only plain characters.
+if [ -n "$FILE_GLOB" ]; then
+  GLOB_RE='^/[]A-Za-z0-9._/*?[-]+$'   # in a bracket expression "]" must come first and "-" last; a backslash is literal there
+  [[ "$FILE_GLOB" =~ $GLOB_RE && "$FILE_GLOB" != *..* ]] || { echo "--file-glob must be an absolute path glob using only letters, digits and . _ - / * ? [ ] (no spaces, no ..)." >&2; exit 2; }
+fi
+HTTP_PW=""
+if [ -n "$HTTP_USER$HTTP_PW_FILE" ]; then
+  [ -n "$HTTP_USER" ] && [ -n "$HTTP_PW_FILE" ] || { echo "--http-user and --http-password-file are needed together." >&2; exit 2; }
+  [[ "$HTTP_USER" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || { echo "--http-user: 1-64 chars of letters, digits . _ -" >&2; exit 2; }
+  { [[ "$HTTP_PORT" =~ ^[0-9]{1,5}$ ]] && [ "$HTTP_PORT" -ge 1 ] && [ "$HTTP_PORT" -le 65535 ]; } || { echo "--http-port must be a number from 1 to 65535." >&2; exit 2; }
+  { [ "$HTTP_PORT" != "$PORT" ] && [ "$HTTP_PORT" != "$TLS_PORT" ]; } || { echo "--http-port must differ from --port ($PORT) and --tls-port ($TLS_PORT)." >&2; exit 2; }
+  [ -r "$HTTP_PW_FILE" ] || { echo "Cannot read $HTTP_PW_FILE" >&2; exit 2; }
+  HTTP_PW="$(head -n 1 "$HTTP_PW_FILE" | tr -d '\r')"
+  [[ "$HTTP_PW" =~ ^[A-Za-z0-9._~@%+=:,-]{12,128}$ ]] || { echo "The HTTP password (first line of $HTTP_PW_FILE) must be 12-128 chars of letters, digits and . _ ~ @ % + = : , -" >&2; exit 2; }
+  { [ "$HTTP_TLS" -eq 0 ] || [ -n "$TLS_CERT" ]; } || { echo "--http-tls needs --tls-cert and --tls-key (HTTPS uses the same certificate as syslog over TLS)." >&2; exit 2; }
+else
+  [ "$HTTP_TLS" -eq 0 ] || { echo "--http-tls only makes sense with --http-user and --http-password-file." >&2; exit 2; }
 fi
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../deploy/broker" && pwd)"
@@ -129,9 +161,20 @@ fi
       echo "ASIX_TLS_CA_FILE=/etc/asix-broker/tls/client-ca.pem"
       echo "ASIX_TLS_VERIFY_CLIENT=true"
     fi
-    # The package's service runs plain /usr/bin/vector, so this variable decides which files it loads.
-    echo "VECTOR_CONFIG=/etc/vector/vector.yaml,/etc/vector/vector-tls.yaml"
   fi
+  [ -z "$FILE_GLOB" ] || echo "ASIX_FILE_GLOB=$FILE_GLOB"
+  if [ -n "$HTTP_USER" ]; then
+    echo "ASIX_HTTP_USER=$HTTP_USER"
+    echo "ASIX_HTTP_PASSWORD=$HTTP_PW"
+    echo "ASIX_HTTP_PORT=$HTTP_PORT"
+    [ "$HTTP_TLS" -eq 0 ] || echo "ASIX_HTTP_TLS=true"
+  fi
+  # The package's service runs plain /usr/bin/vector, so this variable decides which files it loads.
+  CONFIGS="/etc/vector/vector.yaml"
+  [ -z "$TLS_CERT" ] || CONFIGS="$CONFIGS,/etc/vector/vector-tls.yaml"
+  [ -z "$FILE_GLOB" ] || CONFIGS="$CONFIGS,/etc/vector/vector-file.yaml"
+  [ -z "$HTTP_USER" ] || CONFIGS="$CONFIGS,/etc/vector/vector-http.yaml"
+  [ "$CONFIGS" = "/etc/vector/vector.yaml" ] || echo "VECTOR_CONFIG=$CONFIGS"
 } > /etc/asix-broker/broker.env
 chown root:vector /etc/asix-broker/broker.env; chmod 640 /etc/asix-broker/broker.env
 
@@ -143,12 +186,22 @@ else
   # Re-run without --tls-cert: take the TLS listener and its copy of the key away.
   rm -f /etc/vector/vector-tls.yaml; rm -rf /etc/asix-broker/tls
 fi
+if [ -n "$FILE_GLOB" ]; then
+  install -m 644 "$SRC/vector-file.yaml" /etc/vector/vector-file.yaml
+else
+  rm -f /etc/vector/vector-file.yaml   # re-run without --file-glob: files are no longer read
+fi
+if [ -n "$HTTP_USER" ]; then
+  install -m 644 "$SRC/vector-http.yaml" /etc/vector/vector-http.yaml
+else
+  rm -f /etc/vector/vector-http.yaml   # re-run without --http-user: the HTTP listener is gone
+fi
 install -d /etc/systemd/system/vector.service.d
 install -m 644 "$SRC/vector-asix.conf" /etc/systemd/system/vector.service.d/asix.conf
 install -d /var/lib/vector && chown vector:vector /var/lib/vector
 
 echo "-- 4. Validating the config before restarting --"
-( set -a; . /etc/asix-broker/broker.env; set +a; vector validate --no-environment ${TLS_CERT:+/etc/vector/vector-tls.yaml} /etc/vector/vector.yaml )
+( set -a; . /etc/asix-broker/broker.env; set +a; vector validate --no-environment ${TLS_CERT:+/etc/vector/vector-tls.yaml} ${FILE_GLOB:+/etc/vector/vector-file.yaml} ${HTTP_USER:+/etc/vector/vector-http.yaml} /etc/vector/vector.yaml )
 
 echo "-- 5. Heartbeat timer --"
 install -d /usr/local/lib/asix-broker
@@ -182,3 +235,5 @@ echo "Then check Settings > Collectors for '$NAME' (Connected)."
 echo "Open $PORT/udp and $PORT/tcp on this VM's firewall for the devices that will send syslog."
 [ "$ACCEPT_CONFIG" -eq 0 ] || echo "ASIX may now change this broker's syslog port (Brokers page)$([ -n "$CONFIG_PUBKEY" ] && echo ', but only with a signature from the key above'). Watch it: journalctl -u asix-broker-config -n 20"
 [ -z "$TLS_CERT" ] || echo "Syslog over TLS is on $TLS_PORT/tcp$([ -n "$TLS_CLIENT_CA" ] && echo ' (senders must present a certificate from the client CA)'): open it too. Check: openssl s_client -connect 127.0.0.1:$TLS_PORT"
+[ -z "$FILE_GLOB" ] || echo "Reading files matching $FILE_GLOB as source type 'file' (the vector user must be able to read them: ls -l, or setfacl). Watch: journalctl -u vector -n 30"
+[ -z "$HTTP_USER" ] || echo "HTTP input is on $HTTP_PORT/tcp$([ "$HTTP_TLS" -eq 1 ] && echo ' (HTTPS)' || echo ' (plain HTTP: the password travels in clear text)'): open it too. Test: curl -u $HTTP_USER:PASSWORD -H 'Content-Type: application/json' -d '{\"message\":\"hello\"}' http$([ "$HTTP_TLS" -eq 1 ] && echo s)://127.0.0.1:$HTTP_PORT/events"

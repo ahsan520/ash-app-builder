@@ -39,7 +39,10 @@ describe('broker syslog over TLS files', () => {
     }
   });
   it('the bootstrap script sets VECTOR_CONFIG to both files, and only with a certificate', () => {
-    assert.match(bootstrap, /VECTOR_CONFIG=\/etc\/vector\/vector\.yaml,\/etc\/vector\/vector-tls\.yaml/);
+    // The list is composed (TLS, file and HTTP configs join it); with a certificate it carries vector-tls.yaml right after vector.yaml.
+    assert.match(bootstrap, /CONFIGS="\/etc\/vector\/vector\.yaml"/);
+    assert.match(bootstrap, /\[ -z "\$TLS_CERT" \] \|\| CONFIGS="\$CONFIGS,\/etc\/vector\/vector-tls\.yaml"/);
+    assert.match(bootstrap, /echo "VECTOR_CONFIG=\$CONFIGS"/);
     assert.match(envExample, /#VECTOR_CONFIG=\/etc\/vector\/vector\.yaml,\/etc\/vector\/vector-tls\.yaml/);
     assert.match(bootstrap, /rm -f \/etc\/vector\/vector-tls\.yaml/, 're-running without TLS must remove the listener');
   });

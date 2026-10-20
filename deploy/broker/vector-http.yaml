@@ -1,0 +1,81 @@
+# Optional fourth config file: the broker also accepts events over HTTP, for applications and webhooks that can POST JSON but not
+# syslog, and forwards them to ASIX with source type "http". bootstrap-broker.sh installs it only when run with --http-user and
+# --http-password-file, and then starts Vector with
+#   VECTOR_CONFIG=/etc/vector/vector.yaml,/etc/vector/vector-http.yaml        (set in broker.env; the TLS and file configs join the same list)
+#
+# Senders POST to  http(s)://<broker>:<ASIX_HTTP_PORT, default 8088>/events  with HTTP basic authentication (ASIX_HTTP_USER and
+# ASIX_HTTP_PASSWORD, both required: with either missing Vector refuses to start, so there is never an open listener). The body is
+# one JSON object, a JSON array of objects, or one JSON object per line. Anything that is not JSON is answered 400.
+#   curl -u user:password -H 'Content-Type: application/json' -d '{"host":"app1","message":"login failed","user":"bob"}' http://BROKER:8088/events
+# With --tls-cert/--tls-key also given the listener uses HTTPS (ASIX_HTTP_TLS=true and the same certificate as syslog over TLS);
+# without it the password travels in clear text, so keep plain HTTP to a trusted network.
+#
+# Each event is stored as ONE line: "ISO-time host http: {the whole JSON object}". The event time is the moment the broker received it
+# (a parsing rule for source type "http" can read a time out of the JSON and set the event time). The host is the object's "host" or
+# "hostname" when it has a text one, else the sender's address. Objects over about 8 KB are cut by the ASIX lane.
+#
+# Test without a network:   vector validate --no-environment deploy/broker/vector.yaml deploy/broker/vector-http.yaml
+sources:
+  http_in:
+    type: http_server
+    address: 0.0.0.0:${ASIX_HTTP_PORT:-8088}
+    path: /events
+    strict_path: true
+    method: POST
+    decoding:
+      codec: json
+    auth:
+      username: "${ASIX_HTTP_USER}"
+      password: "${ASIX_HTTP_PASSWORD}"
+    tls:
+      enabled: ${ASIX_HTTP_TLS:-false}
+      crt_file: ${ASIX_TLS_CERT_FILE:-/etc/asix-broker/tls/server.crt}
+      key_file: ${ASIX_TLS_KEY_FILE:-/etc/asix-broker/tls/server.key}
+
+transforms:
+  http_to_line:
+    type: remap
+    inputs: [http_in]
+    source: |
+      ev = object!(.)
+      host = string(ev.host) ?? string(ev.hostname) ?? string(ev.source_ip) ?? "unknown-host"
+      host = replace(host, r'\s+', "_")
+      # Vector's own fields are not part of what the sender sent.
+      del(ev.source_type)
+      del(ev.timestamp)
+      del(ev.path)
+      ts = format_timestamp!(now(), format: "%+")
+      .message = ts + " " + host + " http: " + encode_json(ev)
+
+sinks:
+  asix_http:
+    type: http
+    inputs: [http_to_line]
+    uri: ${ASIX_INGEST_URL}
+    method: post
+    encoding:
+      codec: text
+    framing:
+      method: newline_delimited
+    request:
+      headers:
+        Authorization: "Bearer ${ASIX_INGEST_KEY}"
+        Content-Type: text/plain
+        X-ASIX-Collector: ${ASIX_BROKER_NAME}
+        X-ASIX-Platform: linux
+        X-ASIX-Source-Type: http
+        X-ASIX-Version: vector-broker
+      retry_attempts: 100000
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 60
+      timeout_secs: 30
+    batch:
+      max_events: 500
+      max_bytes: 900000
+      timeout_secs: 5
+    buffer:
+      type: disk
+      max_size: 536870912
+      when_full: block
+    tls:
+      ca_file: ${ASIX_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}

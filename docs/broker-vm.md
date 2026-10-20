@@ -159,7 +159,7 @@ sudo ./scripts/deploy/bootstrap-broker.sh \
   --tls-cert /root/tls.crt --tls-key /root/tls.key --tls-port "${ASIX_SYSLOG_TLS_PORT:-6514}" \\
   --timezone "${ASIX_SYSLOG_TIMEZONE:-UTC}"
 ```
-`--no-install` because Vector is already there (leave it out on a new VM; on a new VM `broker.env` does not exist yet, so give `--url`, `--key`, `--name`, `--port` by hand as in "Install"). If the CA was kept from the first install, `cp /etc/asix-broker/ca.pem /root/asix-ca.pem` instead of step 1. It validates the Vector config before restarting and ends with the key id it now trusts: compare it with the one on the Brokers page.
+If the broker also reads files or accepts HTTP ("More inputs: files and HTTP"), add `--file-glob` and `--http-user`/`--http-password-file` (and `--http-port`, `--http-tls`) to that command too, or the re-run turns those inputs off. `--no-install` because Vector is already there (leave it out on a new VM; on a new VM `broker.env` does not exist yet, so give `--url`, `--key`, `--name`, `--port` by hand as in "Install"). If the CA was kept from the first install, `cp /etc/asix-broker/ca.pem /root/asix-ca.pem` instead of step 1. It validates the Vector config before restarting and ends with the key id it now trusts: compare it with the one on the Brokers page.
 
 **5. Check the ports on the broker:**
 ```bash
@@ -195,6 +195,8 @@ If chrony keeps drifting, make it step big errors by itself (add `makestep 1 -1`
 | `deploy/broker/vector-tests-timezone.yaml` | Vector unit tests for `ASIX_SYSLOG_TIMEZONE`: run with the zone set, see "Syslog times from senders in another time zone" |
 | `deploy/broker/vector-tests.yaml` | Vector unit tests for the line format: `vector test deploy/broker/vector.yaml deploy/broker/vector-tests.yaml` |
 | `deploy/broker/vector-tls.yaml` | Optional second Vector config: the syslog-over-TLS source (installed only with `--tls-cert`) |
+| `deploy/broker/vector-file.yaml` | Optional Vector config: read log files on the VM, source type `file` (installed only with `--file-glob`) |
+| `deploy/broker/vector-http.yaml` | Optional Vector config: accept JSON over HTTP(S) with basic authentication, source type `http` (installed only with `--http-user`) |
 | `deploy/broker/broker.env.example` | Settings (`/etc/asix-broker/broker.env` on the VM, mode 640) |
 | `deploy/broker/vector-asix.conf` | systemd drop-in: loads the env file, lets Vector bind port 514 |
 | `deploy/broker/asix-broker-heartbeat.{sh,service,timer}` | The one-minute heartbeat |
@@ -431,6 +433,38 @@ The event time should be the sender's real time converted to UTC, close to the r
 - **Events already stored keep the time they were stored with.** Nothing rewrites them.
 - A name Vector cannot use, or a local time that does not exist (the hour clocks skip in spring), keeps the UTC reading for that line; the broker still runs.
 - Checked on real Vector 0.59.0: `vector test` on both test files, `vector validate`, and a real syslog UDP packet through the real source and HTTP sink (RFC 3164 `Oct 19 18:44:27` came out `18:44:27Z` before and `22:44:27Z` with `America/Toronto`; the RFC 5424 line was `22:44:27Z` in both). Applied on broker-1 on 2026-10-20 (bootstrap re-run with `--timezone America/Toronto`, config validated, services restarted); the event-time check above passed the same day (a test line sent to broker-1 showed an event time 5 seconds before its received time, instead of about 4 hours early).
+
+## More inputs: files and HTTP (done 2026-10-20)
+
+**What for.** A broker took only syslog. Two more inputs, both optional and off until you ask for them, cover what syslog does not: **log files** on the broker VM (an application's own log, a file another tool drops there) and **JSON over HTTP** (applications and webhooks that can POST but not speak syslog). Both go through the same disk buffer, the same HTTPS lane and the same ingestion key as syslog, so nothing changes on the ASIX side: no schema, no permission, no new setting. Events arrive with their own **source type**, `file` and `http`, so Parsing rules (Settings, Parsing) can be written for each, and they count towards the broker's row on the Collectors page.
+
+**Files.** Add one glob to the bootstrap command:
+```bash
+sudo ./scripts/deploy/bootstrap-broker.sh ...the usual flags... --file-glob '/var/log/myapp/*.log'
+```
+- One absolute glob, letters, digits and `. _ - / * ? [ ]` only (no spaces). The `vector` user must be able to read the files (`ls -l`; if not, `setfacl -m u:vector:r` on the files and `x` on the directory, or put them in a group `vector` is in).
+- Each new line becomes `ISO-time host file-name: line`, which the ASIX lane parses into host, app name (the file's name) and event time. The event time is the one at the start of the line when that is an ISO 8601 time **with a zone** (`2026-10-20T14:03:11Z`, `...+00:00`); otherwise it is the moment the broker read the line. Lines over 8 KB are cut.
+- **First start:** files that already exist are read from their **end**, so turning this on does not send years of old lines. A file that appears afterwards is read from its start. Vector remembers where it was (`/var/lib/vector`), so a restart neither repeats nor skips lines. Files not touched for a week are ignored.
+
+**HTTP.** Give a user and a password file:
+```bash
+printf '%s\n' 'a-password-of-12-to-128-plain-characters' | sudo tee /root/http.pw >/dev/null; sudo chmod 600 /root/http.pw
+sudo ./scripts/deploy/bootstrap-broker.sh ...the usual flags... --http-user svc --http-password-file /root/http.pw [--http-port 8088] [--http-tls]
+```
+- The password is read from the **file** (first line), never from the command line where `ps` would show it: 12 to 128 of letters, digits and `. _ ~ @ % + = : , -`. It ends up in `/etc/asix-broker/broker.env` (mode 640, `root:vector`), like the ingestion key.
+- Senders POST to `http://BROKER:8088/events` with HTTP basic authentication. The body is one JSON object, a JSON array of objects, or one object per line:
+```bash
+curl -u svc:PASSWORD -H 'Content-Type: application/json' -d '{"host":"app1","message":"login failed","user":"bob"}' http://BROKER:8088/events
+```
+- Answers: `200` accepted, `401` no or wrong credentials, `400` the body is not JSON, `405` any other path or method. There is **no default user or password**: with either missing Vector refuses to load the input, so the broker never has an open listener.
+- **HTTPS:** add `--http-tls` (it needs `--tls-cert` and `--tls-key`, and serves the same certificate as syslog over TLS). Without it the password travels in clear text, so keep plain HTTP to a trusted network. Open the port (default 8088/tcp) on the VM's firewall.
+- Each object becomes **one** line `ISO-time host http: {the whole JSON object}`: the host is the object's `host` or `hostname` when it is text, else `unknown-host`; the time is when the broker received it (a Parsing rule for source type `http` can read a time out of the JSON and set the event time). **Fields named `timestamp`, `path` and `source_type` are replaced by Vector's own** and are not kept, so senders should call their time something else (`time`, `@timestamp`, `event_time`). Objects over about 8 KB are cut by the ASIX lane.
+
+**Turning them off / changing them.** The bootstrap rewrites everything from its flags: re-run without `--file-glob`, or without `--http-user`, and that input is removed (its config file is deleted and the HTTP password leaves `broker.env`). `asix-broker-config.sh` (the config pull) and `upgrade-broker.sh` validate the extra files too whenever they are installed.
+
+**Limits worth knowing.** The disk buffer of each extra input is 512 MiB (Vector refuses less than about 256 MiB; `vector validate` does not check this, starting Vector does), separate from syslog's 1 GiB. When ASIX is unreachable the inputs keep accepting until their buffer is full and then make senders wait rather than drop events. Both inputs share the broker's ingestion key and its rate limit on ASIX (300 requests a minute per key; each input sends at most one request every 5 seconds per 500 events, far from the limit). There is no ASIX-side switch for these inputs and the Brokers page does not show them yet.
+
+**Tested.** Real Vector 0.59.0 (`tests/broker-inputs.test.js`, which skips its real-Vector part where there is no Vector binary): the configs validate alone and together, Vector will not load the HTTP config without the password, and a running Vector with a stand-in for the ASIX lane carried a file's new lines (not its history) and POSTed JSON (object, array, line-delimited) as the lines above, with the right key, broker name and source type, and the lane's own parser (`parseLine`) reads them; a Vector restart delivered a line written while it was down exactly once and sent nothing twice. The real `bootstrap-broker.sh` was run with a stubbed `systemctl`: file and HTTP together, with a certificate and `--http-tls` (an HTTPS POST was stored, plain HTTP to the HTTPS port was refused), and a plain re-run removed both. **Not yet run on broker-1 or against the real ASIX lane; CI has no Vector, so the real-Vector part of the test does not run there.**
 
 ## Getting an alert when a broker goes quiet
 A broker that stops (Vector down, VM off, network cut) shows as Disconnected on the Collectors and Brokers pages, but nothing tells you unless you look. On the

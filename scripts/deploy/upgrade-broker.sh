@@ -80,7 +80,8 @@ ROLLBACK="To go back: apt-get install -y --allow-downgrades vector=${OLD_PKG:-<p
 
 echo "-- 2. Checking this broker's config against Vector ${NEW:-?} --"
 TLS=""; [ -r "$VECTOR_DIR/vector-tls.yaml" ] && TLS="$VECTOR_DIR/vector-tls.yaml"
-if ! ( set -a; . "$ENV_FILE"; set +a; vector validate --no-environment ${TLS:+"$TLS"} "$VECTOR_DIR/vector.yaml" ); then
+EXTRA=(); for f in vector-file.yaml vector-http.yaml; do [ -r "$VECTOR_DIR/$f" ] && EXTRA+=("$VECTOR_DIR/$f"); done   # the optional file and HTTP inputs, when installed
+if ! ( set -a; . "$ENV_FILE"; set +a; vector validate --no-environment ${TLS:+"$TLS"} ${EXTRA[@]+"${EXTRA[@]}"} "$VECTOR_DIR/vector.yaml" ); then
   echo "The config does not pass 'vector validate' on Vector ${NEW:-?}. Vector was NOT restarted: the running process keeps forwarding on the old binary." >&2
   echo "$ROLLBACK" >&2
   exit 1
