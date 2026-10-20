@@ -71,6 +71,7 @@ app.use(require('./routes/data-model'));
 app.use(require('./routes/modules'));
 app.use(require('./routes/packs'));
 app.use(require('./routes/parser-status'));
+app.use(require('./routes/parser-alert'));
 
 app.get('/', (req, res) => {
   res.json({

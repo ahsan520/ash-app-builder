@@ -1144,13 +1144,33 @@ async function pgCapacity() {
 // ---- Parser pool ----------------------------------------------------------------------------
 let parserHours = 24;
 const PARSE_REASON = { PARSE_TIMEOUT: 'A batch ran past the time limit', PARSE_WORKER_CRASH: 'A parser worker crashed or ran out of memory', PARSE_FAILED: 'The parser threw an error on a batch', PARSE_QUARANTINED: 'Skipped for a minute after 3 failed batches in a row' };
+// The unparsed-events alert limit (GET and PUT /v1/parser/alert). A saved limit wins over the server's ASIX_PARSE_ALERT_MIN_EVENTS for this tenant;
+// "Follow the server setting" deletes it. 0 events = off. The alert picks a change up within about a minute (the watchdog's next cycle).
+function parserAlertCard(a) {
+  if (!a) return card('Alert when events are stored unparsed', el('div', { className: 'mute', textContent: 'The alert setting could not be read.' }));
+  if (!a.available) return card('Alert when events are stored unparsed', pill('Not ready', 'off'), el('span', { className: 'mute', style: 'margin-left:8px', textContent: 'The database has no parse_alert_settings table yet. A normal deploy runs the schema job that creates it; until then the server setting (ASIX_PARSE_ALERT_MIN_EVENTS) decides.' }));
+  const lim = el('input', { type: 'number', min: a.limits.min_events[0], max: a.limits.min_events[1], value: String(a.min_events), style: 'width:110px' });
+  const win = el('input', { type: 'number', min: a.limits.window_min[0], max: a.limits.window_min[1], value: String(a.window_min), style: 'width:90px' });
+  const send = async (body) => { try { await api('/v1/parser/alert', { method: 'PUT', body }); route(); } catch (e) { alert(e.message); } };
+  const state = a.enabled ? pill('On: ' + a.min_events + ' in ' + a.window_min + ' min', 'ok') : pill('Off', 'off');
+  const from = a.source === 'tenant' ? 'Set here.' : 'From the server setting' + (a.server.enabled ? '' : ' (off)') + '.';
+  return card('Alert when events are stored unparsed',
+    el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, state, el('span', { className: 'mute', style: 'font-size:13px', textContent: from })),
+    el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px' },
+      el('span', { textContent: 'Alert at' }), lim, el('span', { textContent: 'events within' }), win, el('span', { textContent: 'minutes' }),
+      el('button', { className: 'btn pri', textContent: 'Save', onclick: () => send({ min_events: lim.value.trim(), window_min: win.value.trim() }) }),
+      a.enabled ? el('button', { className: 'btn', textContent: 'Turn off', title: 'Set the limit to 0 for this tenant', onclick: () => send({ min_events: 0 }) }) : '',
+      a.source === 'tenant' ? el('button', { className: 'btn', textContent: 'Follow the server setting', onclick: () => send({ follow_server: true }) }) : ''),
+    el('div', { className: 'mute', style: 'margin-top:8px;font-size:12px', textContent: 'One alert is raised while at least this many events were stored unparsed in the window, and it closes by itself when the count drops below. 0 turns it off. The server setting is ' + (a.server.enabled ? a.server.min_events + ' in ' + a.server.window_min + ' minutes' : 'off') + '. Events are never lost either way.' }));
+}
 async function pgParserPool() {
   const r = await api('/v1/parser/status?hours=' + parserHours), st = r.settings, p = r.pool, u = r.unparsed;
+  const alertSetting = await api('/v1/parser/alert').then((x) => x.settings).catch(() => null);   // a failed read never hides the page
   const hrs = el('select', { onchange: () => { parserHours = Number(hrs.value); route(); } }, [[24, 'Last 24 hours'], [72, 'Last 3 days'], [168, 'Last 7 days']].map(([v, t]) => el('option', { value: v, textContent: t }))); hrs.value = parserHours;
   const reasons = Object.entries(u.by_reason || {}).sort((a, b) => b[1] - a[1]);
   return [el('div', { style: 'display:flex;align-items:baseline;gap:12px;flex-wrap:wrap' }, el('h2', { textContent: 'Parser pool' }), el('span', { className: 'mute', textContent: 'updated ' + when(r.generated_at) + ' UTC' }),
       el('span', { style: 'margin-left:auto;display:flex;gap:8px' }, hrs, el('button', { className: 'btn', textContent: 'Refresh', onclick: () => route() }))),
-    el('p', { className: 'desc', textContent: 'Where incoming events are parsed, and which events were stored without being parsed. Read-only.' }),
+    el('p', { className: 'desc', textContent: 'Where incoming events are parsed, and which events were stored without being parsed. Only the alert limit below can be changed here.' }),
     card('How parsing runs', st.mode === 'inline'
       ? el('div', {}, pill('Inline', 'off'), el('div', { className: 'mute', style: 'margin-top:8px;font-size:13px', textContent: 'Events are parsed inside the API, as before. To run parsing on worker threads with a time limit, set ASIX_PARSER_WORKERS (see docs/parser-workers.md).' }))
       : kv({ 'mode': 'worker threads', 'workers': st.workers, 'time limit per batch': st.timeout_ms + ' ms', 'batches allowed to wait': st.queue })),
@@ -1160,6 +1180,7 @@ async function pgParserPool() {
         card('Since this API pod started', kv({ 'batches parsed': p.completed, 'failed': p.failed, 'timeouts': p.timeouts, 'worker crashes': p.crashes, 'refused (queue full)': p.rejected, 'skipped (quarantine)': p.quarantined, 'rule text re-sent': p.rules_resent }))),
         el('div', { className: 'mute', style: 'margin-top:8px;font-size:12px', textContent: 'These counters belong to the one API pod that answered this page and start again when it restarts. With several API pods the numbers differ from pod to pod.' }))
       : card('', el('div', { className: 'mute', textContent: 'No pool, so nothing to count.' })),
+    el('div', { style: 'margin-top:18px' }, parserAlertCard(alertSetting)),
     el('h3', { style: 'margin-top:18px', textContent: 'Events stored unparsed' }),
     u.total == null ? card('', pill('Unavailable', 'bad'), el('span', { className: 'mute', style: 'margin-left:8px', textContent: r.unparsed_error || 'Could not be counted.' }))
       : card('', el('div', { className: 'stat' }, String(u.total), el('small', { textContent: 'in the last ' + (u.hours >= 48 ? Math.round(u.hours / 24) + ' days' : u.hours + ' hours') })),

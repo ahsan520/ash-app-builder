@@ -54,7 +54,7 @@ the pod memory limit (each worker adds roughly 40 to 60 MB; 768Mi is a sensible 
 
 Search `parsed._parse_error` to find events that were stored unparsed (Log search: `filter _parse_error != null`), or open **Settings, Parser pool** (below). They are not re-parsed later: there is no re-parse job.
 
-## Parser pool page and API (read-only)
+## Parser pool page and API (read-only, except the alert limit card below)
 - Portal: **Settings, Parser pool** (under Data collection, next to Parsing rules). It shows how parsing runs (inline, or workers with the
   time limit and queue size), the pool's counters, and how many events were stored unparsed in the last 24 hours, 3 days or 7 days, by reason.
 - API: `GET /v1/parser/status?hours=24` (1 to 168; default 24). Needs `capacity:read`, so no role change. Answer: `settings` (`mode` `inline` or
@@ -82,9 +82,18 @@ Search `parsed._parse_error` to find events that were stored unparsed (Log searc
 - `tests/parser-status.test.js`: the shaping, the unparsed count on the in-memory store (window, tenant isolation, unknown reasons kept, a failing
   store does not break the answer or leak its message) and the real route with sign-in stubbed (permission `capacity:read`, window bounds, a live pool).
 - `tests/parser-status-db.test.js` (gated by `ASIX_TEST_DB=1`): the same count and route on a real `events` table, with a second tenant's events present.
+- `tests/parse-alert.test.js`, `tests/parse-alert-db.test.js` (gated by `ASIX_TEST_DB=1`) and `tests/portal-parse-alert.test.js`: the portal-set limit (rules, both routes, the watchdog's read, real PostgreSQL, the card).
 - `tests/parse-ingest-db.test.js` (gated by `ASIX_TEST_DB=1`): the real HTTP lane on PostgreSQL. Built-in and tenant rules, a saved
   change taking effect at once, drops, timeout and crash stored unparsed and marked, the 503 and its collector counts. CI runs it
   inline and again with `ASIX_PARSER_WORKERS=2`.
 
 ## Alert when events are stored unparsed (off until chosen)
 Set `ASIX_PARSE_ALERT_MIN_EVENTS` on the API (`k8s/30-asix-api.yaml`, default `"0"` = off) to the number of unparsed events in the window that should raise an alert, and optionally `ASIX_PARSE_ALERT_WINDOW_MIN` (5 to 1440, default 15). The collector watchdog checks every 60 seconds and raises one alert, **Events stored unparsed**, with the reasons (`PARSE_TIMEOUT`, `PARSE_WORKER_CRASH`, `PARSE_FAILED`, `PARSE_QUARANTINED`), through your notification channels (severity `ASIX_WATCHDOG_SEVERITY`, default `high`). It closes by itself when the count in the window drops below the limit. If you close it by hand while the count is still high it is not raised again for 60 minutes. A good first value is 20 with the default window; check Settings, Parser pool for what is normal for you first. See `docs/product-plan.md`, "Unparsed-events alert".
+
+### Setting the limit from the portal
+Those two variables are the **server setting**. Settings, Parser pool also has an **Alert when events are stored unparsed** card where a tenant sets its own limit without a deploy:
+- **Alert at N events within M minutes, Save.** N from 0 to 1,000,000, M from 5 to 1440. A saved limit wins over the server setting for this tenant. **N = 0 (or the Turn off button) is off for this tenant even when the server setting is on.**
+- **Follow the server setting** deletes the saved limit; the variables above apply again. With nothing saved the alert behaves exactly as it did before this card existed, so nothing changes until someone saves.
+- The watchdog reads the limit every cycle, so a change applies within about a minute. Lowering the limit below the current count raises the alert on the next cycle; raising it above the count closes an open alert with an "ASIX" note. Nothing else about the alert changes (one at a time, 60 minute cooldown after you close it by hand, severity, channels, Resolved messages).
+- API: `GET /v1/parser/alert` (needs `capacity:read`) and `PUT /v1/parser/alert` (needs `parsing:rules:write`; body `{ "min_events": N, "window_min": M }`, `window_min` optional, or `{ "follow_server": true }`). No role change.
+- Needs the schema job (table `parse_alert_settings`, created on a normal deploy). Until it has run the card says **Not ready** and the server setting decides.

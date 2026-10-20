@@ -5,8 +5,11 @@
 // Off until chosen, with two environment settings on the API (k8s/30-asix-api.yaml), the same style as the watchdog's:
 //   ASIX_PARSE_ALERT_MIN_EVENTS    0 or unset = off. N (1 to 1000000) = alert when at least N events were stored unparsed in the window.
 //   ASIX_PARSE_ALERT_WINDOW_MIN    5 to 1440, default 15: the look-back window in minutes.
+// A tenant can override both from the portal (Settings, Parser pool): a row in parse_alert_settings wins over the environment for that
+// tenant (min_events 0 = off for that tenant); no row = the environment, as before (src/ingestion/parse-alert.js).
 // It runs inside the collector watchdog cycle (every 60 s, one replica at a time, same start-up grace, same ASIX_WATCHDOG_SEVERITY, same
-// notification channels), and reads the count through the event store, so it works on PostgreSQL and ClickHouse. No schema change.
+// notification channels), and reads the count through the event store, so it works on PostgreSQL and ClickHouse. The only schema is the
+// optional parse_alert_settings table: if it is missing (schema job not yet run) the environment settings are used.
 //
 // The events themselves are never lost: an unparsed event is stored raw. The alert says how many, why (by reason) and where to look.
 // One alert at a time: it stays while the count stays at or above the limit, closes (with an "ASIX" note) when it drops below, or when the alert is
@@ -17,11 +20,12 @@ const db = require('../db');
 const { getEventStore } = require('../events');
 const { unparsedCounts } = require('./parser-status');
 const { severity } = require('../collectors/watchdog');
+const parseAlert = require('./parse-alert');
 
 const RULE_NAME = 'Events stored unparsed';
 const GROUP_KEY = 'parser:unparsed';
 const COOLDOWN_MIN = 60;
-const MAX_EVENTS = 1000000, MIN_WINDOW = 5, MAX_WINDOW = 1440, DEFAULT_WINDOW = 15;
+const { MAX_EVENTS, MIN_WINDOW, MAX_WINDOW, DEFAULT_WINDOW } = parseAlert.LIMITS;
 
 function config(env = process.env) {
   const n = Number(env.ASIX_PARSE_ALERT_MIN_EVENTS);
@@ -58,7 +62,22 @@ function raiseText(r) {
   };
 }
 
-async function runTenant(tenantId, { now = Date.now(), raiseAllowed = true, sev = severity(), cfg = config(), store = getEventStore() } = {}) {
+// The limit this tenant runs with: its own row from the portal, else the environment. A database without the table (schema job not run) gets the
+// environment settings and one log line per process; any other read failure throws, and the watchdog logs it and tries again next cycle.
+let warnedMissing = false;
+async function tenantConfig(tenantId, env = process.env) {
+  const server = config(env);
+  let row = null;
+  try { row = await db.withTenant(tenantId, (client) => parseAlert.readRow(client, tenantId)); }
+  catch (e) {
+    if (!parseAlert.isMissingTable(e)) throw e;
+    if (!warnedMissing) { warnedMissing = true; console.warn('[parse-watch] table parse_alert_settings is missing (the schema job has not run): using the server settings'); }
+  }
+  return parseAlert.resolve(row, server);
+}
+
+async function runTenant(tenantId, { now = Date.now(), raiseAllowed = true, sev = severity(), cfg, store = getEventStore() } = {}) {
+  if (!cfg) cfg = await tenantConfig(tenantId);
   let counts = { total: 0, by_reason: {} };
   if (cfg.threshold) counts = await unparsedCounts(store, tenantId, cfg.windowMin / 60, now);   // a count that fails throws: the watchdog logs it and tries again next cycle
   return db.withTenant(tenantId, async (client) => {
@@ -84,4 +103,4 @@ async function runTenant(tenantId, { now = Date.now(), raiseAllowed = true, sev 
   });
 }
 
-module.exports = { RULE_NAME, GROUP_KEY, COOLDOWN_MIN, config, plan, raiseText, runTenant };
+module.exports = { RULE_NAME, GROUP_KEY, COOLDOWN_MIN, config, tenantConfig, plan, raiseText, runTenant };

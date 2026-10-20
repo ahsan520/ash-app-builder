@@ -82,6 +82,8 @@ spec:
               value: "300"
             # Unparsed-events alert (src/ingestion/parse-watch.js): one alert when at least this many events were stored unparsed in the
             # window (minutes). "0" = off. Runs in the watchdog cycle above, so the severity and grace settings apply.
+            # These two are the SERVER setting: a tenant can set its own limit in the portal (Settings, Parser pool), which wins for
+            # that tenant (0 = off for it); "Follow the server setting" there deletes it and these values apply again.
             - name: ASIX_PARSE_ALERT_MIN_EVENTS
               value: "0"
             - name: ASIX_PARSE_ALERT_WINDOW_MIN
