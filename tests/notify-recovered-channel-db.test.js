@@ -160,6 +160,33 @@ async function main() {
       } finally { console.error = origErr; }
       assert.strictEqual(errs.filter((l) => /resolved messages failed/.test(l)).length, 1, 'logged once, not every cycle');
     } finally { await db.query('ALTER TABLE notification_recoveries_away RENAME TO notification_recoveries'); }
+    // ---- cut-off: a channel set to "always" later is told only about alerts closed AFTER that moment
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const atOf = async (cid) => (await db.query('SELECT notify_recovered_at AS at FROM notification_channels WHERE id = $1', [cid])).rows[0].at;
+    const cut = await call('POST', '/v1/notifications/channels', { name: 'rcc-cut-' + stamp, type: 'webhook', config: { url: 'https://example.com/h3', format: 'json' }, notify_recovered: true });
+    assert.strictEqual(cut.status, 201); const cutId = cut.body.channel.id;
+    const at0 = await atOf(cutId); assert.ok(at0, 'set when created with a setting');
+    assert.strictEqual(await atOf(chFollow), null, 'a channel that follows has no cut-off');
+    await sleep(30);
+    const oldA = await closedAlert(TENANT, 'Collector disconnected: before-' + stamp, [cutId]);
+    await db.query("UPDATE alerts SET updated_at = $2::timestamp - interval '1 hour' WHERE id = $1", [oldA, at0]);
+    const newA = await closedAlert(TENANT, 'Collector disconnected: after-' + stamp, [cutId]);
+    assert.strictEqual(await rec.enqueue(TENANT), 1, 'only the alert closed after the switch');
+    assert.deepStrictEqual((await recRows(newA)).map((r) => r.channel), ['rcc-cut-' + stamp]);
+    assert.strictEqual((await recRows(oldA)).length, 0, 'closed before the switch: nothing');
+    // unrelated changes and the same value keep the cut-off; a new value moves it; null clears it
+    await call('PATCH', '/v1/notifications/channels/' + cutId, { enabled: false }); assert.deepStrictEqual(await atOf(cutId), at0);
+    await call('PATCH', '/v1/notifications/channels/' + cutId, { enabled: true, notify_recovered: true }); assert.deepStrictEqual(await atOf(cutId), at0, 'same value');
+    await sleep(30);
+    await call('PATCH', '/v1/notifications/channels/' + cutId, { notify_recovered: false }); const at1 = await atOf(cutId); assert.ok(at1 > at0, 'moved by a new value');
+    await sleep(30);
+    await call('PATCH', '/v1/notifications/channels/' + cutId, { notify_recovered: true }); const at2 = await atOf(cutId); assert.ok(at2 > at1);
+    assert.strictEqual(await rec.enqueue(TENANT), 0, 'the alert from before is still before the cut-off');
+    await call('PATCH', '/v1/notifications/channels/' + cutId, { notify_recovered: null }); assert.strictEqual(await atOf(cutId), null);
+    process.env.ASIX_NOTIFY_RECOVERED = 'true';
+    assert.strictEqual(await rec.enqueue(TENANT), 1, 'following the server setting: no cut-off, the older alert is queued');
+    assert.strictEqual((await recRows(oldA)).length, 1);
+    delete process.env.ASIX_NOTIFY_RECOVERED;
     console.log('notify-recovered-channel-db: all checks passed');
   } finally {
     srv.close();

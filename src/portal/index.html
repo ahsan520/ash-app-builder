@@ -901,7 +901,7 @@ function openChannelDialog(c) {
   };
   const m = openModal(el('h2', { textContent: isNew ? 'Add notification channel' : 'Edit channel: ' + c.name }),
     el('div', { className: 'row2' }, el('div', {}, fld('Name *', name), fld('Channel type', type)), el('div', {}, fld('Notify when severity is', sev), fld('Only rules whose name contains', rf))),
-    typed, fld('Resolved messages', rec, 'When ASIX closes one of its own alerts (a collector is back), tell this channel it is over. \"Follow the server setting\" uses ASIX_NOTIFY_RECOVERED.'),
+    typed, fld('Resolved messages', rec, 'When ASIX closes one of its own alerts (for example a collector is back), send this channel a Resolved message. \"Follow the server setting\" stays off until the server is set to send them. Always / Never apply to alerts closed after you save.'),
     el('label', { className: 'fld', style: 'flex-direction:row;align-items:center;gap:8px' }, en, 'Enabled'), err);
   const save = el('button', { className: 'btn pri', textContent: 'Save', onclick: async () => {
     err.textContent = ''; save.disabled = true;

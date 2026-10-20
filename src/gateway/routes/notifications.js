@@ -42,8 +42,8 @@ router.post('/v1/notifications/channels', ...guarded('notify:write'), async (req
     const config = notifyCh.normalizeConfig(b.type, b.config);
     const enc = notifyBox.encrypt(config);
     const r = await db.withTenant(req.tenant_id, (c) => c.query(
-      `INSERT INTO notification_channels (tenant_id, name, type, enabled, min_severity, rule_filter, config_enc, notify_recovered)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`, [req.tenant_id, common.name, b.type, common.enabled, common.min_severity, common.rule_filter, enc, common.notify_recovered]));
+      `INSERT INTO notification_channels (tenant_id, name, type, enabled, min_severity, rule_filter, config_enc, notify_recovered, notify_recovered_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8, CASE WHEN $8::boolean IS NULL THEN NULL ELSE localtimestamp END) RETURNING id`, [req.tenant_id, common.name, b.type, common.enabled, common.min_severity, common.rule_filter, enc, common.notify_recovered]));
     const row = (await db.withTenant(req.tenant_id, (c) => c.query(`${CHANNEL_SELECT} WHERE c.id = $1`, [r.rows[0].id]))).rows[0];
     res.status(201).json({ success: true, channel: publicChannel(row) });
   } catch (e) { notifyError(res, e, 'Failed to create channel'); }
@@ -59,7 +59,9 @@ router.patch('/v1/notifications/channels/:id', ...guarded('notify:write'), async
     let enc = cur.config_enc;
     if (b.config !== undefined) enc = notifyBox.encrypt(notifyCh.normalizeConfig(cur.type, b.config, notifyBox.decrypt(cur.config_enc)));
     await db.withTenant(req.tenant_id, (c) => c.query(
-      `UPDATE notification_channels SET name=$2, enabled=$3, min_severity=$4, rule_filter=$5, config_enc=$6, notify_recovered=$8, updated_at=localtimestamp WHERE id=$1 AND tenant_id=$7`,
+      `UPDATE notification_channels SET name=$2, enabled=$3, min_severity=$4, rule_filter=$5, config_enc=$6, notify_recovered=$8,
+         notify_recovered_at = CASE WHEN $8::boolean IS NULL THEN NULL WHEN $8::boolean IS DISTINCT FROM notify_recovered THEN localtimestamp ELSE notify_recovered_at END,
+         updated_at=localtimestamp WHERE id=$1 AND tenant_id=$7`,
       [cur.id, common.name, common.enabled, common.min_severity, common.rule_filter, enc, req.tenant_id, common.notify_recovered]));
     const row = (await db.withTenant(req.tenant_id, (c) => c.query(`${CHANNEL_SELECT} WHERE c.id = $1`, [cur.id]))).rows[0];
     res.status(200).json({ success: true, channel: publicChannel(row) });

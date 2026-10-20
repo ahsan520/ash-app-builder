@@ -13,7 +13,8 @@
 // tool). An alert an analyst closed by hand has no such note, so it sends nothing. Called from the dispatcher cycle.
 //
 // Off until ASIX_NOTIFY_RECOVERED is "true" (k8s/30-asix-api.yaml), so deploying this changes nothing by itself. A channel can
-// override that: notification_channels.notify_recovered is NULL (follow the variable), true (always) or false (never).
+// override that: notification_channels.notify_recovered is NULL (follow the variable), true (always) or false (never); a channel
+// set to true or false is only told about alerts closed after that setting was made (notify_recovered_at).
 
 const db = require('../db');
 const box = require('./secret-box');
@@ -46,6 +47,7 @@ async function enqueue(tenantId, env = process.env) {
      FROM alerts a
      JOIN notification_deliveries d ON d.alert_id = a.id AND d.tenant_id = a.tenant_id AND d.status = 'sent'
      JOIN notification_channels c ON c.id = d.channel_id AND c.enabled AND COALESCE(c.notify_recovered, $2::boolean)
+       AND (c.notify_recovered_at IS NULL OR a.updated_at >= c.notify_recovered_at)   -- a channel switched on later hears only about alerts closed after that
      WHERE a.tenant_id = $1 AND a.status = 'closed' AND a.rule_id IS NULL AND a.merged_into_id IS NULL
        AND a.updated_at > localtimestamp - interval '1 day'
        AND ${ASIX_NOTE}

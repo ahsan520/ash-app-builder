@@ -619,6 +619,9 @@ data:
     -- Per-channel switch for "Resolved" messages: NULL = follow ASIX_NOTIFY_RECOVERED (the old, tenant-wide behaviour),
     -- true = this channel gets them even when the variable is off, false = this channel never gets them.
     ALTER TABLE notification_channels ADD COLUMN IF NOT EXISTS notify_recovered BOOLEAN;
+    -- When a channel was last set to true/false: a channel set to "always" is told only about alerts ASIX closed AFTER this moment.
+    -- NULL for a channel that follows the server setting (no cut-off, as before).
+    ALTER TABLE notification_channels ADD COLUMN IF NOT EXISTS notify_recovered_at TIMESTAMP;
 
     -- ============================================================
     -- Storage & retention
