@@ -435,6 +435,7 @@ The event time should be the sender's real time converted to UTC, close to the r
 ## Getting an alert when a broker goes quiet
 A broker that stops (Vector down, VM off, network cut) shows as Disconnected on the Collectors and Brokers pages, but nothing tells you unless you look. On the
 Collectors page, press **Alert if down** on the broker's row: ASIX then raises a `Collector disconnected: <broker name>` alert (severity high) once the broker has
+The Brokers page's **Alert if down** column shows the same state: **On** (this broker's own button), **On (all)** (covered by **Watch everything**), **Left out** or **Off**.
 been silent longer than its connected threshold, and closes it when the broker's heartbeat returns. Add a notification channel (Settings, Notifications) to be told
 by email, Slack or webhook. It is off until you press the button; a slow or rarely used broker should get a longer threshold first (**Threshold** button). Details:
 `docs/product-plan.md`, "Collector disconnect alerts".

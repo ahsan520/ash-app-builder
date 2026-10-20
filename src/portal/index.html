@@ -1358,7 +1358,7 @@ async function pgBrokers() {
       { h: 'Syslog port', f: brokerConfigCell }, { h: 'TLS port', f: brokerTlsCell }, { h: 'Config check', f: brokerSignatureCell },
       { h: 'OS', f: (b) => b.os || '-' }, { h: 'IP address', f: (b) => b.last_ip || '-' },
       { h: 'Last seen (UTC)', f: (b) => when(b.last_seen) }, { h: 'Events (24h)', f: (b) => b.events_24h.toLocaleString() },
-      { h: 'Alert if down', f: (b) => pill(b.watch_disconnect ? 'On' : 'Off', b.watch_disconnect ? 'ok' : 'off') },
+      { h: 'Alert if down', f: (b) => (b.watch_disconnect ? pill('On', 'ok') : b.watch_disconnect_by_default ? pill('On (all)', 'ok') : b.watch_exclude ? pill('Left out', 'off') : pill('Off', 'off')) },
       { h: 'Installer', f: (b) => (b.installer ? b.installer.name + (b.installer.status === 'revoked' ? ' (revoked)' : '') : 'deleted') },
       { h: 'Needs attention', f: (b) => (b.problems.length ? el('span', { style: 'color:var(--bad,#c33)', textContent: b.problems.join(' ') }) : '') },
       { h: '', f: (b) => el('span', {}, el('button', { className: 'btn', textContent: 'Port', title: 'Set a syslog port for this broker alone', onclick: () => brokerPortEdit(b) }), ' ', el('button', { className: 'btn', textContent: 'TLS port', title: 'Set a syslog-over-TLS port for this broker alone', onclick: () => brokerTlsPortEdit(b) }), ' ', el('button', { className: 'btn', textContent: b.config && b.config.excluded ? 'Follow port' : 'Leave out', title: b.config && b.config.excluded ? 'Ask this broker for the tenant-wide syslog port again' : 'Keep this broker off the tenant-wide syslog port', onclick: () => brokerPortExclude(b) }), ' ', el('button', { className: 'btn', textContent: 'Rotate key', onclick: () => rotateBrokerKey(b) })) },

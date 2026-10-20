@@ -4,6 +4,7 @@
 // This file recognises those rows and shapes them for the Brokers page. Pure functions, no database.
 const { effectiveMinutes, isCustom, statusOf, tsMs } = require('../collectors/status');
 const { upgradeState } = require('./upgrade');
+const watchAll = require('../collectors/watch-all');
 const { configState, tlsState, effectivePort, portSource, effectiveTlsPort, tlsSource, signatureState, SIGNATURE_HELP } = require('./config');
 
 const BROKER_VERSION_SQL = 'vector-%';              // the same rule as isBroker(), for the query
@@ -21,7 +22,7 @@ function problemsOf(b, now = Date.now()) {
   return out;
 }
 
-function shape(row, { now = Date.now(), events24h = 0, target = null, syslogPort = null, signingOn = false, tlsPort = null } = {}) {
+function shape(row, { now = Date.now(), events24h = 0, target = null, syslogPort = null, signingOn = false, tlsPort = null, watchDefaults = watchAll.OFF } = {}) {
   const b = {
     id: row.id, name: row.name, alias: row.alias || null,
     vector_version: String(row.version || '').replace(/^vector-/i, '') || null,
@@ -30,6 +31,8 @@ function shape(row, { now = Date.now(), events24h = 0, target = null, syslogPort
     events_total: Number(row.events_total) || 0, events_24h: events24h,
     connected_within_min: effectiveMinutes(row.connected_within_min), connected_custom: isCustom(row.connected_within_min),
     status: statusOf(row.last_seen, row.connected_within_min, now), watch_disconnect: row.watch_disconnect === true,
+    // Covered by the tenant-wide "Watch everything" switch rather than by its own button, or left out of that switch (same rules as the Collectors page).
+    watch_disconnect_by_default: watchAll.disconnectByDefault(row, watchDefaults, now), watch_exclude: row.watch_exclude === true,
     installer: row.key_id ? { id: row.key_id, name: row.installer_name || null, status: row.key_status || 'active', key_prefix: row.key_prefix || null, last_used_at: row.key_last_used_at || null } : null,
   };
   b.problems = problemsOf(b, now);
