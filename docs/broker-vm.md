@@ -207,17 +207,29 @@ If chrony keeps drifting, make it step big errors by itself (add `makestep 1 -1`
 
 ## Heartbeat API
 - `POST /v1/ingest/heartbeat` with `Authorization: Bearer asix_ik_...`. Optional JSON
-  `{"collector":{"name","platform","os","version"}}` or the `X-ASIX-*` headers used by the HTTP lane; the name
+  `{"collector":{"name","platform","os","version","inputs"}}` or the `X-ASIX-*` headers used by the HTTP lane; the name
   defaults to the key's name. Creates or refreshes the collector row (`last_seen`), writes no event and no audit
-  row. Limit: 30 per minute per key (`HEARTBEAT_RATE_PER_MIN`).
+  row. Limit: 30 per minute per key (`HEARTBEAT_RATE_PER_MIN`). `inputs` is optional text such as `syslog:514,syslog-tls:6514,file,http:8088`
+  (see "Which inputs a broker runs"); nothing usable in it keeps the stored value.
 - `POST /v1/ingest/heartbeat/broker` with the shared `BROKER_INGEST_TOKEN` and
   `{"tenant_id" | "tenant_name", "collector_id", "version"}`. Used by the in-cluster syslog collector
   (`src/ingestion/syslog-server.js` sends it every 60 s; `SYSLOG_HEARTBEAT_SECONDS=0` turns it off,
   `INGEST_HEARTBEAT_URL` overrides the address). The row is key-less, which the Collectors page shows as
   **built-in**, merged with the event counts it already derived from events.
 
+## Which inputs a broker runs (done 2026-10-21)
+**The gap it closes:** with files and HTTP/JSON added, nothing on the Brokers page showed which inputs a broker actually had. They are on only while their flag is given to the bootstrap script, and a re-run without the flag turns them off.
+
+**What you see:** Settings, Brokers, column **Inputs**: **Syslog 514**, **Syslog TLS 6514**, **Log files**, **HTTP/JSON 8088** (**HTTPS/JSON** with `--http-tls`). A dash means the broker has not said (its heartbeat script is older). Information only: no alert, no "needs attention" line.
+
+**Where it comes from:** the heartbeat script reads the broker's own `/etc/asix-broker/broker.env` every minute: syslog is always listed (port `ASIX_SYSLOG_PORT`, default 514); TLS, files and HTTP only when `VECTOR_CONFIG` lists `vector-tls.yaml`, `vector-file.yaml` or `vector-http.yaml`. The file glob and the HTTP user are never sent. A port moved by the config pull shows here about a minute after the broker applies it. It reports what the config lists, not what Vector is bound to: for that, `ss -tln` on the broker.
+
+**Needs the new `asix-broker-heartbeat.sh` on each broker** (and the schema job on ASIX, which a normal deploy runs): re-run the bootstrap from the updated checkout as in "Updating a broker after an ASIX deploy", with `--no-install` and every flag again (including `--file-glob` and `--http-user`, or the re-run removes those inputs). Until then the broker shows a dash.
+
+**Checked:** `tests/broker-inputs-report.test.js` (the real heartbeat script with `vector` and `curl` stubbed, the text check, the page cell) and `tests/broker-inputs-report-db.test.js` (real PostgreSQL 16, the real heartbeat and brokers routes). Not yet run on broker-1.
+
 ## Limits and not built yet
-- One syslog port for UDP and TCP, plus the optional TLS port. No non-syslog sources (files, Windows events, Kafka) on the broker yet.
+- One syslog port for UDP and TCP, plus the optional TLS port. Files and HTTP/JSON are optional extra inputs ("More inputs: files and HTTP"); no Windows events, journald or Kafka on the broker yet.
   TLS certificates are not renewed or reloaded for you (re-run the script after replacing them).
 - The portal has a read-only **Brokers** page (Settings, Brokers: status, Vector version, events in 24 hours, installer key state, what needs attention, and the
   command to add a broker). It cannot push a change to a broker: the only config is the syslog port brokers can pull (see "Config from ASIX" below; a broker can be set to accept it only with ASIX's signature, see "Signed config"), there is no remote upgrade (it shows which brokers are behind a target Vector version and gives the command, see "Upgrading Vector" below) and no capacity view. A broker is recognised by its heartbeat's

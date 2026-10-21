@@ -5,6 +5,7 @@
 const { effectiveMinutes, isCustom, statusOf, tsMs } = require('../collectors/status');
 const { upgradeState } = require('./upgrade');
 const watchAll = require('../collectors/watch-all');
+const { listInputs } = require('./inputs');
 const { configState, tlsState, effectivePort, portSource, effectiveTlsPort, tlsSource, signatureState, SIGNATURE_HELP } = require('./config');
 
 const BROKER_VERSION_SQL = 'vector-%';              // the same rule as isBroker(), for the query
@@ -35,6 +36,7 @@ function shape(row, { now = Date.now(), events24h = 0, target = null, syslogPort
     watch_disconnect_by_default: watchAll.disconnectByDefault(row, watchDefaults, now), watch_exclude: row.watch_exclude === true,
     installer: row.key_id ? { id: row.key_id, name: row.installer_name || null, status: row.key_status || 'active', key_prefix: row.key_prefix || null, last_used_at: row.key_last_used_at || null } : null,
   };
+  b.inputs = listInputs(row.inputs);   // [{kind, port}] as the broker's heartbeat said, or null when it never has (older script); not a problem
   b.problems = problemsOf(b, now);
   b.upgrade = upgradeState(b.vector_version, target);   // none | unknown | current | behind | ahead (src/brokers/upgrade.js); not a problem
   // The port asked of THIS broker: its own if one was set on the Brokers page, else the tenant-wide one (src/brokers/config.js).

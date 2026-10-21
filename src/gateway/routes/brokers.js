@@ -16,7 +16,7 @@ router.get('/v1/brokers', ...guarded('collectors:read'), async (req, res) => {
   try {
     const reg = await db.withTenant(req.tenant_id, (client) => client.query(
       `SELECT c.id, c.name, c.alias, c.os, c.version, c.last_ip, c.first_seen, c.last_seen, c.events_total::bigint AS events_total,
-              c.connected_within_min, c.watch_disconnect, c.watch_exclude, c.config_syslog_port, c.config_rejected_port, c.config_reported_at, c.config_signature, c.config_tls_port, c.config_rejected_tls_port, c.syslog_port_override, c.syslog_port_exclude, c.tls_port_override, c.key_id, k.name AS installer_name, k.status AS key_status, k.key_prefix, k.last_used_at AS key_last_used_at
+              c.connected_within_min, c.watch_disconnect, c.watch_exclude, c.config_syslog_port, c.config_rejected_port, c.config_reported_at, c.config_signature, c.config_tls_port, c.config_rejected_tls_port, c.syslog_port_override, c.syslog_port_exclude, c.tls_port_override, c.inputs, c.key_id, k.name AS installer_name, k.status AS key_status, k.key_prefix, k.last_used_at AS key_last_used_at
        FROM collectors c LEFT JOIN ingestion_keys k ON k.id = c.key_id
        WHERE c.tenant_id = $1 AND c.version ILIKE $2 ORDER BY c.name`, [req.tenant_id, view.BROKER_VERSION_SQL]));
     let day = []; let countsError = null;

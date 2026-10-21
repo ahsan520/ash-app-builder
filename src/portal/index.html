@@ -1337,6 +1337,16 @@ function brokerTlsSummary(sum) {
     asked ? (sum.tls_not_applied ? pill(sum.tls_applied + ' of ' + asked + ' applied', 'bad') : pill('All ' + asked + ' applied', 'ok')) : '',
     sum.tls_no_listener ? el('span', { className: 'mute', textContent: sum.tls_no_listener + ' without a TLS listener' }) : '');
 }
+// ---- Broker inputs report ----
+// The inputs a broker says it runs (b.inputs from GET /v1/brokers; src/brokers/inputs.js): syslog, syslog over TLS, log files, HTTP/JSON, each with its port where
+// it has one. Reported by the broker's heartbeat. Information only: not a problem, no alert. A broker with an older heartbeat script says nothing.
+const BROKER_INPUT_LABEL = { syslog: 'Syslog', 'syslog-tls': 'Syslog TLS', file: 'Log files', http: 'HTTP/JSON', https: 'HTTPS/JSON' };
+function brokerInputsCell(b) {
+  const list = b && Array.isArray(b.inputs) ? b.inputs : null;
+  if (!list) return el('span', { className: 'mute', title: 'This broker has not said which inputs it runs. Its heartbeat script is older: copy the new one and re-run the bootstrap script (docs/broker-vm.md, Updating a broker after an ASIX deploy).', textContent: '-' });
+  return el('span', { style: 'display:inline-flex;gap:6px;flex-wrap:wrap' },
+    list.map((i) => pill((BROKER_INPUT_LABEL[i.kind] || i.kind) + (i.port ? ' ' + i.port : ''), 'ok')));
+}
 // Read-only: the broker VMs that report to this install (docs/broker-vm.md), and the command to add one.
 async function pgBrokers() {
   const r = await api('/v1/brokers'), s = r.summary;
@@ -1355,7 +1365,7 @@ async function pgBrokers() {
       { h: 'Name', f: (b) => b.name + (b.alias ? ' (' + b.alias + ')' : '') },
       { h: 'Status', f: (b) => pill(b.status === 'connected' ? '\u2713 Connected' : '\u2715 Disconnected', b.status === 'connected' ? 'ok' : 'off') },
       { h: 'Vector', f: (b) => b.vector_version || '-' }, { h: 'Upgrade', f: (b) => (UPGRADE_PILL[b.upgrade] ? UPGRADE_PILL[b.upgrade](r.vector_target) : '-') },
-      { h: 'Syslog port', f: brokerConfigCell }, { h: 'TLS port', f: brokerTlsCell }, { h: 'Config check', f: brokerSignatureCell },
+      { h: 'Inputs', f: brokerInputsCell }, { h: 'Syslog port', f: brokerConfigCell }, { h: 'TLS port', f: brokerTlsCell }, { h: 'Config check', f: brokerSignatureCell },
       { h: 'OS', f: (b) => b.os || '-' }, { h: 'IP address', f: (b) => b.last_ip || '-' },
       { h: 'Last seen (UTC)', f: (b) => when(b.last_seen) }, { h: 'Events (24h)', f: (b) => b.events_24h.toLocaleString() },
       { h: 'Alert if down', f: (b) => (b.watch_disconnect ? pill('On', 'ok') : b.watch_disconnect_by_default ? pill('On (all)', 'ok') : b.watch_exclude ? pill('Left out', 'off') : pill('Off', 'off')) },

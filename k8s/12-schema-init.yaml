@@ -492,6 +492,8 @@ data:
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS config_tls_port INTEGER CHECK (config_tls_port IS NULL OR config_tls_port BETWEEN 0 AND 65535);
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS config_rejected_tls_port INTEGER CHECK (config_rejected_tls_port IS NULL OR config_rejected_tls_port BETWEEN 1 AND 65535);
     -- A syslog port for ONE broker, set from the Brokers page; it wins over the tenant-wide broker_settings.syslog_port (src/brokers/config.js). NULL = use the tenant-wide value.
+    -- The inputs a broker says it runs (its heartbeat; src/brokers/inputs.js): "syslog:514,syslog-tls:6514,file,http:8088". Information only. NULL = never said (older script).
+    ALTER TABLE collectors ADD COLUMN IF NOT EXISTS inputs TEXT CHECK (inputs IS NULL OR length(inputs) <= 200);
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS syslog_port_override INTEGER CHECK (syslog_port_override IS NULL OR syslog_port_override BETWEEN 1 AND 65535);
     -- Left out of the tenant-wide syslog port (src/brokers/config.js): the broker is told no port and keeps what it has. An own port (above) still applies.
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS syslog_port_exclude BOOLEAN NOT NULL DEFAULT false;

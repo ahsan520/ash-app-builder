@@ -15,6 +15,7 @@ const express = require('express');
 const db = require('../db');
 const { hashKey, KEY_PREFIX, PLATFORMS } = require('./http-ingest');
 const { brokerAuthMiddleware } = require('../gateway/middleware');
+const { parseInputs } = require('../brokers/inputs');
 
 const NAME_RE = /^[A-Za-z0-9._:-]{1,100}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -85,16 +86,19 @@ router.post('/v1/ingest/heartbeat', authKey, small, async (req, res) => {
   const key = req.ingestKey;
   const d = describeBeat(req.headers, req.body, key.name, key.platform);
   if (d.error) return err(res, 400, 'HEARTBEAT_INVALID_COLLECTOR', d.error);
+  // What a broker says it runs (src/brokers/inputs.js). Optional and information only: nothing usable, or an older script, leaves the stored value alone.
+  const inputs = parseInputs(req.body && req.body.collector ? req.body.collector.inputs : null);
   try {
     await db.withTenant(key.tenant_id, async (client) => {
       await client.query(
-        `INSERT INTO collectors (tenant_id, key_id, name, platform, os, version, last_ip, events_total)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 0)
+        `INSERT INTO collectors (tenant_id, key_id, name, platform, os, version, last_ip, events_total, inputs)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8)
          ON CONFLICT (tenant_id, name) DO UPDATE SET
            key_id = EXCLUDED.key_id, platform = COALESCE(EXCLUDED.platform, collectors.platform),
            os = COALESCE(EXCLUDED.os, collectors.os), version = COALESCE(EXCLUDED.version, collectors.version),
+           inputs = COALESCE(EXCLUDED.inputs, collectors.inputs),
            last_ip = EXCLUDED.last_ip, last_seen = localtimestamp`,
-        [key.tenant_id, key.id, d.name, d.platform, d.os, d.version, clientIp(req)]);
+        [key.tenant_id, key.id, d.name, d.platform, d.os, d.version, clientIp(req), inputs]);
       await client.query('UPDATE ingestion_keys SET last_used_at = localtimestamp WHERE id = $1', [key.id]);
     });
     res.status(200).json({ success: true, interval_seconds: INTERVAL_S });
