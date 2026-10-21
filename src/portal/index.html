@@ -1338,9 +1338,9 @@ function brokerTlsSummary(sum) {
     sum.tls_no_listener ? el('span', { className: 'mute', textContent: sum.tls_no_listener + ' without a TLS listener' }) : '');
 }
 // ---- Broker inputs report ----
-// The inputs a broker says it runs (b.inputs from GET /v1/brokers; src/brokers/inputs.js): syslog, syslog over TLS, log files, HTTP/JSON, each with its port where
+// The inputs a broker says it runs (b.inputs from GET /v1/brokers; src/brokers/inputs.js): syslog, syslog over TLS, log files, HTTP/JSON, the systemd journal, each with its port where
 // it has one. Reported by the broker's heartbeat. Information only: not a problem, no alert. A broker with an older heartbeat script says nothing.
-const BROKER_INPUT_LABEL = { syslog: 'Syslog', 'syslog-tls': 'Syslog TLS', file: 'Log files', http: 'HTTP/JSON', https: 'HTTPS/JSON' };
+const BROKER_INPUT_LABEL = { syslog: 'Syslog', 'syslog-tls': 'Syslog TLS', file: 'Log files', http: 'HTTP/JSON', https: 'HTTPS/JSON', journald: 'Journal' };
 function brokerInputsCell(b) {
   const list = b && Array.isArray(b.inputs) ? b.inputs : null;
   if (!list) return el('span', { className: 'mute', title: 'This broker has not said which inputs it runs. Its heartbeat script is older: copy the new one and re-run the bootstrap script (docs/broker-vm.md, Updating a broker after an ASIX deploy).', textContent: '-' });

@@ -8,6 +8,7 @@
 #       [--tls-cert server.crt --tls-key server.key [--tls-port 6514] [--tls-client-ca ca.pem]] [--accept-config [--config-pubkey config-signing.pub]]
 #       [--timezone America/Toronto]
 #       [--file-glob '/var/log/myapp/*.log'] [--http-user svc --http-password-file /root/http.pw [--http-port 8088] [--http-tls]]
+#       [--journald [--journald-priority 6]]
 #
 # --timezone       The time zone (IANA name, default UTC) that senders write in on syslog lines that carry none (RFC 3164). Vector reads those as
 #                  UTC, so a sender in another zone shows hours off in search and detections. Written as ASIX_SYSLOG_TIMEZONE. Like every option here it
@@ -19,6 +20,11 @@
 #   --http-password-file  a file holding the password on ONE line (12 to 128 of letters, digits and . _ ~ @ % + = : , - ; not on the command
 #                  line, where `ps` would show it). Both are needed together. --http-port changes 8088. --http-tls serves HTTPS with the
 #                  certificate of --tls-cert/--tls-key (needs them). Installs vector-http.yaml; re-running without them turns it off.
+# --journald       Also read the systemd JOURNAL of this machine (sshd, sudo, cron, the kernel, every service that logs through systemd) and send
+#                  each new entry to ASIX with source type "journald". Adds the vector user to the systemd-journal group so it may read the journal.
+#                  Installs vector-journald.yaml; re-running without it turns journal reading off again (the group membership stays).
+#   --journald-priority N  With --journald: send only entries at least this important, N from 0 (emerg) to 7 (debug); default 6 (everything but
+#                  debug), 4 is warnings and worse. Written as ASIX_JOURNALD_MAX_PRIORITY.
 # --no-install     Vector is already installed (offline or pinned install); skip the package repo.
 # --tls-cert/key   Also accept syslog over TLS (RFC 5425) on --tls-port (default 6514), with this server certificate.
 #                  Both are needed together. Re-running without them turns the TLS listener off again.
@@ -33,7 +39,7 @@
 
 set -euo pipefail
 
-URL=""; KEY=""; NAME=""; PORT="514"; CA=""; INSTALL=1; TLS_CERT=""; TLS_KEY=""; TLS_PORT="6514"; TLS_CLIENT_CA=""; ACCEPT_CONFIG=0; CONFIG_PUBKEY=""; TIMEZONE="UTC"; FILE_GLOB=""; HTTP_USER=""; HTTP_PW_FILE=""; HTTP_PORT="8088"; HTTP_TLS=0
+URL=""; KEY=""; NAME=""; PORT="514"; CA=""; INSTALL=1; TLS_CERT=""; TLS_KEY=""; TLS_PORT="6514"; TLS_CLIENT_CA=""; ACCEPT_CONFIG=0; CONFIG_PUBKEY=""; TIMEZONE="UTC"; FILE_GLOB=""; HTTP_USER=""; HTTP_PW_FILE=""; HTTP_PORT="8088"; HTTP_TLS=0; JOURNALD=0; JOURNALD_PRIORITY="6"
 while [ $# -gt 0 ]; do
   case "$1" in
     --url) URL="$2"; shift 2;;
@@ -54,6 +60,8 @@ while [ $# -gt 0 ]; do
     --http-password-file) HTTP_PW_FILE="$2"; shift 2;;
     --http-port) HTTP_PORT="$2"; shift 2;;
     --http-tls) HTTP_TLS=1; shift;;
+    --journald) JOURNALD=1; shift;;
+    --journald-priority) JOURNALD_PRIORITY="$2"; shift 2;;
     *) echo "Unknown option: $1" >&2; exit 2;;
   esac
 done
@@ -92,6 +100,17 @@ if [ -n "$CONFIG_PUBKEY" ]; then
     openssl pkey -pubin -in "$k" -noout -text 2>/dev/null | grep -q 'prime256v1\|P-256' || { echo "A key in $CONFIG_PUBKEY is not an EC P-256 public key." >&2; exit 2; }
   done
 fi
+
+# Extra input: the systemd journal. Checked before anything is written.
+JOURNALD_CFG=""   # the config file to validate; empty (not "0") when the journal is not read
+if [ "$JOURNALD" -eq 1 ]; then
+  JOURNALD_CFG="/etc/vector/vector-journald.yaml"
+  [[ "$JOURNALD_PRIORITY" =~ ^[0-7]$ ]] || { echo "--journald-priority must be a number from 0 (emerg) to 7 (debug)." >&2; exit 2; }
+  command -v journalctl >/dev/null 2>&1 || { echo "--journald needs journalctl on this machine (a systemd distribution)." >&2; exit 2; }
+elif [ "$JOURNALD_PRIORITY" != "6" ]; then
+  echo "--journald-priority only makes sense with --journald." >&2; exit 2
+fi
+# (end of the journal checks)
 
 # Extra inputs: files and HTTP. Checked before anything is written; the values go into broker.env and into a quoted YAML string, so only plain characters.
 if [ -n "$FILE_GLOB" ]; then
@@ -163,6 +182,7 @@ fi
     fi
   fi
   [ -z "$FILE_GLOB" ] || echo "ASIX_FILE_GLOB=$FILE_GLOB"
+  [ "$JOURNALD" -eq 0 ] || echo "ASIX_JOURNALD_MAX_PRIORITY=$JOURNALD_PRIORITY"
   if [ -n "$HTTP_USER" ]; then
     echo "ASIX_HTTP_USER=$HTTP_USER"
     echo "ASIX_HTTP_PASSWORD=$HTTP_PW"
@@ -174,6 +194,7 @@ fi
   [ -z "$TLS_CERT" ] || CONFIGS="$CONFIGS,/etc/vector/vector-tls.yaml"
   [ -z "$FILE_GLOB" ] || CONFIGS="$CONFIGS,/etc/vector/vector-file.yaml"
   [ -z "$HTTP_USER" ] || CONFIGS="$CONFIGS,/etc/vector/vector-http.yaml"
+  [ "$JOURNALD" -eq 0 ] || CONFIGS="$CONFIGS,/etc/vector/vector-journald.yaml"
   [ "$CONFIGS" = "/etc/vector/vector.yaml" ] || echo "VECTOR_CONFIG=$CONFIGS"
 } > /etc/asix-broker/broker.env
 chown root:vector /etc/asix-broker/broker.env; chmod 640 /etc/asix-broker/broker.env
@@ -196,12 +217,23 @@ if [ -n "$HTTP_USER" ]; then
 else
   rm -f /etc/vector/vector-http.yaml   # re-run without --http-user: the HTTP listener is gone
 fi
+if [ "$JOURNALD" -eq 1 ]; then
+  install -m 644 "$SRC/vector-journald.yaml" /etc/vector/vector-journald.yaml
+  # Reading the journal needs the systemd-journal group. Vector is restarted below, which is what picks the new group up.
+  if getent group systemd-journal >/dev/null 2>&1; then
+    id -nG vector 2>/dev/null | tr ' ' '\n' | grep -qx systemd-journal || usermod -aG systemd-journal vector
+  else
+    echo "   note: no systemd-journal group on this machine; make sure the vector user can read the journal." >&2
+  fi
+else
+  rm -f /etc/vector/vector-journald.yaml   # re-run without --journald: the journal is no longer read (the group membership is left alone)
+fi
 install -d /etc/systemd/system/vector.service.d
 install -m 644 "$SRC/vector-asix.conf" /etc/systemd/system/vector.service.d/asix.conf
 install -d /var/lib/vector && chown vector:vector /var/lib/vector
 
 echo "-- 4. Validating the config before restarting --"
-( set -a; . /etc/asix-broker/broker.env; set +a; vector validate --no-environment ${TLS_CERT:+/etc/vector/vector-tls.yaml} ${FILE_GLOB:+/etc/vector/vector-file.yaml} ${HTTP_USER:+/etc/vector/vector-http.yaml} /etc/vector/vector.yaml )
+( set -a; . /etc/asix-broker/broker.env; set +a; vector validate --no-environment ${TLS_CERT:+/etc/vector/vector-tls.yaml} ${FILE_GLOB:+/etc/vector/vector-file.yaml} ${HTTP_USER:+/etc/vector/vector-http.yaml} ${JOURNALD_CFG} /etc/vector/vector.yaml )
 
 echo "-- 5. Heartbeat timer --"
 install -d /usr/local/lib/asix-broker
@@ -237,3 +269,4 @@ echo "Open $PORT/udp and $PORT/tcp on this VM's firewall for the devices that wi
 [ -z "$TLS_CERT" ] || echo "Syslog over TLS is on $TLS_PORT/tcp$([ -n "$TLS_CLIENT_CA" ] && echo ' (senders must present a certificate from the client CA)'): open it too. Check: openssl s_client -connect 127.0.0.1:$TLS_PORT"
 [ -z "$FILE_GLOB" ] || echo "Reading files matching $FILE_GLOB as source type 'file' (the vector user must be able to read them: ls -l, or setfacl). Watch: journalctl -u vector -n 30"
 [ -z "$HTTP_USER" ] || echo "HTTP input is on $HTTP_PORT/tcp$([ "$HTTP_TLS" -eq 1 ] && echo ' (HTTPS)' || echo ' (plain HTTP: the password travels in clear text)'): open it too. Test: curl -u $HTTP_USER:PASSWORD -H 'Content-Type: application/json' -d '{\"message\":\"hello\"}' http$([ "$HTTP_TLS" -eq 1 ] && echo s)://127.0.0.1:$HTTP_PORT/events"
+[ "$JOURNALD" -eq 0 ] || echo "Reading the systemd journal as source type 'journald' (entries at priority $JOURNALD_PRIORITY or more important; only entries written from now on). Watch: journalctl -u vector -n 30. Test: logger -t asixtest 'journald test'"

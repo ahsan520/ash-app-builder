@@ -22,13 +22,14 @@ OS="$(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-Linux}")"
 # keep the JSON trivially safe: drop quotes and backslashes from free-text values
 clean() { printf '%s' "$1" | tr -d '"\\' | cut -c1-"$2"; }
 
-# The inputs this broker runs, from the same broker.env the bootstrap script wrote: "syslog:514,syslog-tls:6514,file,http:8088".
-# A name, plus a port where there is one. A bad port is left out rather than sent. The file glob is not sent (a path has no place in a heartbeat).
+# The inputs this broker runs, from the same broker.env the bootstrap script wrote: "syslog:514,syslog-tls:6514,file,http:8088,journald".
+# A name, plus a port where there is one. A bad port is left out rather than sent. The file glob is not sent (a path has no place in a heartbeat); the journal has no setting worth sending.
 port_ok() { case "$1" in ''|*[!0-9]*) return 1;; esac; [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
 INPUTS="syslog"; port_ok "${ASIX_SYSLOG_PORT:-514}" && INPUTS="syslog:${ASIX_SYSLOG_PORT:-514}"
 case ",${VECTOR_CONFIG:-}," in *vector-tls.yaml,*) T="syslog-tls"; port_ok "${ASIX_SYSLOG_TLS_PORT:-6514}" && T="syslog-tls:${ASIX_SYSLOG_TLS_PORT:-6514}"; INPUTS="$INPUTS,$T";; esac
 case ",${VECTOR_CONFIG:-}," in *vector-file.yaml,*) INPUTS="$INPUTS,file";; esac
 case ",${VECTOR_CONFIG:-}," in *vector-http.yaml,*) H="http"; [ "${ASIX_HTTP_TLS:-}" = "true" ] && H="https"; port_ok "${ASIX_HTTP_PORT:-8088}" && H="$H:${ASIX_HTTP_PORT:-8088}"; INPUTS="$INPUTS,$H";; esac
+case ",${VECTOR_CONFIG:-}," in *vector-journald.yaml,*) INPUTS="$INPUTS,journald";; esac
 
 BODY=$(printf '{"collector":{"name":"%s","platform":"linux","os":"%s","version":"%s","inputs":"%s"}}' \
   "$(clean "$ASIX_BROKER_NAME" 100)" "$(clean "Vector broker VM (${OS})" 100)" "$(clean "vector-${VER:-unknown}" 50)" "$(clean "$INPUTS" 120)")

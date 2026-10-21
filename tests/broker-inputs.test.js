@@ -62,7 +62,7 @@ describe('broker file and HTTP inputs: the files agree', () => {
     }
     for (const f of ['deploy/broker/asix-broker-config.sh', 'scripts/deploy/upgrade-broker.sh']) {
       const s = read(f);
-      assert.match(s, /for f in vector-file\.yaml vector-http\.yaml/, f + ' validates the optional inputs too');
+      assert.match(s, /for f in vector-file\.yaml vector-http\.yaml vector-journald\.yaml/, f + ' validates the optional inputs too');
     }
   });
   it('the password goes in a file, never on the command line', () => {

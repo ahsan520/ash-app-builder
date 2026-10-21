@@ -15,9 +15,11 @@ describe('parseInputs', () => {
     assert.strictEqual(inputs.parseInputs('syslog:514,syslog-tls:6514,file,http:8088'), 'syslog:514,syslog-tls:6514,file,http:8088');
     assert.strictEqual(inputs.parseInputs(['syslog:1514', 'https:8443']), 'syslog:1514,https:8443');
     assert.strictEqual(inputs.parseInputs(' Syslog:514 , FILE '), 'syslog:514,file');
+    assert.strictEqual(inputs.parseInputs('syslog:514,file,http:8088,journald'), 'syslog:514,file,http:8088,journald');
+    assert.strictEqual(inputs.parseInputs('syslog:514,journald:99'), 'syslog:514', 'the journal has no port');
   });
   it('drops what it does not know or cannot trust, and returns null when nothing is left', () => {
-    assert.strictEqual(inputs.parseInputs('syslog:514,kafka:9092,journald'), 'syslog:514', 'unknown names are dropped, a newer broker script must not be refused');
+    assert.strictEqual(inputs.parseInputs('syslog:514,kafka:9092,winlog'), 'syslog:514', 'unknown names are dropped, a newer broker script must not be refused');
     assert.strictEqual(inputs.parseInputs('syslog:0,syslog:70000,syslog:5x14'), null, 'bad ports');
     assert.strictEqual(inputs.parseInputs('file:80'), null, 'file has no port');
     assert.strictEqual(inputs.parseInputs('syslog:514,syslog:515'), 'syslog:514', 'a name once');
@@ -27,7 +29,7 @@ describe('parseInputs', () => {
   it('is bounded: too many tokens are cut, and the stored text is never longer than the column allows', () => {
     const many = Array.from({ length: 500 }, (_, i) => 'x' + i).join(',') + ',file';
     assert.strictEqual(inputs.parseInputs(many), null, 'only the first 20 tokens are looked at');
-    const all = inputs.parseInputs('syslog:65535,syslog-tls:65535,file,http:65535,https:65535');
+    const all = inputs.parseInputs('syslog:65535,syslog-tls:65535,file,http:65535,https:65535,journald');
     assert.ok(all.length <= 200);
   });
 });
@@ -38,6 +40,7 @@ describe('listInputs and label', () => {
     for (const v of [null, undefined, '', 'garbage:1']) assert.strictEqual(inputs.listInputs(v), null, String(v));
     assert.strictEqual(inputs.label({ kind: 'syslog-tls', port: 6514 }), 'Syslog TLS 6514');
     assert.strictEqual(inputs.label({ kind: 'file', port: null }), 'Log files');
+    assert.strictEqual(inputs.label({ kind: 'journald', port: null }), 'Journal');
   });
 });
 
@@ -84,6 +87,13 @@ describe('deploy/broker/asix-broker-heartbeat.sh: what it says about the inputs'
     assert.ok(!JSON.stringify(r.body).includes('/var/log'), 'the file glob is never sent');
     assert.strictEqual(run(all + 'ASIX_HTTP_TLS=true\n').body.collector.inputs, 'syslog:514,syslog-tls:6514,file,https:8088');
   });
+  it('the journal is listed only when vector-journald.yaml is in the list, last after HTTP, with no port and no setting sent', () => {
+    assert.strictEqual(run('VECTOR_CONFIG=/etc/vector/vector.yaml,/etc/vector/vector-journald.yaml\n').body.collector.inputs, 'syslog:514,journald');
+    const r = run('ASIX_JOURNALD_MAX_PRIORITY=4\nVECTOR_CONFIG=/etc/vector/vector.yaml,/etc/vector/vector-file.yaml,/etc/vector/vector-http.yaml,/etc/vector/vector-journald.yaml\n');
+    assert.strictEqual(r.body.collector.inputs, 'syslog:514,file,http:8088,journald'); assert.ok(!/priority/i.test(JSON.stringify(r.body)), 'the priority limit is not sent');
+    assert.strictEqual(run('ASIX_JOURNALD_MAX_PRIORITY=4\nVECTOR_CONFIG=/etc/vector/vector.yaml\n').body.collector.inputs, 'syslog:514', 'a setting alone is not an input');
+    assert.strictEqual(run('VECTOR_CONFIG=/etc/vector/vector-journald.yaml.bak\n').body.collector.inputs, 'syslog:514', 'a similar name is not the file');
+  });
   it('only the files in the list count: a port variable alone is not an input', () => {
     assert.strictEqual(run('ASIX_SYSLOG_TLS_PORT=6514\nASIX_HTTP_PORT=8088\nVECTOR_CONFIG=/etc/vector/vector.yaml\n').body.collector.inputs, 'syslog:514');
     assert.strictEqual(run('VECTOR_CONFIG=/etc/vector/vector.yaml,/etc/vector/vector-file.yaml\n').body.collector.inputs, 'syslog:514,file');
@@ -94,7 +104,7 @@ describe('deploy/broker/asix-broker-heartbeat.sh: what it says about the inputs'
     assert.strictEqual(run('ASIX_SYSLOG_PORT=51x4\nASIX_SYSLOG_TLS_PORT=99999\nVECTOR_CONFIG=/etc/vector/vector-tls.yaml,\n').body.collector.inputs, 'syslog,syslog-tls');
   });
   it('the body is valid JSON for the server and every text it can send passes the server-side check unchanged', () => {
-    for (const extra of ['', 'ASIX_SYSLOG_PORT=2514\nVECTOR_CONFIG=/etc/vector/vector-tls.yaml,/etc/vector/vector-file.yaml,/etc/vector/vector-http.yaml\nASIX_HTTP_TLS=true\n']) {
+    for (const extra of ['', 'ASIX_SYSLOG_PORT=2514\nVECTOR_CONFIG=/etc/vector/vector-tls.yaml,/etc/vector/vector-file.yaml,/etc/vector/vector-http.yaml,/etc/vector/vector-journald.yaml\nASIX_HTTP_TLS=true\n']) {
       const sent = run(extra).body.collector.inputs; assert.strictEqual(inputs.parseInputs(sent), sent);
     }
   });
@@ -114,7 +124,7 @@ describe('Brokers page: Inputs cell', () => {
   const pills = (n) => (n && typeof n === 'object' ? [...(n.pill ? [n.pill] : []), ...(n.kids || []).flatMap(pills)] : []);
 
   it('one pill per input, with the port', () => {
-    assert.deepStrictEqual(pills(brokerInputsCell({ inputs: inputs.listInputs('syslog:514,syslog-tls:6514,file,https:8088') })), ['Syslog 514', 'Syslog TLS 6514', 'Log files', 'HTTPS/JSON 8088']);
+    assert.deepStrictEqual(pills(brokerInputsCell({ inputs: inputs.listInputs('syslog:514,syslog-tls:6514,file,https:8088,journald') })), ['Syslog 514', 'Syslog TLS 6514', 'Log files', 'HTTPS/JSON 8088', 'Journal']);
   });
   it('a broker that never said shows a dash with the reason in the tooltip, and nothing throws', () => {
     const c = brokerInputsCell({ inputs: null }); assert.deepStrictEqual(pills(c), []); assert.strictEqual(c.attrs.textContent, '-'); assert.match(c.attrs.title, /bootstrap/);

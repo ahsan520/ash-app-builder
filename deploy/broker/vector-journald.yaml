@@ -1,0 +1,99 @@
+# Optional extra config file: the broker also reads the systemd JOURNAL of this VM (sshd, sudo, cron, the kernel, every service that logs
+# through systemd) and sends each entry to ASIX with source type "journald". bootstrap-broker.sh installs it only when run with --journald,
+# and then starts Vector with
+#   VECTOR_CONFIG=/etc/vector/vector.yaml,/etc/vector/vector-journald.yaml        (set in broker.env; the TLS, file and HTTP files join the same list)
+#
+# The vector user must be allowed to read the journal: bootstrap-broker.sh --journald adds it to the systemd-journal group.
+# Vector runs `journalctl` itself, so the broker needs systemd's journalctl (every systemd distribution has it).
+#
+# First start: only entries written AFTER Vector started are sent (no flood of the journal's history). Vector keeps a cursor in /var/lib/vector, so a
+# restart carries on from the last entry it read: an entry written while Vector was down arrives once, nothing is sent twice.
+# Vector's own unit (vector.service) is left out on purpose: when ASIX is unreachable Vector logs about it, and reading those lines back
+# would feed the problem into the very queue that is stuck.
+#
+# Each entry becomes "ISO-time host app[pid]: message", the shape the ASIX HTTP lane already parses (host, app name, pid, event time), so nothing
+# changes on the server and the parsing rules written for syslog (sshd, sudo ...) match the same text. The time is the journal's own time stamp.
+# The app name is the entry's SYSLOG_IDENTIFIER, else the command name, else the unit name without ".service", else "journald".
+# Own parsing rules (Settings, Parsing) can be attached to the source type "journald".
+#
+# ASIX_JOURNALD_MAX_PRIORITY (0 to 7, default 6) drops the less important entries: 0 emerg, 1 alert, 2 crit, 3 err, 4 warning, 5 notice,
+# 6 info, 7 debug. The default sends everything except debug; 4 sends warnings and worse only. An entry with no priority counts as 6.
+#
+# Test without a network:   vector validate --no-environment deploy/broker/vector.yaml deploy/broker/vector-journald.yaml
+sources:
+  journald_in:
+    type: journald
+    since_now: true
+    exclude_units:
+      - vector
+
+transforms:
+  journald_to_line:
+    type: remap
+    inputs: [journald_in]
+    source: |
+      # Less important than the limit: dropped here, before anything is buffered.
+      max_priority = to_int("${ASIX_JOURNALD_MAX_PRIORITY:-6}") ?? 6
+      priority = 6
+      if exists(.PRIORITY) { priority = to_int(.PRIORITY) ?? 6 }
+      if priority > max_priority { abort }
+
+      t = timestamp(.timestamp) ?? now()
+      ts, err = format_timestamp(t, format: "%+")
+      if err != null { ts = format_timestamp!(now(), format: "%+") }
+
+      host = string(.host) ?? "unknown-host"
+      host = replace(host, r'\s+', "_")
+      if host == "" { host = "unknown-host" }
+
+      app = string(.SYSLOG_IDENTIFIER) ?? string(._COMM) ?? ""
+      if app == "" {
+        unit = string(._SYSTEMD_UNIT) ?? ""
+        app = replace(unit, r'\.service$', "")
+      }
+      app = replace(app, r'[\s:\[\]]+', "_")
+      if app == "" { app = "journald" }
+
+      tag = app
+      pid = string(._PID) ?? ""
+      pid = replace(pid, r'[^0-9]', "")
+      if pid != "" { tag = app + "[" + pid + "]" }
+
+      msg = string(.message) ?? ""
+      msg = replace(msg, r'[\r\n]+', " ")
+      if length(msg) > 8192 { msg = slice(msg, 0, 8192) ?? msg }
+
+      .message = ts + " " + host + " " + tag + ": " + msg
+
+sinks:
+  asix_journald:
+    type: http
+    inputs: [journald_to_line]
+    uri: ${ASIX_INGEST_URL}
+    method: post
+    encoding:
+      codec: text
+    framing:
+      method: newline_delimited
+    request:
+      headers:
+        Authorization: "Bearer ${ASIX_INGEST_KEY}"
+        Content-Type: text/plain
+        X-ASIX-Collector: ${ASIX_BROKER_NAME}
+        X-ASIX-Platform: linux
+        X-ASIX-Source-Type: journald
+        X-ASIX-Version: vector-broker
+      retry_attempts: 100000
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 60
+      timeout_secs: 30
+    batch:
+      max_events: 500
+      max_bytes: 900000
+      timeout_secs: 5
+    buffer:
+      type: disk
+      max_size: 536870912
+      when_full: block
+    tls:
+      ca_file: ${ASIX_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}

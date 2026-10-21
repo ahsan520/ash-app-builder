@@ -140,7 +140,7 @@ apply_env() {
   }
 
   TLS=""; [ -r "$VECTOR_DIR/vector-tls.yaml" ] && TLS="$VECTOR_DIR/vector-tls.yaml"
-  EXTRA=(); for f in vector-file.yaml vector-http.yaml; do [ -r "$VECTOR_DIR/$f" ] && EXTRA+=("$VECTOR_DIR/$f"); done   # the optional file and HTTP inputs, when installed
+  EXTRA=(); for f in vector-file.yaml vector-http.yaml vector-journald.yaml; do [ -r "$VECTOR_DIR/$f" ] && EXTRA+=("$VECTOR_DIR/$f"); done   # the optional file, HTTP and journal inputs, when installed
   ( set -a; . "$ENV_FILE"; set +a; vector validate --no-environment ${TLS:+"$TLS"} ${EXTRA[@]+"${EXTRA[@]}"} "$VECTOR_DIR/vector.yaml" ) >/dev/null 2>&1 \
     || { reject "The config does not pass 'vector validate' with $LABEL $VAL."; return 1; }
   systemctl restart vector || { reject "systemctl restart vector failed with $LABEL $VAL." restart; return 1; }
