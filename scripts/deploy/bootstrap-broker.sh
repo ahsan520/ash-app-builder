@@ -7,15 +7,16 @@
 #       --name broker-1 [--port 514] [--ca /path/to/cert.pem] [--no-install]
 #       [--tls-cert server.crt --tls-key server.key [--tls-port 6514] [--tls-client-ca ca.pem]] [--accept-config [--config-pubkey config-signing.pub]]
 #       [--timezone America/Toronto]
-#       [--file-glob '/var/log/myapp/*.log'] [--http-user svc --http-password-file /root/http.pw [--http-port 8088] [--http-tls]]
+#       [--file-glob '/var/log/myapp/*.log' [--file-glob '/srv/other/*.log' ...]] [--http-user svc --http-password-file /root/http.pw [--http-port 8088] [--http-tls]]
 #       [--journald [--journald-priority 6]]
 #
 # --timezone       The time zone (IANA name, default UTC) that senders write in on syslog lines that carry none (RFC 3164). Vector reads those as
 #                  UTC, so a sender in another zone shows hours off in search and detections. Written as ASIX_SYSLOG_TIMEZONE. Like every option here it
 #                  is only kept if given again on a re-run. RFC 5424 lines carry their own offset and are not touched.
-# --file-glob      Also read log FILES on this machine: one absolute glob (letters, digits and . _ - / * ? [ ] only). Each new line is sent to ASIX
-#                  with source type "file". The vector user must be able to read the files. Written as ASIX_FILE_GLOB; installs vector-file.yaml.
-#                  Re-running without it turns file reading off again. See docs/broker-vm.md, "More inputs: files and HTTP".
+# --file-glob      Also read log FILES on this machine: an absolute glob (letters, digits and . _ - / * ? [ ] only). Give the option again for
+#                  more globs (up to 10, the same one twice counts once). Each new line is sent to ASIX with source type "file". The vector
+#                  user must be able to read the files. Written as ASIX_FILE_GLOB (comma separated); installs vector-file.yaml with one
+#                  include line per glob. Re-running without it turns file reading off again. See docs/broker-vm.md, "More inputs: files and HTTP".
 # --http-user      Also accept events over HTTP (POST JSON to http://THIS-VM:8088/events with basic authentication), source type "http". Needs
 #   --http-password-file  a file holding the password on ONE line (12 to 128 of letters, digits and . _ ~ @ % + = : , - ; not on the command
 #                  line, where `ps` would show it). Both are needed together. --http-port changes 8088. --http-tls serves HTTPS with the
@@ -55,7 +56,7 @@ while [ $# -gt 0 ]; do
     --accept-config) ACCEPT_CONFIG=1; shift;;
     --config-pubkey) CONFIG_PUBKEY="$2"; shift 2;;
     --timezone) TIMEZONE="$2"; shift 2;;
-    --file-glob) FILE_GLOB="$2"; shift 2;;
+    --file-glob) FILE_GLOB="${FILE_GLOB:+$FILE_GLOB$'\n'}$2"; shift 2;;   # repeatable: one glob per line
     --http-user) HTTP_USER="$2"; shift 2;;
     --http-password-file) HTTP_PW_FILE="$2"; shift 2;;
     --http-port) HTTP_PORT="$2"; shift 2;;
@@ -115,7 +116,14 @@ fi
 # Extra inputs: files and HTTP. Checked before anything is written; the values go into broker.env and into a quoted YAML string, so only plain characters.
 if [ -n "$FILE_GLOB" ]; then
   GLOB_RE='^/[]A-Za-z0-9._/*?[-]+$'   # in a bracket expression "]" must come first and "-" last; a backslash is literal there
-  [[ "$FILE_GLOB" =~ $GLOB_RE && "$FILE_GLOB" != *..* ]] || { echo "--file-glob must be an absolute path glob using only letters, digits and . _ - / * ? [ ] (no spaces, no ..)." >&2; exit 2; }
+  FILE_GLOB_N=0; FILE_GLOB_SEEN=$'\n'; FILE_GLOB_UNIQ=""
+  while IFS= read -r g; do   # one glob per line (--file-glob can be given more than once); a here-string, so "exit" leaves the script
+    [[ "$g" =~ $GLOB_RE && "$g" != *..* ]] || { echo "--file-glob must be an absolute path glob using only letters, digits and . _ - / * ? [ ] (no spaces, no ..)." >&2; exit 2; }
+    case "$FILE_GLOB_SEEN" in *$'\n'"$g"$'\n'*) continue;; esac   # the same glob twice counts once
+    FILE_GLOB_SEEN="$FILE_GLOB_SEEN$g"$'\n'; FILE_GLOB_UNIQ="${FILE_GLOB_UNIQ:+$FILE_GLOB_UNIQ$'\n'}$g"; FILE_GLOB_N=$((FILE_GLOB_N + 1))
+  done <<< "$FILE_GLOB"
+  [ "$FILE_GLOB_N" -le 10 ] || { echo "--file-glob can be given at most 10 times (got $FILE_GLOB_N). Use a wider glob." >&2; exit 2; }
+  FILE_GLOB="$FILE_GLOB_UNIQ"
 fi
 HTTP_PW=""
 if [ -n "$HTTP_USER$HTTP_PW_FILE" ]; then
@@ -181,7 +189,7 @@ fi
       echo "ASIX_TLS_VERIFY_CLIENT=true"
     fi
   fi
-  [ -z "$FILE_GLOB" ] || echo "ASIX_FILE_GLOB=$FILE_GLOB"
+  [ -z "$FILE_GLOB" ] || echo "ASIX_FILE_GLOB=$(printf '%s\n' "$FILE_GLOB" | paste -sd, -)"   # all globs, comma separated: for reading; vector-file.yaml has them written out
   [ "$JOURNALD" -eq 0 ] || echo "ASIX_JOURNALD_MAX_PRIORITY=$JOURNALD_PRIORITY"
   if [ -n "$HTTP_USER" ]; then
     echo "ASIX_HTTP_USER=$HTTP_USER"
@@ -208,7 +216,14 @@ else
   rm -f /etc/vector/vector-tls.yaml; rm -rf /etc/asix-broker/tls
 fi
 if [ -n "$FILE_GLOB" ]; then
-  install -m 644 "$SRC/vector-file.yaml" /etc/vector/vector-file.yaml
+  # --- file input config: the template's one include line becomes one line per glob (Vector cannot split a list out of one variable) ---
+  FILE_CFG_TMP="$(mktemp)"
+  awk -v list="$FILE_GLOB" 'BEGIN { n = split(list, a, "\n") }
+    $0 == "      - \"${ASIX_FILE_GLOB}\"" { for (i = 1; i <= n; i++) print "      - \"" a[i] "\""; hit++; next }
+    { print }
+    END { exit (hit == 1 ? 0 : 3) }' "$SRC/vector-file.yaml" > "$FILE_CFG_TMP" || { rm -f "$FILE_CFG_TMP"; echo "vector-file.yaml has no single include line to fill in; refusing to install it." >&2; exit 1; }
+  install -m 644 "$FILE_CFG_TMP" /etc/vector/vector-file.yaml; rm -f "$FILE_CFG_TMP"
+  # --- end file input config ---
 else
   rm -f /etc/vector/vector-file.yaml   # re-run without --file-glob: files are no longer read
 fi
@@ -267,6 +282,6 @@ echo "Then check Settings > Collectors for '$NAME' (Connected)."
 echo "Open $PORT/udp and $PORT/tcp on this VM's firewall for the devices that will send syslog."
 [ "$ACCEPT_CONFIG" -eq 0 ] || echo "ASIX may now change this broker's syslog port (Brokers page)$([ -n "$CONFIG_PUBKEY" ] && echo ', but only with a signature from the key above'). Watch it: journalctl -u asix-broker-config -n 20"
 [ -z "$TLS_CERT" ] || echo "Syslog over TLS is on $TLS_PORT/tcp$([ -n "$TLS_CLIENT_CA" ] && echo ' (senders must present a certificate from the client CA)'): open it too. Check: openssl s_client -connect 127.0.0.1:$TLS_PORT"
-[ -z "$FILE_GLOB" ] || echo "Reading files matching $FILE_GLOB as source type 'file' (the vector user must be able to read them: ls -l, or setfacl). Watch: journalctl -u vector -n 30"
+[ -z "$FILE_GLOB" ] || echo "Reading files matching ${FILE_GLOB//$'\n'/, } as source type 'file' (the vector user must be able to read them: ls -l, or setfacl). Watch: journalctl -u vector -n 30"
 [ -z "$HTTP_USER" ] || echo "HTTP input is on $HTTP_PORT/tcp$([ "$HTTP_TLS" -eq 1 ] && echo ' (HTTPS)' || echo ' (plain HTTP: the password travels in clear text)'): open it too. Test: curl -u $HTTP_USER:PASSWORD -H 'Content-Type: application/json' -d '{\"message\":\"hello\"}' http$([ "$HTTP_TLS" -eq 1 ] && echo s)://127.0.0.1:$HTTP_PORT/events"
 [ "$JOURNALD" -eq 0 ] || echo "Reading the systemd journal as source type 'journald' (entries at priority $JOURNALD_PRIORITY or more important; only entries written from now on). Watch: journalctl -u vector -n 30. Test: logger -t asixtest 'journald test'"

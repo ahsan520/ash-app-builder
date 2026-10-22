@@ -2,6 +2,7 @@
 // The broker's optional file and HTTP inputs (deploy/broker/vector-file.yaml, vector-http.yaml; bootstrap-broker.sh --file-glob, --http-user ...).
 //   1. static checks that the files, broker.env.example and the bootstrap script agree (always run);
 //   2. the bootstrap script's own validation block, run in bash with nothing installed or written (always run);
+//      More than one --file-glob: the flag collects them, the block checks each one, and the generated vector-file.yaml has one include line per glob.
 //   3. with a real Vector binary (VECTOR_BIN, or `vector` on PATH; written against 0.59.0) the configs are validated and run: a file is
 //      appended to and JSON is POSTed, and what reaches a stand-in for the ASIX HTTP lane is checked. Skipped without Vector.
 const { describe, it, before, after } = require('node:test');
@@ -56,7 +57,9 @@ describe('broker file and HTTP inputs: the files agree', () => {
   });
   it('the bootstrap script installs each file only when asked, removes it on a re-run without, validates it, and lists it in VECTOR_CONFIG', () => {
     for (const [flag, file] of [['FILE_GLOB', 'vector-file.yaml'], ['HTTP_USER', 'vector-http.yaml']]) {
-      assert.match(bootstrap, new RegExp(`if \\[ -n "\\$${flag}" \\]; then\\n  install -m 644 "\\$SRC/${file}" /etc/vector/${file}\\nelse\\n  rm -f /etc/vector/${file}`));
+      // the HTTP config is copied as it is; the file config is generated from its template (one include line per glob), see the tests below
+      const installed = flag === 'FILE_GLOB' ? 'install -m 644 "\\$FILE_CFG_TMP" /etc/vector/' + file + '; rm -f "\\$FILE_CFG_TMP"\\n  # --- end file input config ---' : 'install -m 644 "\\$SRC/' + file + '" /etc/vector/' + file;
+      assert.match(bootstrap, new RegExp(`if \\[ -n "\\$${flag}" \\]; then\\n[\\s\\S]*?  ${installed}\\nelse\\n  rm -f /etc/vector/${file}`));
       assert.match(bootstrap, new RegExp('\\$\\{' + flag + ':\\+/etc/vector/' + file.replace('.', '\\.') + '\\}'));
       assert.match(bootstrap, new RegExp('CONFIGS="\\$CONFIGS,/etc/vector/' + file.replace('.', '\\.') + '"'));
     }
@@ -106,6 +109,77 @@ describe('bootstrap validation of the new flags (the real block, run in bash, no
   it('--http-tls needs a certificate and an HTTP input', () => {
     let r = run({ HTTP_USER: 'svc', HTTP_PW_FILE: good, HTTP_TLS: '1' }); assert.strictEqual(r.status, 2); assert.match(r.stderr, /--http-tls needs --tls-cert/);
     r = run({ HTTP_TLS: '1' }); assert.strictEqual(r.status, 2); assert.match(r.stderr, /only makes sense with/);
+  });
+});
+
+describe('more than one --file-glob (the real argument line and the real blocks of bootstrap-broker.sh, run in bash; nothing installed)', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'asix-globs-'));
+  after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const NL = '\n';
+  // The one line of the argument loop that takes --file-glob, cut out of the script and run for a list of arguments.
+  const flagLine = bootstrap.split(NL).find((l) => l.trimStart().startsWith('--file-glob)'));
+  const collect = (...globs) => {
+    const code = 'FILE_GLOB=""\nset -- ' + globs.map((g) => "--file-glob '" + g + "'").join(' ') + '\nwhile [ $# -gt 0 ]; do case "$1" in\n' + flagLine + '\n*) exit 9;; esac; done\nprintf "%s" "$FILE_GLOB"';
+    return spawnSync('bash', ['-c', code], { encoding: 'utf8' }).stdout;
+  };
+  const a = bootstrap.indexOf('# Extra inputs: files and HTTP.'); const b = bootstrap.indexOf('SRC="$(cd');
+  const validate = (list) => spawnSync('bash', ['-c', bootstrap.slice(a, b) + '\nprintf "%s" "$FILE_GLOB"'], { env: { PATH: process.env.PATH, PORT: '514', TLS_PORT: '6514', TLS_CERT: '', FILE_GLOB: list, HTTP_USER: '', HTTP_PW_FILE: '', HTTP_PORT: '8088', HTTP_TLS: '0' }, encoding: 'utf8' });
+  const c0 = bootstrap.indexOf('  # --- file input config:'); const c1 = bootstrap.indexOf('  # --- end file input config ---');
+  const generateArg = (list, template) => {   // the same, but FILE_GLOB handed over as an environment variable
+    const dest = path.join(tmp, 'o-' + Math.random().toString(16).slice(2) + '.yaml');
+    const src = path.join(tmp, 's-' + Math.random().toString(16).slice(2)); fs.mkdirSync(src);
+    fs.writeFileSync(path.join(src, 'vector-file.yaml'), template === undefined ? fileCfg : template);
+    const code = 'SRC="' + src + '"\n' + bootstrap.slice(c0, c1).split('/etc/vector/vector-file.yaml').join(dest);
+    return { r: spawnSync('bash', ['-c', code], { env: { PATH: process.env.PATH, FILE_GLOB: list }, encoding: 'utf8' }), dest };
+  };
+
+  it('the flag can be repeated: every glob is kept, one per line, in order', () => {
+    assert.ok(flagLine, 'the --file-glob line exists');
+    assert.strictEqual(collect('/var/log/a/*.log'), '/var/log/a/*.log');
+    assert.strictEqual(collect('/var/log/a/*.log', '/srv/b/*.txt', '/opt/c/log-?'), ['/var/log/a/*.log', '/srv/b/*.txt', '/opt/c/log-?'].join(NL));
+  });
+  it('each glob is checked: one bad one among good ones refuses the lot (exit 2, nothing written)', () => {
+    for (const bad of ['relative/*.log', '/var/log/a b/*', '/var/log/../etc/*', '/var/log/$(id)/*', '/var/log/x;y', '/var/log/{a,b}/*', '']) {
+      const r = validate(['/var/log/a/*.log', bad, '/srv/b/*.log'].join(NL));
+      assert.strictEqual(r.status, 2, JSON.stringify(bad)); assert.match(r.stderr, /--file-glob must be an absolute path glob/);
+    }
+  });
+  it('the same glob twice counts once; the list comes back without duplicates and without changing the order', () => {
+    const r = validate(['/a/*.log', '/b/*.log', '/a/*.log', '/b/*.log', '/c/*.log'].join(NL));
+    assert.strictEqual(r.status, 0, r.stderr); assert.strictEqual(r.stdout, ['/a/*.log', '/b/*.log', '/c/*.log'].join(NL));
+    // and a glob that is only a prefix of another is NOT a duplicate of it
+    assert.strictEqual(validate(['/a/*', '/a/*.log'].join(NL)).stdout, ['/a/*', '/a/*.log'].join(NL));
+  });
+  it('at most 10 different globs; the 11th is refused, ten are fine, eleven with a repeat are ten', () => {
+    const many = (n) => Array.from({ length: n }, (_, i) => '/var/log/app' + i + '/*.log');
+    assert.strictEqual(validate(many(10).join(NL)).status, 0);
+    const r = validate(many(11).join(NL)); assert.strictEqual(r.status, 2); assert.match(r.stderr, /at most 10 times \(got 11\)/);
+    assert.strictEqual(validate(many(10).concat(many(10)[3]).join(NL)).status, 0, 'a repeat is not a new glob');
+  });
+  it('generates ONE include line per glob in the installed file and nothing else changes', () => {
+    const globs = ['/var/log/myapp/*.log', '/srv/other/[ab]*.log', '/opt/x/log-?'];
+    const { r, dest } = generateArg(globs.join(NL));
+    assert.strictEqual(r.status, 0, r.stderr);
+    const out = fs.readFileSync(dest, 'utf8');
+    const want = fileCfg.replace('      - "${ASIX_FILE_GLOB}"', globs.map((g) => '      - "' + g + '"').join(NL));
+    assert.strictEqual(out, want);
+    assert.ok(!out.includes('${ASIX_FILE_GLOB}'), 'the placeholder is gone');
+    assert.strictEqual(fs.statSync(dest).mode & 0o777, 0o644);
+    // one glob: only the placeholder's line differs
+    const one = generateArg('/var/log/myapp/*.log'); assert.strictEqual(fs.readFileSync(one.dest, 'utf8'), fileCfg.replace('${ASIX_FILE_GLOB}', '/var/log/myapp/*.log'));
+  });
+  it('refuses to install when the template has no single include line to fill in (a template that was edited by hand)', () => {
+    const none = generateArg('/a/*.log', fileCfg.replace('      - "${ASIX_FILE_GLOB}"', '      - "/etc/fixed.log"'));
+    assert.strictEqual(none.r.status, 1); assert.match(none.r.stderr, /no single include line/); assert.ok(!fs.existsSync(none.dest), 'nothing installed');
+    const two = generateArg('/a/*.log', fileCfg.replace('      - "${ASIX_FILE_GLOB}"', '      - "${ASIX_FILE_GLOB}"\n      - "${ASIX_FILE_GLOB}"'));
+    assert.strictEqual(two.r.status, 1); assert.ok(!fs.existsSync(two.dest));
+  });
+  it('broker.env gets all globs on one line, comma separated; the script says which globs it reads', () => {
+    assert.match(bootstrap, /echo "ASIX_FILE_GLOB=\$\(printf '%s\\n' "\$FILE_GLOB" \| paste -sd, -\)"/);
+    const line = bootstrap.split(NL).find((l) => /ASIX_FILE_GLOB=\$\(printf/.test(l)).trim().replace(/^\[ -z "\$FILE_GLOB" \] \|\| /, '').replace(/\s+#.*$/, '');
+    const r = spawnSync('bash', ['-c', line], { env: { PATH: process.env.PATH, FILE_GLOB: ['/a/*.log', '/b/*.log'].join(NL) }, encoding: 'utf8' });
+    assert.strictEqual(r.stdout, 'ASIX_FILE_GLOB=/a/*.log,/b/*.log\n');
+    assert.match(bootstrap, /Reading files matching \$\{FILE_GLOB\/\/\$'\\n'\/, \}/);
   });
 });
 
@@ -214,5 +288,40 @@ describe('real Vector: the configs validate, refuse to start without a password,
     const q = parseLine(lines('http').find((x) => /login failed/.test(x)), 'broker-test');
     assert.strictEqual(q.parsed.format, 'syslog-file'); assert.strictEqual(q.parsed.host, 'app_1'); assert.strictEqual(q.parsed.app_name, 'http');
     assert.deepStrictEqual(JSON.parse(q.parsed.message), { host: 'app 1', message: 'login failed', user: 'bob' });
+  });
+});
+
+describe('real Vector: a file config generated for several globs validates and reads every glob (and only those)', { skip: VECTOR ? false : 'no Vector binary (set VECTOR_BIN)' }, () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'asix-multi-'));
+  const dirA = path.join(tmp, 'a'); const dirB = path.join(tmp, 'b'); const dirC = path.join(tmp, 'c'); const dataDir = path.join(tmp, 'data'); const cfgDir = path.join(tmp, 'cfg');
+  for (const d of [dirA, dirB, dirC, dataDir, cfgDir]) fs.mkdirSync(d);
+  const globs = [path.join(dirA, '*.log'), path.join(dirB, 'app-?.txt')];
+  let vec, lane; const calls = [];
+  after(() => { if (vec) vec.kill('SIGKILL'); if (lane) lane.close(); fs.rmSync(tmp, { recursive: true, force: true }); });
+  const got = (t) => calls.flatMap((c) => c.split('\n')).filter((l) => l.endsWith(t));
+
+  it('the template, filled in the way bootstrap-broker.sh fills it, passes `vector validate` with the main config', async () => {
+    fs.writeFileSync(path.join(cfgDir, 'vector.yaml'), read('deploy/broker/vector.yaml').replace('data_dir: /var/lib/vector', 'data_dir: ' + dataDir).replace(/api:\n  enabled: true\n  address: 127.0.0.1:8686/, 'api:\n  enabled: false'));
+    fs.writeFileSync(path.join(cfgDir, 'vector-file.yaml'), fileCfg.replace('      - "${ASIX_FILE_GLOB}"', globs.map((g) => '      - "' + g + '"').join('\n')));
+    lane = http.createServer((q, s) => { let b = ''; q.on('data', (d) => { b += d; }); q.on('end', () => { calls.push(b); s.writeHead(202, { 'content-type': 'application/json' }); s.end('{"success":true}'); }); });
+    await new Promise((r) => lane.listen(0, '127.0.0.1', r));
+    const r = spawnSync(VECTOR, ['validate', '--no-environment', path.join(cfgDir, 'vector.yaml'), path.join(cfgDir, 'vector-file.yaml')], { env: env(), encoding: 'utf8' });
+    assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  });
+  const env = () => ({ PATH: process.env.PATH, VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION: 'true', ASIX_INGEST_KEY: 'asix_ik_test', ASIX_BROKER_NAME: 'broker-test', ASIX_SYSLOG_PORT: '0', ASIX_INGEST_URL: `http://127.0.0.1:${lane.address().port}/v1/ingest/http` });
+  it('lines appended to files matching EITHER glob arrive; a file matching neither does not', async () => {
+    fs.writeFileSync(path.join(dirA, 'one.log'), 'old line in A\n'); fs.writeFileSync(path.join(dirB, 'app-1.txt'), 'old line in B\n');
+    const sp = await new Promise((res) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
+    vec = spawn(VECTOR, ['--config', path.join(cfgDir, 'vector.yaml'), '--config', path.join(cfgDir, 'vector-file.yaml')], { env: { ...env(), ASIX_SYSLOG_PORT: String(sp) }, stdio: 'ignore' });
+    await sleep(6000);   // Vector needs a moment to find the files it starts from the end of
+    fs.appendFileSync(path.join(dirA, 'one.log'), 'new line in A\n');
+    fs.appendFileSync(path.join(dirB, 'app-1.txt'), 'new line in B\n');
+    fs.writeFileSync(path.join(dirB, 'other.txt'), 'line in a file no glob matches\n');
+    fs.writeFileSync(path.join(dirC, 'x.log'), 'line in a directory no glob names\n');
+    assert.ok(await until(() => got('new line in A').length === 1 && got('new line in B').length === 1, 30000), 'both globs are read: ' + JSON.stringify(calls));
+    await sleep(3000);
+    assert.match(got('new line in A')[0], / one\.log: new line in A$/); assert.match(got('new line in B')[0], / app-1\.txt: new line in B$/);
+    assert.strictEqual(got('old line in A').length + got('old line in B').length, 0, 'history is still not sent');
+    assert.strictEqual(got('line in a file no glob matches').length + got('line in a directory no glob names').length, 0, 'only the named globs are read');
   });
 });

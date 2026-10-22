@@ -3,7 +3,9 @@
 # starts Vector with
 #   VECTOR_CONFIG=/etc/vector/vector.yaml,/etc/vector/vector-file.yaml        (set in broker.env; the TLS and HTTP files join the same list)
 #
-# One glob, ASIX_FILE_GLOB (for example /var/log/myapp/*.log). The vector user must be able to read the files (group or ACL).
+# One or more globs (for example /var/log/myapp/*.log). This file is a TEMPLATE for the include line below: bootstrap-broker.sh writes the
+# installed copy with one line per --file-glob it was given (up to 10), because Vector cannot split a list out of one variable. Used as it
+# stands (for example by `vector validate` here) it takes ONE glob from ASIX_FILE_GLOB. The vector user must be able to read the files (group or ACL).
 # Where it stops and starts again Vector carries on from where it was (offsets are kept in /var/lib/vector). On the first start
 # files that already exist are read from their END, so turning this on does not send years of old lines; a file that appears later
 # is read from its start. Lines longer than 8 KB are cut.
