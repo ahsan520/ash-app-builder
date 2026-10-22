@@ -1345,7 +1345,7 @@ function brokerInputsCell(b) {
   const list = b && Array.isArray(b.inputs) ? b.inputs : null;
   if (!list) return el('span', { className: 'mute', title: 'This broker has not said which inputs it runs. Its heartbeat script is older: copy the new one and re-run the bootstrap script (docs/broker-vm.md, Updating a broker after an ASIX deploy).', textContent: '-' });
   return el('span', { style: 'display:inline-flex;gap:6px;flex-wrap:wrap' },
-    list.map((i) => pill((BROKER_INPUT_LABEL[i.kind] || i.kind) + (i.port ? ' ' + i.port : ''), 'ok')));
+    list.map((i) => pill((BROKER_INPUT_LABEL[i.kind] || i.kind) + (i.port ? ' ' + i.port : '') + (i.count > 1 ? ' (' + i.count + ' globs)' : ''), 'ok')));
 }
 // Read-only: the broker VMs that report to this install (docs/broker-vm.md), and the command to add one.
 async function pgBrokers() {

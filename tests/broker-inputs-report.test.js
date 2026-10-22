@@ -18,10 +18,21 @@ describe('parseInputs', () => {
     assert.strictEqual(inputs.parseInputs('syslog:514,file,http:8088,journald'), 'syslog:514,file,http:8088,journald');
     assert.strictEqual(inputs.parseInputs('syslog:514,journald:99'), 'syslog:514', 'the journal has no port');
   });
+  it('file takes a COUNT of globs (2 to 10), never a port; one glob is just the name', () => {
+    assert.strictEqual(inputs.parseInputs('syslog:514,file:2,http:8088'), 'syslog:514,file:2,http:8088');
+    assert.strictEqual(inputs.parseInputs('file:10'), 'file:10');
+    assert.strictEqual(inputs.parseInputs('file:1'), 'file', 'a count of one is the plain name');
+    for (const bad of ['file:0', 'file:11', 'file:80', 'file:x', 'file:-2', 'file:2.5']) assert.strictEqual(inputs.parseInputs('syslog:514,' + bad), 'syslog:514', bad + ' is dropped');
+    assert.strictEqual(inputs.parseInputs('file:3,file:4'), 'file:3', 'a name once');
+    assert.deepStrictEqual(inputs.listInputs('syslog:514,file:2,file'), [{ kind: 'syslog', port: 514 }, { kind: 'file', port: null, count: 2 }]);
+    assert.deepStrictEqual(inputs.listInputs('file'), [{ kind: 'file', port: null }]);
+    assert.strictEqual(inputs.label({ kind: 'file', port: null, count: 2 }), 'Log files (2 globs)');
+    assert.strictEqual(inputs.label({ kind: 'file', port: null }), 'Log files');
+  });
   it('drops what it does not know or cannot trust, and returns null when nothing is left', () => {
     assert.strictEqual(inputs.parseInputs('syslog:514,kafka:9092,winlog'), 'syslog:514', 'unknown names are dropped, a newer broker script must not be refused');
     assert.strictEqual(inputs.parseInputs('syslog:0,syslog:70000,syslog:5x14'), null, 'bad ports');
-    assert.strictEqual(inputs.parseInputs('file:80'), null, 'file has no port');
+    assert.strictEqual(inputs.parseInputs('file:80'), null, 'file has no port (and 80 is far over the count limit)');
     assert.strictEqual(inputs.parseInputs('syslog:514,syslog:515'), 'syslog:514', 'a name once');
     for (const v of [undefined, null, '', ',,', 5, {}, true, '<script>']) assert.strictEqual(inputs.parseInputs(v), null, String(v));
     assert.strictEqual(inputs.parseInputs('syslog:514\nfile'), null, 'a token with a line break in it is garbage, not two tokens');
@@ -87,6 +98,19 @@ describe('deploy/broker/asix-broker-heartbeat.sh: what it says about the inputs'
     assert.ok(!JSON.stringify(r.body).includes('/var/log'), 'the file glob is never sent');
     assert.strictEqual(run(all + 'ASIX_HTTP_TLS=true\n').body.collector.inputs, 'syslog:514,syslog-tls:6514,file,https:8088');
   });
+  it('several file globs: only the NUMBER is sent, never a path; one glob, none written, more than ten or empty entries are handled', () => {
+    const cfg = (g) => 'VECTOR_CONFIG=/etc/vector/vector.yaml,/etc/vector/vector-file.yaml\n' + (g === null ? '' : 'ASIX_FILE_GLOB=' + g + '\n');
+    let r = run(cfg('/var/log/a/*.log,/srv/b/app-?.txt,/opt/c/[ab]*.log')); assert.strictEqual(r.body.collector.inputs, 'syslog:514,file:3');
+    assert.ok(!/\/var\/log|\/srv|\/opt|\*|\?/.test(JSON.stringify(r.body)), 'no glob, path or wildcard is sent');
+    assert.strictEqual(run(cfg('/var/log/a/*.log')).body.collector.inputs, 'syslog:514,file', 'one glob is just file');
+    assert.strictEqual(run(cfg(null)).body.collector.inputs, 'syslog:514,file', 'no glob variable: still a file input');
+    assert.strictEqual(run(cfg('')).body.collector.inputs, 'syslog:514,file');
+    assert.strictEqual(run(cfg('/a/*.log,,/b/*.log,')).body.collector.inputs, 'syslog:514,file:2', 'empty entries do not count');
+    assert.strictEqual(run(cfg(Array.from({ length: 10 }, (_, i) => '/d' + i + '/*').join(','))).body.collector.inputs, 'syslog:514,file:10');
+    assert.strictEqual(run(cfg(Array.from({ length: 11 }, (_, i) => '/d' + i + '/*').join(','))).body.collector.inputs, 'syslog:514,file', 'more than the bootstrap allows is not trusted as a count');
+    assert.strictEqual(run('ASIX_FILE_GLOB=/a/*.log,/b/*.log\nVECTOR_CONFIG=/etc/vector/vector.yaml\n').body.collector.inputs, 'syslog:514', 'a glob variable alone is not an input');
+    for (const g of ['/a/*.log,/b/*.log', '/a/*,/b/*,/c/*']) { const sent = run(cfg(g)).body.collector.inputs; assert.strictEqual(inputs.parseInputs(sent), sent); }
+  });
   it('the journal is listed only when vector-journald.yaml is in the list, last after HTTP, with no port and no setting sent', () => {
     assert.strictEqual(run('VECTOR_CONFIG=/etc/vector/vector.yaml,/etc/vector/vector-journald.yaml\n').body.collector.inputs, 'syslog:514,journald');
     const r = run('ASIX_JOURNALD_MAX_PRIORITY=4\nVECTOR_CONFIG=/etc/vector/vector.yaml,/etc/vector/vector-file.yaml,/etc/vector/vector-http.yaml,/etc/vector/vector-journald.yaml\n');
@@ -125,6 +149,10 @@ describe('Brokers page: Inputs cell', () => {
 
   it('one pill per input, with the port', () => {
     assert.deepStrictEqual(pills(brokerInputsCell({ inputs: inputs.listInputs('syslog:514,syslog-tls:6514,file,https:8088,journald') })), ['Syslog 514', 'Syslog TLS 6514', 'Log files', 'HTTPS/JSON 8088', 'Journal']);
+  });
+  it('several file globs: the pill says how many, one glob stays plain', () => {
+    assert.deepStrictEqual(pills(brokerInputsCell({ inputs: inputs.listInputs('syslog:514,file:3,journald') })), ['Syslog 514', 'Log files (3 globs)', 'Journal']);
+    assert.deepStrictEqual(pills(brokerInputsCell({ inputs: inputs.listInputs('syslog:514,file') })), ['Syslog 514', 'Log files']);
   });
   it('a broker that never said shows a dash with the reason in the tooltip, and nothing throws', () => {
     const c = brokerInputsCell({ inputs: null }); assert.deepStrictEqual(pills(c), []); assert.strictEqual(c.attrs.textContent, '-'); assert.match(c.attrs.title, /bootstrap/);

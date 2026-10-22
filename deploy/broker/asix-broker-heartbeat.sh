@@ -23,11 +23,15 @@ OS="$(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-Linux}")"
 clean() { printf '%s' "$1" | tr -d '"\\' | cut -c1-"$2"; }
 
 # The inputs this broker runs, from the same broker.env the bootstrap script wrote: "syslog:514,syslog-tls:6514,file,http:8088,journald".
-# A name, plus a port where there is one. A bad port is left out rather than sent. The file glob is not sent (a path has no place in a heartbeat); the journal has no setting worth sending.
+# A name, plus a port where there is one. A bad port is left out rather than sent. The file globs are not sent (a path has no place in a heartbeat), only how many there are ("file:2"; one glob is just "file"); the journal has no setting worth sending.
 port_ok() { case "$1" in ''|*[!0-9]*) return 1;; esac; [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
 INPUTS="syslog"; port_ok "${ASIX_SYSLOG_PORT:-514}" && INPUTS="syslog:${ASIX_SYSLOG_PORT:-514}"
 case ",${VECTOR_CONFIG:-}," in *vector-tls.yaml,*) T="syslog-tls"; port_ok "${ASIX_SYSLOG_TLS_PORT:-6514}" && T="syslog-tls:${ASIX_SYSLOG_TLS_PORT:-6514}"; INPUTS="$INPUTS,$T";; esac
-case ",${VECTOR_CONFIG:-}," in *vector-file.yaml,*) INPUTS="$INPUTS,file";; esac
+case ",${VECTOR_CONFIG:-}," in *vector-file.yaml,*)
+  F="file"; N=0; IFS=, read -ra G <<< "${ASIX_FILE_GLOB:-}"   # the bootstrap writes every glob, comma separated; only the number is sent
+  for g in ${G[@]+"${G[@]}"}; do [ -n "$g" ] && N=$((N + 1)); done
+  [ "$N" -ge 2 ] && [ "$N" -le 10 ] && F="file:$N"
+  INPUTS="$INPUTS,$F";; esac
 case ",${VECTOR_CONFIG:-}," in *vector-http.yaml,*) H="http"; [ "${ASIX_HTTP_TLS:-}" = "true" ] && H="https"; port_ok "${ASIX_HTTP_PORT:-8088}" && H="$H:${ASIX_HTTP_PORT:-8088}"; INPUTS="$INPUTS,$H";; esac
 case ",${VECTOR_CONFIG:-}," in *vector-journald.yaml,*) INPUTS="$INPUTS,journald";; esac
 
