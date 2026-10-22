@@ -5,6 +5,7 @@
 // Pure rules plus two small database helpers; the broker repeats the port rules on its side, so a wrong value here cannot lock a broker out.
 
 const { tsMs } = require('../collectors/status');
+const pausedInputs = require('./paused');
 
 // Ports a broker must never be told to listen on: SSH, HTTPS, Vector's local health API, and the ASIX HTTPS NodePort.
 const RESERVED = { 22: 'SSH', 443: 'HTTPS', 8686: "Vector's local health API", 30443: 'ASIX HTTPS' };
@@ -109,7 +110,22 @@ function checkReport(body) {
     if (t.error) return { error: 'rejected_tls_port must be a whole number from 1 to 65535, or null' };
     tlsRejected = t.value;
   }
-  return { name, port: port.value, rejected: rej.value, signature, tls, tlsRejected };
+  // Optional (scripts older than pausing do not send these): the optional inputs this broker has paused now ('' = none) and the list it rejected. Kept apart from the
+  // fields above on purpose: a database without the pause columns must not stop the port report from being stored.
+  let paused, pausedRejected;
+  if (b.paused_inputs !== undefined) {
+    const p = pausedInputs.checkReportText(b.paused_inputs);
+    if (p.error) return { error: 'paused_inputs must be empty or a comma list of: ' + pausedInputs.KINDS.join(', ') };
+    paused = p.value;
+    if (b.rejected_paused_inputs !== undefined && b.rejected_paused_inputs !== null) {
+      const q = pausedInputs.checkReportText(b.rejected_paused_inputs);
+      if (q.error) return { error: 'rejected_paused_inputs must be empty or a comma list of: ' + pausedInputs.KINDS.join(', ') };
+      pausedRejected = q.value;
+    }
+  }
+  const out = { name, port: port.value, rejected: rej.value, signature, tls, tlsRejected };
+  if (paused !== undefined) { out.paused = paused; if (pausedRejected !== undefined) out.pausedRejected = pausedRejected; }   // only when the broker sent them: every other report keeps the shape it had
+  return out;
 }
 
 // Stores a report on the collector row of THE KEY'S OWN broker (same name, key_id = the key that sent it), so one key cannot write

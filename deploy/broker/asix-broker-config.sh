@@ -25,6 +25,11 @@
 # The report also says whether this broker checks signatures (`signature`): off (no public key), unchecked (it has one but got no answer to check), ok (the
 # last answer passed) or the reason the last answer was refused (unsigned, bad_signature, wrong_broker, clock_skew, bad_format, no_key_file, no_openssl).
 # The TLS port is moved only on a broker that has a TLS listener (ASIX_SYSLOG_TLS_PORT in broker.env and vector-tls.yaml present); otherwise it is ignored with a note.
+# OPTIONAL INPUTS (pause / resume): the answer may also say `paused_inputs` ("file,journald"; "" = run them all): the optional inputs this broker should NOT run. Only file, http and
+# journald can be paused (never syslog or syslog over TLS). The broker takes those inputs' config files out of VECTOR_CONFIG (and puts back the ones it paused earlier and ASIX no longer
+# lists), writes ASIX_INPUTS_PAUSED, runs `vector validate` on the new list, restarts Vector, waits for health, and puts broker.env back on any failure (remembering the rejected list in
+# config-paused-rejected). The config files stay installed, so resuming needs nothing from ASIX but an empty list. A re-run of bootstrap-broker.sh writes the full list again; the next pull pauses again.
+# The report also says which inputs this broker has paused (paused_inputs) and the list it rejected (rejected_paused_inputs).
 # It does not open the firewall: the new port must be opened on this VM by hand. Results go to the journal (journalctl -u asix-broker-config).
 set -uo pipefail
 
@@ -67,7 +72,16 @@ report() {  # EXIT trap: what this broker listens on now (read from broker.env A
   if [[ "$tls" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$tls" -le 65535 ] && [ -r "$VECTOR_DIR/vector-tls.yaml" ]; then :; else tls="null"; fi
   trej=""; [ -r "$STATE_DIR/config-tls-rejected" ] && trej="$(tr -cd '0-9' < "$STATE_DIR/config-tls-rejected" 2>/dev/null | cut -c1-5)"
   [[ "$trej" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$trej" -le 65535 ] || trej="null"
-  body="$(printf '{"collector":"%s","syslog_port":%s,"rejected_port":%s,"signature":"%s","tls_port":%s,"rejected_tls_port":%s}' "$name" "$cur" "$rej" "$SIG" "$tls" "$trej")"
+  # The optional inputs this broker has paused now (read AFTER any change or put-back; '' = none) and the list it rejected, when it is a valid list. Only sent by a broker that has ever
+  # been asked to pause something (its broker.env has an ASIX_INPUTS_PAUSED line, empty after a resume) or has a rejected list; every other broker's report is what it always was.
+  pz=""; pzr=""; extra=""
+  [ -r "$STATE_DIR/config-paused-rejected" ] && pzr="$(tr -cd 'a-z,' < "$STATE_DIR/config-paused-rejected" 2>/dev/null | cut -c1-40)"
+  case "$pzr" in none) pzr="";; esac
+  if grep -q '^ASIX_INPUTS_PAUSED=' "$ENV_FILE" 2>/dev/null || [ -n "$pzr" ]; then
+    pz="$( . "$ENV_FILE" >/dev/null 2>&1; printf '%s' "${ASIX_INPUTS_PAUSED:-}" | tr -cd 'a-z,' | cut -c1-40 )"
+    extra="$(printf ',"paused_inputs":"%s","rejected_paused_inputs":"%s"' "$pz" "$pzr")"
+  fi
+  body="$(printf '{"collector":"%s","syslog_port":%s,"rejected_port":%s,"signature":"%s","tls_port":%s,"rejected_tls_port":%s%s}' "$name" "$cur" "$rej" "$SIG" "$tls" "$trej" "$extra")"
   curl "${ARGS[@]}" -X POST -H "Content-Type: application/json" --data "$body" "$URL/report" >/dev/null 2>&1 || true
 }
 trap 'report; [ -z "${W:-}" ] || rm -rf "$W"' EXIT
@@ -117,6 +131,20 @@ fi
 # The syslog-over-TLS port: absent or null (an ASIX or a signed answer from before it existed, or none set) means no opinion.
 TPORT="$(printf '%s' "$FLAT" | sed -n 's/.*"tls_port":\([0-9]\{1,5\}\)[,}].*/\1/p')"
 if [ -z "$TPORT" ] && printf '%s' "$FLAT" | grep -q '"tls_port":[^n]'; then echo "Unexpected syslog-over-TLS port in the answer from ASIX (neither a port nor null); nothing changed." >&2; exit 1; fi
+# The optional inputs to pause: absent means no opinion (an ASIX from before this, a broker with nothing paused and nothing asked); "" means run them all again.
+PI_SET=0; PI=""
+if printf '%s' "$FLAT" | grep -q '"paused_inputs":'; then
+  printf '%s' "$FLAT" | grep -q '"paused_inputs":"[a-z,]\{0,40\}"' || { echo "Unexpected paused_inputs in the answer from ASIX (not a short comma list); nothing changed." >&2; exit 1; }
+  PI_SET=1; PI="$(printf '%s' "$FLAT" | sed -n 's/.*"paused_inputs":"\([a-z,]\{0,40\}\)".*/\1/p')"
+  PI_SEEN=","
+  for t in ${PI//,/ }; do
+    case "$t" in file|http|journald) ;; *) echo "ASIX asked to pause '$t', which cannot be paused (only file, http, journald); ignored." >&2; exit 1;; esac
+    case "$PI_SEEN" in *",$t,"*) echo "ASIX listed '$t' twice in paused_inputs; ignored." >&2; exit 1;; esac
+    PI_SEEN="$PI_SEEN$t,"
+  done
+  # always the same order, whatever ASIX sent
+  PI_ORD=""; for t in file http journald; do case ",$PI," in *",$t,"*) PI_ORD="${PI_ORD:+$PI_ORD,}$t";; esac; done; PI="$PI_ORD"
+fi
 
 BACKUP="$ENV_FILE.before-config"
 
@@ -188,4 +216,65 @@ if [ -n "$TPORT" ]; then
     apply_env ASIX_SYSLOG_TLS_PORT "$TPORT" config-tls-rejected "syslog-over-TLS port" "Open $TPORT/tcp on this VM's firewall; senders must use the new port." || RC=1
   fi
 fi
+
+# ---- 3. Paused inputs ----
+# apply_paused LIST: takes the config files of the listed inputs out of VECTOR_CONFIG, and puts back those paused before and not listed now. Vector is restarted only when the list of
+# files actually changes (a pause of an input this broker does not have just records the setting). Same safety as the ports: validate on the new list BEFORE the restart, health check
+# after, any failure puts the old broker.env back (and restarts Vector on it if it had been restarted) and remembers the list so it is not retried every 5 minutes.
+apply_paused() {
+  local NEW="$1" OLD CURVC e t base skip has LIST TMP ok HEALTH REJ="$STATE_DIR/config-paused-rejected" RESTART=1 ENT=() OUT=()
+  OLD="$( . "$ENV_FILE" >/dev/null 2>&1; printf '%s' "${ASIX_INPUTS_PAUSED:-}" | tr -cd 'a-z,' )"
+  [ "$NEW" != "$OLD" ] || return 0
+  if [ -r "$REJ" ] && [ "$(cat "$REJ" 2>/dev/null)" = "${NEW:-none}" ]; then
+    echo "Paused inputs '${NEW:-none}' was tried before and failed on this broker; not trying again until ASIX asks for a different list."; return 0
+  fi
+  CURVC="$( . "$ENV_FILE" >/dev/null 2>&1; printf '%s' "${VECTOR_CONFIG:-$VECTOR_DIR/vector.yaml}" )"
+  [[ "$CURVC" =~ ^[A-Za-z0-9._/+,-]+$ ]] || { echo "VECTOR_CONFIG in $ENV_FILE has characters this script does not edit safely; nothing changed." >&2; return 1; }
+  IFS=, read -ra ENT <<< "$CURVC"
+  for e in "${ENT[@]}"; do
+    base="${e##*/}"; skip=0
+    for t in ${NEW//,/ }; do [ "$base" = "vector-$t.yaml" ] && skip=1; done
+    [ "$skip" -eq 1 ] || OUT+=("$e")
+  done
+  for t in ${OLD//,/ }; do   # paused before, not listed now: put back, if its file is installed and not already listed
+    case ",$NEW," in *",$t,"*) continue;; esac
+    [ -r "$VECTOR_DIR/vector-$t.yaml" ] || continue
+    has=0; for e in ${OUT[@]+"${OUT[@]}"}; do [ "${e##*/}" = "vector-$t.yaml" ] && has=1; done
+    [ "$has" -eq 1 ] || OUT+=("$VECTOR_DIR/vector-$t.yaml")
+  done
+  LIST="$(IFS=,; printf '%s' "${OUT[*]}")"
+  [ -n "$LIST" ] || { echo "The new VECTOR_CONFIG would be empty; nothing changed." >&2; return 1; }
+  [ "$LIST" != "$CURVC" ] || RESTART=0
+  echo "ASIX asks for paused inputs '${NEW:-none}' (now '${OLD:-none}'). Applying."
+  TMP="$(mktemp "$ENV_FILE.XXXXXX")" || { echo "Cannot write next to $ENV_FILE; nothing changed." >&2; return 1; }
+  cp -p "$ENV_FILE" "$BACKUP" && cp -p "$ENV_FILE" "$TMP" || { rm -f "$TMP"; echo "Cannot make a backup of $ENV_FILE; nothing changed." >&2; return 1; }
+  if grep -q '^ASIX_INPUTS_PAUSED=' "$TMP"; then sed -i "s|^ASIX_INPUTS_PAUSED=.*|ASIX_INPUTS_PAUSED=$NEW|" "$TMP"; else echo "ASIX_INPUTS_PAUSED=$NEW" >> "$TMP"; fi
+  if [ "$RESTART" -eq 1 ]; then
+    if grep -q '^VECTOR_CONFIG=' "$TMP"; then sed -i "s|^VECTOR_CONFIG=.*|VECTOR_CONFIG=$LIST|" "$TMP"; else echo "VECTOR_CONFIG=$LIST" >> "$TMP"; fi
+  fi
+  mv "$TMP" "$ENV_FILE"
+  if [ "$RESTART" -eq 0 ]; then rm -f "$REJ"; echo "Done: paused inputs '${OLD:-none}' -> '${NEW:-none}'. No Vector config file changed, so Vector was not restarted."; return 0; fi
+
+  reject_paused() {  # $1 = why, $2 = restart if Vector was already restarted
+    echo "$1 Putting the old settings back." >&2
+    cp -p "$BACKUP" "$ENV_FILE"
+    mkdir -p "$STATE_DIR" && echo "${NEW:-none}" > "$REJ"
+    if [ "${2:-}" = restart ]; then systemctl restart vector || echo "Restarting Vector on the old settings failed: journalctl -u vector -n 50" >&2; fi
+    return 1
+  }
+  ( set -a; . "$ENV_FILE"; set +a; vector validate --no-environment "${OUT[@]}" ) >/dev/null 2>&1 \
+    || { reject_paused "The config does not pass 'vector validate' with paused inputs '${NEW:-none}'."; return 1; }
+  systemctl restart vector || { reject_paused "systemctl restart vector failed with paused inputs '${NEW:-none}'." restart; return 1; }
+  HEALTH="${ASIX_VECTOR_HEALTH_URL:-http://127.0.0.1:8686/health}"
+  ok=0
+  for _ in $(seq 1 "$WAIT_S"); do
+    if curl -fsS -m 3 "$HEALTH" >/dev/null 2>&1; then ok=1; break; fi
+    sleep 1
+  done
+  [ "$ok" -eq 1 ] || { reject_paused "Vector did not become healthy within ${WAIT_S}s with paused inputs '${NEW:-none}'." restart; return 1; }
+  rm -f "$REJ"
+  echo "Done: paused inputs '${OLD:-none}' -> '${NEW:-none}', Vector healthy. Senders to a paused input will get connection errors until it is resumed."
+  return 0
+}
+if [ "$PI_SET" -eq 1 ]; then apply_paused "$PI" || RC=1; fi
 exit $RC

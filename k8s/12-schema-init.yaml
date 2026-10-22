@@ -499,6 +499,11 @@ data:
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS syslog_port_exclude BOOLEAN NOT NULL DEFAULT false;
     -- A syslog-over-TLS port for ONE broker, set from the Brokers page; it wins over the tenant-wide broker_settings.tls_port for that broker only (src/brokers/config.js). NULL = use the tenant-wide value.
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS tls_port_override INTEGER CHECK (tls_port_override IS NULL OR tls_port_override BETWEEN 1 AND 65535);
+    -- Optional inputs paused on ONE broker from the Brokers page (src/brokers/paused.js): a comma list of file, http, journald. NULL = none paused. What the broker says it has paused (and the list it rejected) is
+    -- information only, like config_syslog_port; '' = it says nothing is paused, NULL = never said (older script).
+    ALTER TABLE collectors ADD COLUMN IF NOT EXISTS inputs_paused TEXT CHECK (inputs_paused IS NULL OR (length(inputs_paused) <= 40 AND inputs_paused ~ '^[a-z,]+$'));
+    ALTER TABLE collectors ADD COLUMN IF NOT EXISTS config_paused_inputs TEXT CHECK (config_paused_inputs IS NULL OR (length(config_paused_inputs) <= 40 AND config_paused_inputs ~ '^[a-z,]*$'));
+    ALTER TABLE collectors ADD COLUMN IF NOT EXISTS config_rejected_paused TEXT CHECK (config_rejected_paused IS NULL OR (length(config_rejected_paused) <= 40 AND config_rejected_paused ~ '^[a-z,]+$'));
     CREATE INDEX IF NOT EXISTS idx_collectors_tenant_seen ON collectors(tenant_id, last_seen);
     CREATE INDEX IF NOT EXISTS idx_collectors_key ON collectors(key_id);
 
