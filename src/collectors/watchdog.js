@@ -100,6 +100,7 @@ async function runOnce(opts = {}) {
     const silence = require('./silence');        // required here, not at the top: these files read severity() from this one
     const keyWatch = require('./key-watch');
     const sigWatch = require('./signature-watch');
+    const pauseWatch = require('./pause-watch');
     const parseWatch = require('../ingestion/parse-watch');
     for (const t of (await lock.query("SELECT id FROM tenants WHERE status = 'active'")).rows) {
       try { const r = await runTenant(t.id, opts); total.tenants += 1; total.raised += r.raised; total.closed += r.closed; }
@@ -113,6 +114,9 @@ async function runOnce(opts = {}) {
       // Watched brokers that do not check ASIX's config signature while ASIX signs. Separate, so a database without the report column never stops the alerts above.
       try { const r = await sigWatch.runTenant(t.id, opts); total.raised += r.raised; total.closed += r.closed; }
       catch (e) { total.errors += 1; console.error(`[watchdog] broker signature check for tenant ${t.id} failed: ${e.message}`); }
+      // Watched brokers that rejected the list of paused inputs. Separate, so a database without the pause columns never stops the alerts above.
+      try { const r = await pauseWatch.runTenant(t.id, opts); total.raised += r.raised; total.closed += r.closed; }
+      catch (e) { total.errors += 1; console.error(`[watchdog] broker pause check for tenant ${t.id} failed: ${e.message}`); }
       // Events stored unparsed faster than allowed (off until ASIX_PARSE_ALERT_MIN_EVENTS is set). Separate, so a failing event store never stops the alerts above.
       try { const r = await parseWatch.runTenant(t.id, opts); total.raised += r.raised; total.closed += r.closed; }
       catch (e) { total.errors += 1; console.error(`[watchdog] unparsed-events check for tenant ${t.id} failed: ${e.message}`); }
