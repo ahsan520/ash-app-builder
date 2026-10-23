@@ -1261,7 +1261,7 @@ function brokerConfigCard(cfg, sum) {
           cfg.tls_port ? brokerTlsSummary(sum) : ''),
         el('div', { className: 'mute', style: 'margin-top:6px;font-size:13px', textContent: 'Only brokers that already have a TLS listener (installed with --tls-cert and --tls-key) act on this; the others ignore it. It cannot turn TLS on or off, and it must differ from the syslog port. A broker left out of the tenant-wide port is left out of this too. The TLS port column below shows what each broker says it applied; if one stays Pending, check journalctl -u asix-broker-config on the broker and ss -tln | grep <port>.' }));
     })(),
-    el('div', { className: 'mute', style: 'margin:10px 0 0;font-size:13px', textContent: 'A broker can have its own port instead (Port button on its row); that one wins for it alone. Leave out keeps one broker off this port. Only brokers installed with --accept-config ask for this. Each checks the port itself, validates its Vector config, restarts Vector, and goes back to its old settings if that fails. It does not open the firewall: open the new port on the broker VM, and point the devices at it. Reserved: ' + cfg.reserved_ports.join(', ') + '. See the broker\'s journal: journalctl -u asix-broker-config.' }),
+    el('div', { className: 'mute', style: 'margin:10px 0 0;font-size:13px', textContent: 'A broker can have its own port instead (Ports button on its row); that one wins for it alone. The same dialog can leave one broker out of this port. Only brokers installed with --accept-config ask for this. Each checks the port itself, validates its Vector config, restarts Vector, and goes back to its old settings if that fails. It does not open the firewall: open the new port on the broker VM, and point the devices at it. Reserved: ' + cfg.reserved_ports.join(', ') + '. See the broker\'s journal: journalctl -u asix-broker-config.' }),
     brokerSigningLine(cfg.signing, sum));
 }
 // What a broker says about the syslog port (b.config from GET /v1/brokers; src/brokers/config.js). Brokers that opted in report after every pull.
@@ -1288,37 +1288,51 @@ function brokerSignatureCell(b) {
   if (g.state === 'not_verifying') return tip(g.signing_on ? 'ASIX signs its answers but this broker has no public key, so it acts on unsigned config. Re-run the bootstrap script with --accept-config --config-pubkey <file>.' : 'This broker has no public key, so it checks nothing. ASIX does not sign its answers either.', pill('Not checking', 'off'), el('span', { className: 'mute', textContent: g.signing_on ? ' (ASIX signs)' : '' }));
   return tip('This broker has not said. It was not set up with --accept-config, or its config script is older than this report. Re-run the bootstrap script with --accept-config.', pill('Not reporting', 'off'));
 }
-// ---- Broker own syslog port ----
-// A syslog port for ONE broker (PUT /v1/brokers/:id/syslog-port). It wins over the tenant-wide port on the card above for that broker only;
-// empty goes back to following the tenant-wide port. The broker must have been installed with --accept-config and have the current config script.
-async function brokerPortEdit(b) {
-  const c = b.config || {};
-  const v = prompt('Syslog port for ' + b.name + ' alone (1-65535).\nEmpty: follow the tenant-wide port again.', c.override_port != null ? String(c.override_port) : '');
-  if (v === null) return;
-  try { await api('/v1/brokers/' + b.id + '/syslog-port', { method: 'PUT', body: { syslog_port: v.trim() === '' ? null : v.trim() } }); route(); } catch (e) { alert(e.message); }
+// ---- Broker ports dialog ----
+// One dialog for the three per-broker port settings, instead of three prompts: this broker's OWN syslog port (PUT /v1/brokers/:id/syslog-port), its OWN syslog-over-TLS
+// port (PUT /v1/brokers/:id/tls-port) and a checkbox that leaves it out of the tenant-wide ports (PUT /v1/brokers/:id/syslog-port-exclude). An own port wins over the
+// tenant-wide one for that broker alone, also when it is left out; empty goes back to following the tenant-wide port. The TLS port only moves the port of a TLS listener
+// the broker already has. The broker must have been installed with --accept-config and have the current config script. Save sends only what changed.
+const BROKER_PORT_NOTE = { applied: 'applied on the broker', pending: 'asked, not applied yet (a broker asks every 5 minutes)', rejected: 'the broker tried this port and put its old settings back', stale: 'the broker has not reported for over 15 minutes', unknown: 'the broker has not reported: it did not opt in (--accept-config) or its config script is older', no_listener: 'this broker has no TLS listener, so the port is ignored' };
+function brokerPortNote(s) {
+  if (!s) return '';
+  if (BROKER_PORT_NOTE[s.state]) return BROKER_PORT_NOTE[s.state] + (s.configured_port != null ? ' (port ' + s.configured_port + ')' : '');
+  return s.reported_port != null ? 'the broker listens on ' + s.reported_port + '; ASIX asks for no port' : '';
 }
-// ---- Broker own syslog-over-TLS port ----
-// A syslog-over-TLS port for ONE broker (PUT /v1/brokers/:id/tls-port). It wins over the tenant-wide TLS port for that broker only, also when the broker is left out of the
-// tenant-wide ports; empty goes back to following it. Only moves the port of a TLS listener the broker already has. Needs --accept-config and the current config script.
-async function brokerTlsPortEdit(b) {
-  const t = b.tls || {};
-  const v = prompt('Syslog-over-TLS port for ' + b.name + ' alone (1-65535, not its syslog port).\nOnly changes the port of a TLS listener the broker already has.\nEmpty: follow the tenant-wide TLS port again.', t.override_port != null ? String(t.override_port) : '');
-  if (v === null) return;
-  try { await api('/v1/brokers/' + b.id + '/tls-port', { method: 'PUT', body: { tls_port: v.trim() === '' ? null : v.trim() } }); route(); } catch (e) { alert(e.message); }
-}
-// ---- Broker left out of the tenant-wide syslog port ----
-// PUT /v1/brokers/:id/syslog-port-exclude. A broker that is left out is told no port and keeps what it has; a port set for it alone still applies.
-async function brokerPortExclude(b) {
-  const left = !!(b.config && b.config.excluded);
-  if (!left && !confirm('Leave ' + b.name + ' out of the tenant-wide syslog port?\nASIX will tell it no port, so it keeps the port it has now. A port set for it alone still applies.')) return;
-  try { await api('/v1/brokers/' + b.id + '/syslog-port-exclude', { method: 'PUT', body: { exclude: !left } }); route(); } catch (e) { alert(e.message); }
+function brokerPortsEdit(b) {
+  const c = b.config || {}, t = b.tls || {};
+  const cur = { sys: c.override_port != null ? String(c.override_port) : '', tls: t.override_port != null ? String(t.override_port) : '', left: !!c.excluded };
+  const err = el('div', { className: 'err' }), sys = el('input', { type: 'text', value: cur.sys, placeholder: 'follow the tenant-wide port' }), tls = el('input', { type: 'text', value: cur.tls, placeholder: 'follow the tenant-wide TLS port' });
+  const left = el('input', { type: 'checkbox', checked: cur.left });
+  let dirty = false;
+  const field = (label, input, help, note) => el('label', { className: 'fld' }, el('b', { textContent: label }), ' ', el('span', { className: 'mute', textContent: help }), input, note ? el('div', { className: 'mute', style: 'font-size:12px', textContent: note }) : '');
+  const m = openModal(el('h2', { textContent: 'Ports on ' + b.name }),
+    el('p', { className: 'desc', textContent: 'A port set here applies to this broker alone and wins over the tenant-wide port. Empty follows the tenant-wide port again. The broker applies a change within 5 minutes and needs --accept-config.' }),
+    field('Syslog port', sys, '1-65535', brokerPortNote(c)),
+    field('Syslog-over-TLS port', tls, '1-65535, not the syslog port; only moves a TLS listener the broker already has', brokerPortNote(t)),
+    el('label', { style: 'display:flex;gap:10px;align-items:flex-start;margin:10px 0;cursor:pointer' }, left,
+      el('span', {}, el('b', { textContent: 'Leave out of the tenant-wide ports' }), ' ', el('span', { className: 'mute', textContent: 'ASIX asks this broker for no tenant-wide port, so it keeps the ports it has. A port set above still applies.' }))), err);
+  const cancel = el('button', { className: 'btn', textContent: 'Cancel', onclick: () => { m.close(); if (dirty) route(); } });
+  const save = el('button', { className: 'btn pri', textContent: 'Save', onclick: async () => {
+    const want = { sys: sys.value.trim(), tls: tls.value.trim(), left: left.checked };
+    // Leave-out first, then the syslog port, then TLS: the TLS port is checked against the syslog port the broker is asked for.
+    const steps = [['left', '/syslog-port-exclude', { exclude: want.left }], ['sys', '/syslog-port', { syslog_port: want.sys === '' ? null : want.sys }], ['tls', '/tls-port', { tls_port: want.tls === '' ? null : want.tls }]].filter((x) => want[x[0]] !== cur[x[0]]);
+    if (!steps.length) return m.close();
+    err.textContent = ''; save.disabled = true;
+    try {
+      for (const [k, path, body] of steps) { await api('/v1/brokers/' + b.id + path, { method: 'PUT', body }); cur[k] = want[k]; dirty = true; }
+      m.close(); route();
+    } catch (e) { err.textContent = e.message; save.disabled = false; }
+  } });
+  m.box.append(el('div', { className: 'actions' }, cancel, save));
+  return m;
 }
 // ---- Broker syslog-over-TLS port report ----
 // What a broker says about its syslog-over-TLS listener (b.tls from GET /v1/brokers; src/brokers/config.js tlsState). Brokers that pull their config report the TLS
 // port they listen on after every pull. Information only: not a problem, no alert. ASIX never turns TLS on, so a broker without a listener just says so.
 function brokerTlsCell(b) {
   const t = b.tls || {}, tip = (x, ...kids) => el('span', { title: x }, ...kids);
-  const own = t.source === 'broker' ? el('span', { className: 'mute', textContent: ' (own)' }) : '';   // this broker's own TLS port (Port button), not the tenant-wide one
+  const own = t.source === 'broker' ? el('span', { className: 'mute', textContent: ' (own)' }) : '';   // this broker's own TLS port (Ports button), not the tenant-wide one
   const now = t.reported_port != null ? ' (now ' + t.reported_port + ')' : '';
   if (t.state === 'applied') return tip('Its TLS listener is on port ' + t.configured_port + ' (reported ' + when(t.reported_at) + ' UTC).', pill('Applied ' + t.configured_port, 'ok'), own);
   if (t.state === 'pending') return tip('Reported ' + when(t.reported_at) + ' UTC. It asks every 5 minutes.', pill('Pending ' + t.configured_port, 'off'), el('span', { className: 'mute', textContent: now }), own);
@@ -1421,7 +1435,7 @@ async function pgBrokers() {
       { h: 'Alert if down', f: (b) => (b.watch_disconnect ? pill('On', 'ok') : b.watch_disconnect_by_default ? pill('On (all)', 'ok') : b.watch_exclude ? pill('Left out', 'off') : pill('Off', 'off')) },
       { h: 'Installer', f: (b) => (b.installer ? b.installer.name + (b.installer.status === 'revoked' ? ' (revoked)' : '') : 'deleted') },
       { h: 'Needs attention', f: (b) => (b.problems.length ? el('span', { style: 'color:var(--bad,#c33)', textContent: b.problems.join(' ') }) : '') },
-      { h: '', f: (b) => el('span', {}, el('button', { className: 'btn', textContent: 'Port', title: 'Set a syslog port for this broker alone', onclick: () => brokerPortEdit(b) }), ' ', el('button', { className: 'btn', textContent: 'TLS port', title: 'Set a syslog-over-TLS port for this broker alone', onclick: () => brokerTlsPortEdit(b) }), ' ', el('button', { className: 'btn', textContent: b.config && b.config.excluded ? 'Follow port' : 'Leave out', title: b.config && b.config.excluded ? 'Ask this broker for the tenant-wide syslog port again' : 'Keep this broker off the tenant-wide syslog port', onclick: () => brokerPortExclude(b) }), ' ', el('button', { className: 'btn', textContent: 'Inputs', title: 'Pause or resume log files, HTTP/JSON or the journal on this broker', onclick: () => brokerPauseEdit(b) }), ' ', el('button', { className: 'btn', textContent: 'Rotate key', onclick: () => rotateBrokerKey(b) })) },
+      { h: '', f: (b) => el('span', {}, el('button', { className: 'btn', textContent: 'Ports', title: 'Set a syslog port or a syslog-over-TLS port for this broker alone, or leave it out of the tenant-wide ports', onclick: () => brokerPortsEdit(b) }), ' ', el('button', { className: 'btn', textContent: 'Inputs', title: 'Pause or resume log files, HTTP/JSON or the journal on this broker', onclick: () => brokerPauseEdit(b) }), ' ', el('button', { className: 'btn', textContent: 'Rotate key', onclick: () => rotateBrokerKey(b) })) },
     ], r.brokers, 'No brokers yet. Create an installer, then run the command below on the broker VM.')),
     el('h3', { style: 'margin-top:18px', textContent: 'Add a broker' }),
     card('', el('p', { className: 'desc', textContent: 'Create an installer first (Settings, Installers) and copy its key: it is shown once. Then on the new VM, as root:' }),
