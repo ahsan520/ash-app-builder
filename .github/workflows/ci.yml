@@ -87,7 +87,7 @@ jobs:
       - name: Database tests
         run: |
           for t in event-store-postgres event-search-postgres event-match-postgres search-route detection-store-db \
-                   event-ingest-db read-counts-db core-reads-db alert-dedupe-db my-alerts-db heartbeat-db collector-threshold-db collector-watch-db collector-silence-db collector-watch-all-db collector-watch-exclude-db broker-key-watch-db broker-signature-watch-db broker-pause-watch-db brokers-db broker-rotate-key-db broker-upgrade-db broker-config-db broker-port-override-db broker-port-exclude-db broker-signature-report-db broker-tls-report-db broker-tls-override-db offsite-backup-db retention-db parse-ingest-db parser-status-db parse-watch-db parse-alert-db notify-recovered-db notify-recovered-channel-db notify-recovered-manual-db broker-watch-state-db broker-inputs-report-db broker-paused-db; do
+                   event-ingest-db read-counts-db core-reads-db alert-dedupe-db my-alerts-db heartbeat-db collector-threshold-db collector-watch-db collector-silence-db collector-watch-all-db collector-watch-exclude-db broker-key-watch-db broker-signature-watch-db broker-pause-watch-db broker-pause-overdue-db brokers-db broker-rotate-key-db broker-upgrade-db broker-config-db broker-port-override-db broker-port-exclude-db broker-signature-report-db broker-tls-report-db broker-tls-override-db offsite-backup-db retention-db parse-ingest-db parser-status-db parse-watch-db parse-alert-db notify-recovered-db notify-recovered-channel-db notify-recovered-manual-db broker-watch-state-db broker-inputs-report-db broker-paused-db; do
             echo "::group::$t"
             node --test "tests/$t.test.js"
             echo "::endgroup::"
