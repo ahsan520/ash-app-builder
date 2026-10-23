@@ -233,6 +233,7 @@ const SETTINGS = [
   { id: 'brokers', label: 'Brokers', page: pgBrokers },
   { id: 'parsing', label: 'Parsing rules', page: pgParsing },
   { id: 'parser', label: 'Parser pool', page: pgParserPool },
+  { id: 'winfilter', label: 'Windows event filter', page: pgWinFilter },
   { id: 'datamodel', label: 'Data model rules', page: pgDataModel },
   { id: 'retention', label: 'Storage & retention', page: pgStorage },
   { id: 'safety', label: 'Data safety', page: pgSafety },
@@ -1141,6 +1142,55 @@ async function pgCapacity() {
       el('div', { className: 'mono mute', style: 'margin-top:8px;white-space:pre-wrap', textContent: Object.entries(r.thresholds).map(([a, b]) => a + ' = ' + b).join('\n') }))];
 }
 
+// ---- Windows event filter ---------------------------------------------------------------------
+// The tenant's Windows filter policy (GET and PUT /v1/endpoints/win-filter, POST /v1/endpoints/win-filter/preview; src/endpoints/win-filter.js, docs/endpoints.md).
+// Allow/deny by channel and event ID with an optional regex, and removal of the long explanatory text many events end with. Saving only stores the policy: nothing is
+// pushed to a broker or an agent yet. Save sends the revision the policy was opened at, so a save over someone else's change is refused instead of overwriting it.
+const WF_SAMPLE = [
+  { channel: 'Security', event_id: 4624, fields: { TargetUserName: 'alice' }, message: 'An account was successfully logged on.\n\nThis event is generated when a logon session is created.' },
+  { channel: 'Security', event_id: 5156, message: 'The Windows Filtering Platform has permitted a connection.' }];
+async function pgWinFilter() {
+  const s = (await api('/v1/endpoints/win-filter')).settings, title = el('h2', { textContent: 'Windows event filter' });
+  if (!s.available) return [title, card('', pill('Not ready', 'off'), el('span', { className: 'mute', style: 'margin-left:8px', textContent: 'The database has no win_filter_policy table yet. A normal deploy runs the schema job and creates it.' }))];
+  const mono = 'width:100%;font:12px ui-monospace,Menlo,monospace';
+  const policyBox = el('textarea', { rows: 18, spellcheck: false, wrap: 'off', style: mono, value: JSON.stringify(s.policy, null, 2) });
+  const sampleBox = el('textarea', { rows: 8, spellcheck: false, wrap: 'off', style: mono, value: JSON.stringify(WF_SAMPLE, null, 2) });
+  const out = el('div', {});
+  const read = (box, what) => { try { return JSON.parse(box.value); } catch (e) { throw new Error(what + ' is not valid JSON: ' + e.message); } };
+  const check = async () => {
+    out.replaceChildren();
+    try {
+      const r = (await api('/v1/endpoints/win-filter/preview', { method: 'POST', body: { policy: read(policyBox, 'The policy'), events: read(sampleBox, 'The sample events') } })).preview;
+      if (!r.ok) return out.append(card('Problems in the policy', el('ul', {}, r.errors.map((e) => el('li', { textContent: e })))));
+      out.append(
+        card('What the sample events would do', el('table', {}, el('tr', {}, ['Channel', 'Event ID', 'Result', 'Rule', 'Message kept'].map((h) => el('th', { textContent: h }))),
+          r.results.map((x) => el('tr', {}, el('td', { textContent: x.channel }), el('td', { textContent: String(x.event_id) }), el('td', {}, pill(x.keep ? 'Kept' : 'Dropped', x.keep ? 'ok' : 'off')),
+            el('td', { textContent: x.rule_id || 'default' }), el('td', { textContent: x.keep ? (x.message === null ? '(removed)' : x.message) : '' }))))),
+        card('Sent to the Wazuh agents (agent group configuration)', el('pre', { style: 'overflow:auto;font-size:12px', textContent: r.outputs.agent_conf }),
+          el('div', { className: 'mute', style: 'font-size:12px', textContent: 'An agent only gets a query where event IDs alone can say what the policy says; the broker always applies the whole policy.' }),
+          el('ul', {}, Object.entries(r.outputs.xpath).filter(([, x]) => !x.query).map(([c, x]) => el('li', { className: 'mute', textContent: c + ': ' + x.reason })))),
+        card('Applied on the broker (Vector)', el('pre', { style: 'overflow:auto;font-size:12px', textContent: r.outputs.vector })));
+    } catch (e) { out.append(card('', el('span', { className: 'err', textContent: e.message }))); }
+  };
+  const save = async () => {
+    try { await api('/v1/endpoints/win-filter', { method: 'PUT', body: { policy: read(policyBox, 'The policy'), if_revision: s.revision } }); route(); } catch (e) { alert(e.message); }
+  };
+  const clear = async () => {
+    if (!confirm('Remove the Windows event filter policy? Every event is kept again.')) return;
+    try { await api('/v1/endpoints/win-filter', { method: 'PUT', body: { clear: true } }); route(); } catch (e) { alert(e.message); }
+  };
+  const state = s.configured ? pill('Saved, revision ' + s.revision, 'ok') : pill('No policy: every event is kept', 'off');
+  return [title,
+    card('', el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, state, s.invalid ? pill('The saved policy no longer validates', 'off') : '', s.updated_at ? el('span', { className: 'mute', style: 'font-size:13px', textContent: 'Saved ' + s.updated_at }) : ''),
+      el('div', { className: 'mute', style: 'margin-top:8px;font-size:13px', textContent: 'Rules are checked in order and the first match wins; an event no rule matches follows the channel default, then the policy default. Event IDs are numbers or ranges like "4700-4710". A regex runs on the event\'s rendered message, or on the EventData field named in match.field. Saving only stores the policy: it is not sent to brokers or agents yet.' })),
+    card('Policy', policyBox, el('div', { style: 'display:flex;gap:8px;margin-top:8px;flex-wrap:wrap' },
+      el('button', { className: 'btn', textContent: 'Check with the sample events', onclick: check }),
+      el('button', { className: 'btn pri', textContent: 'Save', onclick: save }),
+      el('button', { className: 'btn', textContent: 'Load the suggested starting point', title: 'Drops Security 4656, 4658, 4690, 5145, 5156, 5158 and removes the message text. Review it before saving.', onclick: () => { policyBox.value = JSON.stringify(s.preset, null, 2); } }),
+      s.configured ? el('button', { className: 'btn', textContent: 'Remove the policy', onclick: clear }) : '')),
+    card('Sample events', sampleBox, el('div', { className: 'mute', style: 'font-size:12px', textContent: 'A list of { channel, event_id, fields, message } used only by the check; nothing here is saved.' })),
+    out];
+}
 // ---- Parser pool ----------------------------------------------------------------------------
 let parserHours = 24;
 const PARSE_REASON = { PARSE_TIMEOUT: 'A batch ran past the time limit', PARSE_WORKER_CRASH: 'A parser worker crashed or ran out of memory', PARSE_FAILED: 'The parser threw an error on a batch', PARSE_QUARANTINED: 'Skipped for a minute after 3 failed batches in a row' };
@@ -2157,7 +2207,7 @@ const MENU_MODULE = {
   dashboard: 'dashboards', incidents: 'alerts', search: 'search', threat: 'detections', posture: 'posture', packs: 'content-packs',
   'settings/status': 'core', 'settings/account': 'core', 'settings/access': 'core',
   'settings/capacity': 'capacity',
-  'settings/sources': 'ingestion', 'settings/collectors': 'ingestion', 'settings/installers': 'ingestion', 'settings/brokers': 'ingestion', 'settings/parsing': 'ingestion', 'settings/parser': 'ingestion', 'settings/datamodel': 'ingestion',
+  'settings/sources': 'ingestion', 'settings/collectors': 'ingestion', 'settings/installers': 'ingestion', 'settings/brokers': 'ingestion', 'settings/parsing': 'ingestion', 'settings/parser': 'ingestion', 'settings/winfilter': 'ingestion', 'settings/datamodel': 'ingestion',
   'settings/retention': 'retention', 'settings/safety': 'retention',
   'settings/notify': 'notifications', 'settings/deliveries': 'notifications',
   'threat/library': 'threat-intel', 'threat/indicators': 'threat-intel',

@@ -231,4 +231,14 @@ function presetNoisySecurity() {
     rules: [{ id: 'noisy-security', action: 'drop', channel: 'Security', event_ids: [4656, 4658, 4690, 5145, 5156, 5158], note: 'handle requests/closes, share access, filtering platform connections' }] };
 }
 
-module.exports = { validate, evaluate, checkRegex, parseId, toVrl, toVectorTransform, toXPath, toAgentConf, presetNoisySecurity, WAZUH_PATHS, MAX_RULES, MAX_STRIPS, MAX_REGEX, MAX_XPATH };
+// A validated policy back in the shape validate() accepts (event IDs as numbers or "lo-hi" text): what is stored and shown, so reading it back and validating again
+// gives the same policy.
+function toInput(policy) {
+  const ids = (a) => a.map(([lo, hi]) => (lo === hi ? lo : lo + '-' + hi));
+  const scope = (x) => ({ ...(x.channel !== undefined ? { channel: x.channel } : {}), ...(x.ids !== undefined ? { event_ids: ids(x.ids) } : {}) });
+  return { version: 1, default: policy.default, channels: { ...policy.channels }, strip_message: policy.strip_message,
+    rules: policy.rules.map((r) => ({ id: r.id, action: r.action, ...scope(r), ...(r.match ? { match: { field: r.match.field, regex: r.match.regex } } : {}), ...(r.note ? { note: r.note } : {}) })),
+    message_strip: policy.message_strip.map((m) => ({ ...scope(m), regex: m.regex })) };
+}
+
+module.exports = { toInput, validate, evaluate, checkRegex, parseId, toVrl, toVectorTransform, toXPath, toAgentConf, presetNoisySecurity, WAZUH_PATHS, MAX_RULES, MAX_STRIPS, MAX_REGEX, MAX_XPATH };
