@@ -50,7 +50,7 @@ describe('what the pull says', () => {
   it('writePaused touches one broker of this tenant only, never a non-broker collector; an empty list stores NULL', async () => {
     let q = rec([{ id: 'b1', name: 'broker-1', inputs_paused: 'file,http' }]);
     assert.deepStrictEqual(await paused.writePaused(q, 't1', 'b1', ['http', 'file']), { id: 'b1', name: 'broker-1', paused: ['file', 'http'] });
-    assert.match(q.seen[0].sql, /^UPDATE collectors SET inputs_paused = \$3 WHERE id = \$1 AND tenant_id = \$2 AND version ILIKE 'vector-%'/); assert.deepStrictEqual(q.seen[0].args, ['b1', 't1', 'file,http']);
+    assert.match(q.seen[0].sql, /^UPDATE collectors\s+SET inputs_paused_at = CASE WHEN inputs_paused IS DISTINCT FROM \$3::text THEN localtimestamp ELSE inputs_paused_at END,\s+inputs_paused = \$3::text\s+WHERE id = \$1 AND tenant_id = \$2 AND version ILIKE 'vector-%'/); assert.deepStrictEqual(q.seen[0].args, ['b1', 't1', 'file,http']);
     q = rec([{ id: 'b1', name: 'broker-1', inputs_paused: null }]); assert.deepStrictEqual((await paused.writePaused(q, 't1', 'b1', [])).paused, []); assert.strictEqual(q.seen[0].args[2], null);
     assert.strictEqual(await paused.writePaused(rec([]), 't1', 'nope', ['file']), null);
   });
@@ -110,7 +110,7 @@ describe('routes', () => {
     const dbPath = require.resolve('../src/db');
     require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: {
       withTenant: async (tenant, fn) => { if (failDb) throw new Error('boom'); return fn({ query: async (sql, args) => {
-        if (/^UPDATE collectors SET inputs_paused/.test(sql)) { writes.push({ sql, args }); return { rows: found ? [{ id: args[0], name: 'broker-1', inputs_paused: args[2] }] : [] }; }
+        if (/^UPDATE collectors\s+SET inputs_paused_at/.test(sql)) { writes.push({ sql, args }); return { rows: found ? [{ id: args[0], name: 'broker-1', inputs_paused: args[2] }] : [] }; }
         if (/SELECT inputs_paused, config_paused_inputs/.test(sql)) { if (failRead) throw new Error('column "inputs_paused" does not exist'); return { rows: [row] }; }
         if (/SET config_paused_inputs/.test(sql)) { if (failRecord) throw new Error('column "config_paused_inputs" does not exist'); reports.push(args); return { rowCount: 1, rows: [] }; }
         if (/UPDATE collectors SET config_syslog_port/.test(sql)) return { rowCount: 1, rows: [] };

@@ -63,7 +63,7 @@ async function main() {
     const a1 = al[0];
     assert.strictEqual(a1.group_key, 'brokerpause:' + oid.rej); assert.strictEqual(a1.status, 'open'); assert.strictEqual(a1.severity, 'high'); assert.strictEqual(a1.rule_id, null);
     assert.strictEqual(a1.title, 'Broker input pause not applied: ' + names.rej); assert.match(a1.summary, /asked to pause journald and rejected it/);
-    assert.deepStrictEqual(a1.details, { broker_id: oid.rej, broker: names.rej, pause_ref: 'rejected:journald', asked: ['journald'] });
+    assert.deepStrictEqual(a1.details, { broker_id: oid.rej, broker: names.rej, kind: 'rejected', pause_ref: 'rejected:journald', asked: ['journald'] });
     assert.strictEqual((await alerts(OTHER)).length, 0);
 
     // the existing dispatcher sends it once

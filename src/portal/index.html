@@ -1359,6 +1359,8 @@ function brokerPausedCell(b) {
   const names = (p.asked.length ? p.asked : p.reported || []).map((k) => BROKER_INPUT_LABEL[k] || k).join(', ');
   const st = BROKER_PAUSE_STATE[p.state] || ['?', 'off'];
   const hint = { applied: 'The broker says these inputs are off.', pending: p.asked.length ? 'Asked, not yet applied: a broker asks every 5 minutes.' : 'Resume asked, not yet applied: a broker asks every 5 minutes.', stale: 'The broker has not reported for over 15 minutes.', rejected: 'The broker tried and put its old settings back: journalctl -u asix-broker-config on the broker.', unknown: 'This broker never said. It did not opt in (--accept-config) or its config script is older: copy the new one and re-run the bootstrap.' }[p.state] || '';
+  // Overdue (asked longer ago than ASIX_PAUSE_OVERDUE_MIN and still not applied, src/brokers/paused.js): say so instead of an endless "Pausing...".
+  if (p.overdue) return el('span', { title: 'Asked ' + (p.asked_at ? new Date(p.asked_at).toLocaleString() : 'a while ago') + ' and still not applied. A broker asks every 5 minutes: check that it opted in (--accept-config), has the current asix-broker-config.sh and that its timer runs (systemctl status asix-broker-config.timer).', style: 'display:inline-flex;gap:6px;flex-wrap:wrap' }, p.asked.length ? pill(names, 'off') : '', pill('Not applied', 'bad'));
   return el('span', { title: hint, style: 'display:inline-flex;gap:6px;flex-wrap:wrap' }, p.asked.length ? pill(names, 'off') : '', pill(p.asked.length ? st[0] : 'Resuming...', st[1]));
 }
 const BROKER_PAUSE_HELP = { file: 'the log file globs this broker reads', http: 'the listener for applications that POST JSON events', journald: "this VM's systemd journal (sshd, sudo, cron, the kernel)" };

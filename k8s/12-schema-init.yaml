@@ -504,6 +504,8 @@ data:
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS inputs_paused TEXT CHECK (inputs_paused IS NULL OR (length(inputs_paused) <= 40 AND inputs_paused ~ '^[a-z,]+$'));
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS config_paused_inputs TEXT CHECK (config_paused_inputs IS NULL OR (length(config_paused_inputs) <= 40 AND config_paused_inputs ~ '^[a-z,]*$'));
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS config_rejected_paused TEXT CHECK (config_rejected_paused IS NULL OR (length(config_rejected_paused) <= 40 AND config_rejected_paused ~ '^[a-z,]+$'));
+    -- When the list in inputs_paused last CHANGED (src/brokers/paused.js): the time to measure "asked, still not applied" from. NULL = an ask made before this column existed (never overdue).
+    ALTER TABLE collectors ADD COLUMN IF NOT EXISTS inputs_paused_at TIMESTAMP;
     CREATE INDEX IF NOT EXISTS idx_collectors_tenant_seen ON collectors(tenant_id, last_seen);
     CREATE INDEX IF NOT EXISTS idx_collectors_key ON collectors(key_id);
 

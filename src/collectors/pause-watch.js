@@ -9,9 +9,12 @@
 // version reads "vector-<version>" that is watched ("Alert if down" on it, or the tenant-wide "Watch everything" switch and not left out).
 // The state comes from pausedState() in src/brokers/paused.js, so this alert and the Brokers page cannot disagree.
 //
-// Only a rejection is a problem. Not raised: `pending` (a broker asks every 5 minutes, so asked-but-not-yet-applied is normal for a while),
-// `stale` (it stopped reporting: the disconnect alert covers a dead broker), `unknown` (never reported: it did not opt in with --accept-config, or its
-// script is older; ASIX cannot tell that from a broker that has not pulled yet) and `applied`. It is the broker describing itself, not proof.
+// Two problems raise it. A REJECTION (the broker said it put its old settings back) is immediate. An OVERDUE ask (added 2026-10-23) is a pause or resume that is
+// still not applied ASIX_PAUSE_OVERDUE_MIN minutes (default 30, 0 = off) after it was last changed (collectors.inputs_paused_at): the broker is `pending` (it
+// reports another list and has not rejected this one) or `unknown` (it never reported, so it did not opt in with --accept-config, its script is older, or its
+// config timer is not running). A broker asks every 5 minutes, so a normal ask is applied well inside that time. A rejection wins over an overdue ask.
+// Never raised: `stale` (it stopped reporting: the disconnect alert covers a dead broker), `applied`, an ask made before inputs_paused_at existed (no time to
+// measure from). It is the broker describing itself, not proof.
 //
 // plan() is pure and holds every rule; runTenant() reads the rows, calls plan() and writes what it says. One alert per rejected list: it stays while the
 // broker keeps rejecting the same ask, closes when the broker applies it, the ask changes, the broker is no longer watched or was deleted; if an analyst
@@ -23,27 +26,32 @@ const paused = require('../brokers/paused');
 const { severity } = require('./watchdog');
 const watchAll = require('./watch-all');
 
-const RULE_NAME = 'Broker input pause not applied';
+const RULE_NAME = 'Broker input pause not applied';   // one rule for both problems (rejected, overdue): a broker has one alert at a time
 const keyOf = (id) => `brokerpause:${id}`;
 
-// What is wrong with what this broker says about the pause list? null = nothing; else a reference that changes when the asked list does.
-function badPause(row, now) {
-  const s = paused.pausedState(row, now);
-  if (s.state !== 'rejected') return null;
+// What is wrong with what this broker says about the pause list? null = nothing; else a reference that changes when the asked list does (an overdue ask also
+// carries the time it was asked, so asking the same list again later is a new problem).
+function badPause(row, now, overdueMin) {
+  const s = paused.pausedState(row, now, overdueMin);
   const names = s.asked.length ? s.asked.join(', ') : 'none';
-  return { ref: `rejected:${s.asked.join(',')}`, asked: s.asked, names };
+  if (s.state === 'rejected') return { kind: 'rejected', ref: `rejected:${s.asked.join(',')}`, asked: s.asked, names };
+  if (s.overdue) {
+    const since = Math.max(0, Math.round((now - Date.parse(s.asked_at)) / 60000));
+    return { kind: 'overdue', state: s.state, ref: `overdue:${s.asked.join(',')}@${Date.parse(s.asked_at)}`, asked: s.asked, names, since_min: since };
+  }
+  return null;
 }
 
-// brokers: watched brokers { id, name, version, inputs_paused, config_paused_inputs, config_rejected_paused, config_reported_at }
+// brokers: watched brokers { id, name, version, inputs_paused, inputs_paused_at, config_paused_inputs, config_rejected_paused, config_reported_at }
 // active:  open or acknowledged alerts of this rule { id, group_key }
 // latest:  newest alert of this rule per group_key { group_key, status, pause_ref }
-// opts:    { now, raiseAllowed }  false (start-up grace) still closes alerts but raises none
-function plan({ brokers, active, latest }, { now = Date.now(), raiseAllowed = true } = {}) {
+// opts:    { now, raiseAllowed, overdueMin }  raiseAllowed false (start-up grace) still closes alerts but raises none; overdueMin defaults to ASIX_PAUSE_OVERDUE_MIN
+function plan({ brokers, active, latest }, { now = Date.now(), raiseAllowed = true, overdueMin } = {}) {
   const bad = new Map(), known = new Set();
   for (const b of brokers) {
     if (!isBroker(b)) continue;
     known.add(keyOf(b.id));
-    const k = badPause(b, now);
+    const k = badPause(b, now, overdueMin);
     if (k) bad.set(keyOf(b.id), { b, k });
   }
   const newest = new Map(latest.map((a) => [a.group_key, a]));
@@ -52,7 +60,7 @@ function plan({ brokers, active, latest }, { now = Date.now(), raiseAllowed = tr
     for (const [key, { b, k }] of bad) {
       const prev = newest.get(key);
       if (prev && (prev.status !== 'closed' || prev.pause_ref === k.ref)) continue;   // still active, or this same list was closed by hand
-      raise.push({ broker_id: b.id, name: b.name, group_key: key, pause_ref: k.ref, asked: k.asked, names: k.names });
+      raise.push({ broker_id: b.id, name: b.name, group_key: key, pause_ref: k.ref, kind: k.kind, state: k.state, since_min: k.since_min, asked: k.asked, names: k.names });
     }
   }
   for (const a of active) {
@@ -61,7 +69,7 @@ function plan({ brokers, active, latest }, { now = Date.now(), raiseAllowed = tr
       const prev = newest.get(a.group_key);
       if (!prev || prev.pause_ref === cur.k.ref) continue;   // the same problem: keep it
       // the ask changed to another list that is also rejected: the open alert describes the old list, so it is closed and a new one raised next cycle
-      close.push({ alert_id: a.id, reason: 'ASIX now asks this broker for a different list of inputs, which it also rejected.' });
+      close.push({ alert_id: a.id, reason: 'ASIX now asks this broker for a different list of inputs, or what the broker says about it has changed, so this alert described an older problem.' });
       continue;
     }
     close.push({ alert_id: a.id, reason: known.has(a.group_key)
@@ -71,19 +79,26 @@ function plan({ brokers, active, latest }, { now = Date.now(), raiseAllowed = tr
   return { raise, close };
 }
 
-const raiseText = (r) => ({
-  title: `${RULE_NAME}: ${r.name}`,
-  summary: r.asked.length
+const HOW = 'A broker asks every 5 minutes: check that it opted in (bootstrap with --accept-config), has the current asix-broker-config.sh and that \"systemctl status asix-broker-config.timer\" shows it running.';
+function raiseText(r) {
+  const title = `${RULE_NAME}: ${r.name}`;
+  if (r.kind === 'overdue') {
+    const what = r.asked.length ? `to pause ${r.names}` : 'to resume its paused inputs';
+    const still = r.asked.length ? 'those inputs are still running' : 'they are still paused';
+    const said = r.state === 'unknown' ? 'It has never reported on this setting' : 'It reports a different list and has not rejected this one';
+    return { title, summary: `${r.name} was asked ${what} about ${r.since_min} minutes ago and has not applied it, so ${still}. ${said}. ${HOW}` };
+  }
+  return { title, summary: r.asked.length
     ? `${r.name} was asked to pause ${r.names} and rejected it: it put its old settings back, so those inputs are still running. See "journalctl -u asix-broker-config" on the broker for why (a failed Vector validate, restart or health check).`
-    : `${r.name} was asked to resume its paused inputs and rejected it: it put its old settings back, so they are still paused. See "journalctl -u asix-broker-config" on the broker for why (a failed Vector validate, restart or health check).`,
-});
+    : `${r.name} was asked to resume its paused inputs and rejected it: it put its old settings back, so they are still paused. See "journalctl -u asix-broker-config" on the broker for why (a failed Vector validate, restart or health check).` };
+}
 
 async function runTenant(tenantId, { now = Date.now(), raiseAllowed = true, sev = severity() } = {}) {
   return db.withTenant(tenantId, async (client) => {
     await client.query("SET LOCAL statement_timeout = '15s'");
     const all = await watchAll.read(client, tenantId);
     const brokers = (await client.query(
-      `SELECT c.id, c.name, c.version, c.inputs_paused, c.config_paused_inputs, c.config_rejected_paused, c.config_reported_at
+      `SELECT c.id, c.name, c.version, c.inputs_paused, c.inputs_paused_at, c.config_paused_inputs, c.config_rejected_paused, c.config_reported_at
          FROM collectors c
         WHERE c.tenant_id = $1 AND c.version ILIKE $2
           AND (c.watch_disconnect OR ($3::boolean AND NOT c.watch_exclude AND c.last_seen >= $4::timestamp))`,
@@ -99,7 +114,7 @@ async function runTenant(tenantId, { now = Date.now(), raiseAllowed = true, sev 
       await client.query(
         `INSERT INTO alerts (tenant_id, rule_id, rule_name, severity, title, summary, group_key, event_count, first_event_at, last_event_at, details)
          VALUES ($1, NULL, $2, $3, $4, $5, $6, 0, localtimestamp, localtimestamp, $7::jsonb)`,
-        [tenantId, RULE_NAME, sev, t.title, t.summary, r.group_key, JSON.stringify({ broker_id: r.broker_id, broker: r.name, pause_ref: r.pause_ref, asked: r.asked })]);
+        [tenantId, RULE_NAME, sev, t.title, t.summary, r.group_key, JSON.stringify({ broker_id: r.broker_id, broker: r.name, kind: r.kind, pause_ref: r.pause_ref, asked: r.asked })]);
     }
     for (const c of p.close) {
       await client.query("UPDATE alerts SET status = 'closed', updated_at = localtimestamp WHERE id = $1 AND tenant_id = $2", [c.alert_id, tenantId]);

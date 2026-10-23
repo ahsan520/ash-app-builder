@@ -48,7 +48,7 @@ function shape(row, { now = Date.now(), events24h = 0, target = null, syslogPort
   // tenant-wide settings (it is then told neither tenant-wide port; an own TLS port still applies).
   const ownTls = row.tls_port_override != null ? Number(row.tls_port_override) : null;
   b.tls = { ...tlsState(effectiveTlsPort(tlsPort, ownTls, left), row, now), source: tlsSource(tlsPort, ownTls, left), override_port: ownTls };   // state: none | unknown | no_listener | applied | rejected | pending | stale; not a problem
-  b.inputs_paused = pausedState(row, now);   // { state: none | unknown | applied | rejected | pending | stale, asked, reported, rejected, reported_at }; not a problem
+  b.inputs_paused = pausedState(row, now);   // { state: none | unknown | applied | rejected | pending | stale, asked, reported, rejected, reported_at, asked_at, overdue }; not a problem
   b.signature = { ...signatureState(signingOn, row, now), help: null };   // state: unknown | not_verifying | verifying | waiting | refused | stale; not a problem
   b.signature.help = b.signature.problem ? SIGNATURE_HELP[b.signature.problem] || null : null;
   return b;
@@ -74,6 +74,7 @@ function summarize(brokers) {
     port_excluded: brokers.filter((b) => b.config && b.config.excluded && b.config.source !== 'broker').length,
     paused_asked: brokers.filter((b) => b.inputs_paused && b.inputs_paused.asked.length).length,
     paused_not_applied: brokers.filter((b) => b.inputs_paused && ['unknown', 'rejected', 'pending', 'stale'].includes(b.inputs_paused.state)).length,
+    paused_overdue: brokers.filter((b) => b.inputs_paused && b.inputs_paused.overdue).length,
     signature_verifying: brokers.filter((b) => b.signature && b.signature.state === 'verifying').length,
     signature_not_verifying: brokers.filter((b) => b.signature && b.signature.state === 'not_verifying').length,
     signature_refused: brokers.filter((b) => b.signature && b.signature.state === 'refused').length,

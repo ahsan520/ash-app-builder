@@ -108,11 +108,11 @@ describe('runTenant (database replaced)', () => {
     const r = await require('../src/collectors/pause-watch').runTenant('t1', { sev: 'high', now: NOW });
     assert.deepStrictEqual(r, { raised: 1, closed: 1 });
     const sel = calls.find((c) => /FROM collectors/.test(c.sql));
-    assert.match(sel.sql, /c\.watch_disconnect/); assert.match(sel.sql, /NOT c\.watch_exclude/); assert.match(sel.sql, /c\.config_rejected_paused/); assert.strictEqual(sel.args.length, 4);
+    assert.match(sel.sql, /c\.watch_disconnect/); assert.match(sel.sql, /NOT c\.watch_exclude/); assert.match(sel.sql, /c\.config_rejected_paused/); assert.match(sel.sql, /c\.inputs_paused_at/); assert.strictEqual(sel.args.length, 4);
     assert.deepStrictEqual(sel.args.slice(0, 3), ['t1', 'vector-%', false]);
     const ins = calls.find((c) => /INSERT INTO alerts/.test(c.sql));
     assert.strictEqual(ins.args[1], 'Broker input pause not applied'); assert.strictEqual(ins.args[2], 'high'); assert.strictEqual(ins.args[5], 'brokerpause:b1');
-    assert.deepStrictEqual(JSON.parse(ins.args[6]), { broker_id: 'b1', broker: 'broker-1', pause_ref: 'rejected:journald', asked: ['journald'] });
+    assert.deepStrictEqual(JSON.parse(ins.args[6]), { broker_id: 'b1', broker: 'broker-1', kind: 'rejected', pause_ref: 'rejected:journald', asked: ['journald'] });
     assert.ok(calls.some((c) => /SET status = 'closed'/.test(c.sql) && c.args[0] === 'old'));
   });
   it('a database without the pause columns makes the query throw, which the watchdog catches per tenant', async () => {

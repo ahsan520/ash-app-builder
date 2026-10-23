@@ -12,6 +12,17 @@ const MAX_TEXT = 40;                           // 'file,http,journald' is 18 cha
 
 const order = (set) => KINDS.filter((k) => set.has(k));
 
+// How long a pause (or resume) may stay unapplied before it counts as overdue. A broker asks every 5 minutes and applies in seconds, so 30 minutes means six
+// asks went by. ASIX_PAUSE_OVERDUE_MIN: 0 = never overdue (no flag on the page, no alert for it); 5 to 1440 minutes; anything else means the default.
+const OVERDUE_DEFAULT_MIN = 30, OVERDUE_MIN_MIN = 5, OVERDUE_MAX_MIN = 1440;
+function overdueMinutes(env = process.env) {
+  const raw = env.ASIX_PAUSE_OVERDUE_MIN;
+  if (raw === undefined || String(raw).trim() === '') return OVERDUE_DEFAULT_MIN;
+  const n = Number(raw);
+  if (n === 0) return 0;
+  return Number.isInteger(n) && n >= OVERDUE_MIN_MIN && n <= OVERDUE_MAX_MIN ? n : OVERDUE_DEFAULT_MIN;
+}
+
 // What the operator sent: null / '' / [] clear the list; an array or a comma separated string of known names sets it. Returns { value: [...] } (in the fixed order, each once) or { error }.
 function checkPaused(v) {
   if (v === null || v === undefined || v === '') return { value: [] };
@@ -60,7 +71,11 @@ async function readForPull(client, tenantId, keyId, name) {
 // Sets or clears the list on one broker (a collector whose version reads vector-<version>). Returns { id, name, paused } or null if there is no such broker.
 async function writePaused(client, tenantId, brokerId, list) {
   const text = list.length ? toText(list) : null;
-  const r = await client.query("UPDATE collectors SET inputs_paused = $3 WHERE id = $1 AND tenant_id = $2 AND version ILIKE 'vector-%' RETURNING id, name, inputs_paused", [brokerId, tenantId, text]);
+  // inputs_paused_at is when the ask last CHANGED (saving the same list again keeps it), so "asked 40 minutes ago" cannot be reset by pressing Save twice.
+  const r = await client.query(`UPDATE collectors
+       SET inputs_paused_at = CASE WHEN inputs_paused IS DISTINCT FROM $3::text THEN localtimestamp ELSE inputs_paused_at END,
+           inputs_paused = $3::text
+     WHERE id = $1 AND tenant_id = $2 AND version ILIKE 'vector-%' RETURNING id, name, inputs_paused`, [brokerId, tenantId, text]);
   return r.rows[0] ? { id: r.rows[0].id, name: r.rows[0].name, paused: parseText(r.rows[0].inputs_paused) || [] } : null;
 }
 
@@ -79,18 +94,24 @@ async function recordReport(client, tenantId, keyId, name, paused, rejected) {
 //   rejected  the broker reports it tried the asked list and put its old settings back
 //   pending   it reports another list and has not rejected this one
 //   stale     as pending, but its last report is older than 15 minutes
+// `overdue` is a flag next to the state, not a state: the list was asked longer ago than overdueMinutes() (collectors.inputs_paused_at, when the ask last changed)
+// and the broker is `unknown` or `pending` (it never reported, or it reports another list without rejecting this one). `rejected` has its own alert and `stale` is
+// the disconnect alert's business. An ask made before inputs_paused_at existed has no time, so it is never overdue (there is nothing to measure from).
 const REPORT_FRESH_MS = 15 * 60 * 1000;
-function pausedState(row, now = Date.now()) {
+function pausedState(row, now = Date.now(), overdueMin = overdueMinutes()) {
   const asked = parseText(row && row.inputs_paused) || [];
   const reported = row && row.config_paused_inputs != null ? parseText(row.config_paused_inputs) : null;
   const rejected = row && row.config_rejected_paused ? toText(parseText(row.config_rejected_paused) || []) : '';
   const at = row && row.config_reported_at ? tsMs(row.config_reported_at) : NaN;
-  const out = { state: 'none', asked, reported, rejected: rejected ? rejected.split(',') : [], reported_at: row && row.config_reported_at ? row.config_reported_at : null };
+  const askedAtMs = row && row.inputs_paused_at ? tsMs(row.inputs_paused_at) : NaN;
+  const out = { state: 'none', asked, reported, rejected: rejected ? rejected.split(',') : [], reported_at: row && row.config_reported_at ? row.config_reported_at : null,
+    asked_at: Number.isFinite(askedAtMs) ? new Date(askedAtMs).toISOString() : null, overdue: false };
   if (!asked.length && (reported === null || !reported.length)) return out;
-  if (reported === null) return { ...out, state: 'unknown' };
+  const late = (state) => ({ ...out, state, overdue: ['unknown', 'pending'].includes(state) && overdueMin > 0 && Number.isFinite(askedAtMs) && now - askedAtMs > overdueMin * 60000 });
+  if (reported === null) return late('unknown');
   if (toText(reported) === toText(asked)) return { ...out, state: 'applied' };
   if (rejected && rejected === toText(asked)) return { ...out, state: 'rejected' };
-  return { ...out, state: Number.isFinite(at) && now - at > REPORT_FRESH_MS ? 'stale' : 'pending' };
+  return late(Number.isFinite(at) && now - at > REPORT_FRESH_MS ? 'stale' : 'pending');
 }
 
-module.exports = { KINDS, MAX_TEXT, checkPaused, parseText, toText, checkReportText, readForPull, writePaused, recordReport, pausedState };
+module.exports = { KINDS, MAX_TEXT, OVERDUE_DEFAULT_MIN, overdueMinutes, checkPaused, parseText, toText, checkReportText, readForPull, writePaused, recordReport, pausedState };
