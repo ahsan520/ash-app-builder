@@ -1350,6 +1350,7 @@ function brokerInputsCell(b) {
 // ---- Broker paused inputs ----
 // PUT /v1/brokers/:id/inputs-paused. Pause or resume the optional inputs (log files, HTTP/JSON, the systemd journal) of ONE broker; syslog cannot be paused. Nothing is pushed:
 // a broker that opted in (--accept-config) and has the current config script takes the paused inputs' config files out of Vector and restarts it, and says so in its next report.
+// The Inputs button opens a dialog with one checkbox per pausable input.
 const BROKER_PAUSABLE = ['file', 'http', 'journald'];
 const BROKER_PAUSE_STATE = { applied: ['Paused', 'off'], pending: ['Pausing...', 'off'], stale: ['Not reporting', 'off'], rejected: ['Rejected', 'off'], unknown: ['Not reporting', 'off'] };
 function brokerPausedCell(b) {
@@ -1360,12 +1361,39 @@ function brokerPausedCell(b) {
   const hint = { applied: 'The broker says these inputs are off.', pending: p.asked.length ? 'Asked, not yet applied: a broker asks every 5 minutes.' : 'Resume asked, not yet applied: a broker asks every 5 minutes.', stale: 'The broker has not reported for over 15 minutes.', rejected: 'The broker tried and put its old settings back: journalctl -u asix-broker-config on the broker.', unknown: 'This broker never said. It did not opt in (--accept-config) or its config script is older: copy the new one and re-run the bootstrap.' }[p.state] || '';
   return el('span', { title: hint, style: 'display:inline-flex;gap:6px;flex-wrap:wrap' }, p.asked.length ? pill(names, 'off') : '', pill(p.asked.length ? st[0] : 'Resuming...', st[1]));
 }
-async function brokerPauseEdit(b) {
-  const p = b.inputs_paused || { asked: [] };
-  const v = prompt('Inputs to pause on ' + b.name + ', comma separated: ' + BROKER_PAUSABLE.join(', ') + '.\nfile = log files, http = HTTP/JSON, journald = the systemd journal. Syslog cannot be paused.\nA paused input stops listening or reading until you resume it.\nEmpty: resume everything.\nNeeds --accept-config on the broker.', p.asked.join(','));
-  if (v === null) return;
-  const list = v.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
-  try { await api('/v1/brokers/' + b.id + '/inputs-paused', { method: 'PUT', body: { paused: list } }); route(); } catch (e) { alert(e.message); }
+const BROKER_PAUSE_HELP = { file: 'the log file globs this broker reads', http: 'the listener for applications that POST JSON events', journald: "this VM's systemd journal (sshd, sudo, cron, the kernel)" };
+// What one input is doing now, for the dialog: asked and reported are compared the same way pausedState() does it (src/brokers/paused.js).
+function brokerPauseNote(b, k) {
+  const p = b.inputs_paused || { asked: [], reported: null };
+  const asked = p.asked.includes(k), held = (p.reported || []).includes(k);
+  if (asked && held) return 'paused';
+  if (asked) return 'pause asked, not applied yet';
+  if (held) return 'resume asked, not applied yet';
+  if (Array.isArray(b.inputs)) return b.inputs.some((i) => i.kind === k) ? 'running' : 'not on this broker';
+  return '';
+}
+// A dialog with one checkbox per pausable input (ticked = paused), instead of typing names. Save sends the ticked list; nothing ticked resumes everything.
+function brokerPauseEdit(b) {
+  const asked = (b.inputs_paused && b.inputs_paused.asked) || [];
+  const err = el('div', { className: 'err' }), boxes = {};
+  const rows = BROKER_PAUSABLE.map((k) => {
+    boxes[k] = el('input', { type: 'checkbox', checked: asked.includes(k) });
+    const note = brokerPauseNote(b, k);
+    return el('label', { style: 'display:flex;gap:10px;align-items:flex-start;margin:10px 0;cursor:pointer' }, boxes[k],
+      el('span', {}, el('b', { textContent: BROKER_INPUT_LABEL[k] || k }), ' ', el('span', { className: 'mute', textContent: BROKER_PAUSE_HELP[k] }), note ? el('div', { className: 'mute', style: 'font-size:12px', textContent: note }) : ''));
+  });
+  const m = openModal(el('h2', { textContent: 'Inputs on ' + b.name }),
+    el('p', { className: 'desc', textContent: 'Tick an input to pause it: it stops listening or reading until you untick it. Syslog and syslog over TLS cannot be paused. The broker applies the change within 5 minutes and needs --accept-config.' }),
+    ...rows, err);
+  const cancel = el('button', { className: 'btn', textContent: 'Cancel', onclick: () => m.close() });
+  const save = el('button', { className: 'btn pri', textContent: 'Save', onclick: async () => {
+    const list = BROKER_PAUSABLE.filter((k) => boxes[k].checked);
+    if (list.join(',') === asked.join(',')) return m.close();
+    err.textContent = ''; save.disabled = true;
+    try { await api('/v1/brokers/' + b.id + '/inputs-paused', { method: 'PUT', body: { paused: list } }); m.close(); route(); } catch (e) { err.textContent = e.message; save.disabled = false; }
+  } });
+  m.box.append(el('div', { className: 'actions' }, cancel, save));
+  return m;
 }
 // Read-only: the broker VMs that report to this install (docs/broker-vm.md), and the command to add one.
 async function pgBrokers() {
