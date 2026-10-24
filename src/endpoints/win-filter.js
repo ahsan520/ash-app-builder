@@ -13,6 +13,7 @@
 // ASCII in JavaScript. Use [^\n] and explicit classes where it matters. Pure functions, no I/O.
 
 const MAX_RULES = 200, MAX_STRIPS = 50, MAX_REGEX = 300, MAX_XPATH = 1024;
+const MAX_PROGRAM_BYTES = 1048576;   // the most a broker downloads (win-filter-broker.js); win-filter-store.js refuses to save a policy whose program would be bigger
 const ID_RE = /^[a-z0-9_-]{1,40}$/, CHANNEL_RE = /^[A-Za-z0-9 _/.-]{1,64}$/, FIELD_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 const ACTIONS = ['keep', 'drop'];
 
@@ -241,4 +242,4 @@ function toInput(policy) {
     message_strip: policy.message_strip.map((m) => ({ ...scope(m), regex: m.regex })) };
 }
 
-module.exports = { toInput, validate, evaluate, checkRegex, parseId, toVrl, toVectorTransform, toXPath, toAgentConf, presetNoisySecurity, WAZUH_PATHS, MAX_RULES, MAX_STRIPS, MAX_REGEX, MAX_XPATH };
+module.exports = { toInput, validate, evaluate, checkRegex, parseId, toVrl, toVectorTransform, toXPath, toAgentConf, presetNoisySecurity, WAZUH_PATHS, MAX_RULES, MAX_STRIPS, MAX_REGEX, MAX_XPATH, MAX_PROGRAM_BYTES };

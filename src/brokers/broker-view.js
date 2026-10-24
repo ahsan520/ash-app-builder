@@ -7,6 +7,7 @@ const { upgradeState } = require('./upgrade');
 const watchAll = require('../collectors/watch-all');
 const { listInputs } = require('./inputs');
 const { pausedState } = require('./paused');
+const { winFilterState } = require('../endpoints/win-filter-broker');
 const { configState, tlsState, effectivePort, portSource, effectiveTlsPort, tlsSource, signatureState, SIGNATURE_HELP } = require('./config');
 
 const BROKER_VERSION_SQL = 'vector-%';              // the same rule as isBroker(), for the query
@@ -24,7 +25,7 @@ function problemsOf(b, now = Date.now()) {
   return out;
 }
 
-function shape(row, { now = Date.now(), events24h = 0, target = null, syslogPort = null, signingOn = false, tlsPort = null, watchDefaults = watchAll.OFF } = {}) {
+function shape(row, { now = Date.now(), events24h = 0, target = null, syslogPort = null, signingOn = false, tlsPort = null, watchDefaults = watchAll.OFF, winFilter = null } = {}) {
   const b = {
     id: row.id, name: row.name, alias: row.alias || null,
     vector_version: String(row.version || '').replace(/^vector-/i, '') || null,
@@ -49,6 +50,7 @@ function shape(row, { now = Date.now(), events24h = 0, target = null, syslogPort
   const ownTls = row.tls_port_override != null ? Number(row.tls_port_override) : null;
   b.tls = { ...tlsState(effectiveTlsPort(tlsPort, ownTls, left), row, now), source: tlsSource(tlsPort, ownTls, left), override_port: ownTls };   // state: none | unknown | no_listener | applied | rejected | pending | stale; not a problem
   b.inputs_paused = pausedState(row, now);   // { state: none | unknown | applied | rejected | pending | stale, asked, reported, rejected, reported_at, asked_at, overdue }; not a problem
+  b.win_filter = winFilterState(row, winFilter, now);   // { state: none | unknown | applied | rejected | pending | stale, revision, reported_at, removing }; not a problem (src/endpoints/win-filter-broker.js)
   b.signature = { ...signatureState(signingOn, row, now), help: null };   // state: unknown | not_verifying | verifying | waiting | refused | stale; not a problem
   b.signature.help = b.signature.problem ? SIGNATURE_HELP[b.signature.problem] || null : null;
   return b;
@@ -72,6 +74,8 @@ function summarize(brokers) {
     port_overrides: brokers.filter((b) => b.config && b.config.source === 'broker').length,
     tls_port_overrides: brokers.filter((b) => b.tls && b.tls.source === 'broker').length,
     port_excluded: brokers.filter((b) => b.config && b.config.excluded && b.config.source !== 'broker').length,
+    win_filter_applied: brokers.filter((b) => b.win_filter && b.win_filter.state === 'applied').length,
+    win_filter_not_applied: brokers.filter((b) => b.win_filter && ['unknown', 'rejected', 'pending', 'stale'].includes(b.win_filter.state)).length,
     paused_asked: brokers.filter((b) => b.inputs_paused && b.inputs_paused.asked.length).length,
     paused_not_applied: brokers.filter((b) => b.inputs_paused && ['unknown', 'rejected', 'pending', 'stale'].includes(b.inputs_paused.state)).length,
     paused_overdue: brokers.filter((b) => b.inputs_paused && b.inputs_paused.overdue).length,

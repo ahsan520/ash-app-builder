@@ -30,6 +30,13 @@
 # lists), writes ASIX_INPUTS_PAUSED, runs `vector validate` on the new list, restarts Vector, waits for health, and puts broker.env back on any failure (remembering the rejected list in
 # config-paused-rejected). The config files stay installed, so resuming needs nothing from ASIX but an empty list. A re-run of bootstrap-broker.sh writes the full list again; the next pull pauses again.
 # The report also says which inputs this broker has paused (paused_inputs) and the list it rejected (rejected_paused_inputs).
+# WINDOWS EVENT FILTER: the answer may also say `win_filter` (64 hex): the SHA-256 of the Vector program that holds this tenant's Windows event filter policy (Settings > Windows event filter in ASIX). The broker
+# downloads the program from <ingest URL>/../broker-config/win-filter with its own key, refuses it unless it hashes to exactly the announced value (in signed mode the hash is inside the signature, so a program
+# changed on the way is refused), checks the file itself (size, no control characters), runs `vector validate` on a one-transform config that loads it, and only then puts it in $VECTOR_DIR/win-filter.vrl
+# (the old file kept as win-filter.vrl.before-config). If a Vector config in VECTOR_CONFIG reads win-filter.vrl, the whole config is validated again, Vector restarted and its health checked, and any failure puts
+# the old file back (restarting Vector on it) and remembers the rejected hash in win-filter-rejected so it is not retried every 5 minutes until ASIX announces a different program. Nothing reads the file until a
+# Windows events input exists (task E4), so today the program is placed and checked and Vector is not restarted. When ASIX's policy is removed it announces the keep-everything program and this broker takes the filter away
+# the same way. The report also says the hash of the program file this broker has (win_filter, '' = none) and the hash it rejected (rejected_win_filter); a broker that never had a file and rejected nothing sends neither.
 # It does not open the firewall: the new port must be opened on this VM by hand. Results go to the journal (journalctl -u asix-broker-config).
 set -uo pipefail
 
@@ -80,6 +87,14 @@ report() {  # EXIT trap: what this broker listens on now (read from broker.env A
   if grep -q '^ASIX_INPUTS_PAUSED=' "$ENV_FILE" 2>/dev/null || [ -n "$pzr" ]; then
     pz="$( . "$ENV_FILE" >/dev/null 2>&1; printf '%s' "${ASIX_INPUTS_PAUSED:-}" | tr -cd 'a-z,' | cut -c1-40 )"
     extra="$(printf ',"paused_inputs":"%s","rejected_paused_inputs":"%s"' "$pz" "$pzr")"
+  fi
+  # The Windows event filter program this broker has (the hash of the file, '' = no file) and the hash it rejected. Only sent by a broker that has such a file or a rejected hash.
+  wfr=""; [ -r "$STATE_DIR/win-filter-rejected" ] && wfr="$(tr -cd '0-9a-f' < "$STATE_DIR/win-filter-rejected" 2>/dev/null | cut -c1-64)"
+  [[ "$wfr" =~ ^[0-9a-f]{64}$ ]] || wfr=""
+  if [ -r "$VECTOR_DIR/win-filter.vrl" ] || [ -n "$wfr" ]; then
+    wfh=""; [ -r "$VECTOR_DIR/win-filter.vrl" ] && wfh="$(sha256sum < "$VECTOR_DIR/win-filter.vrl" 2>/dev/null | cut -d' ' -f1)"
+    [[ "$wfh" =~ ^[0-9a-f]{64}$ ]] || wfh=""
+    extra="$extra$(printf ',"win_filter":"%s","rejected_win_filter":"%s"' "$wfh" "$wfr")"
   fi
   body="$(printf '{"collector":"%s","syslog_port":%s,"rejected_port":%s,"signature":"%s","tls_port":%s,"rejected_tls_port":%s%s}' "$name" "$cur" "$rej" "$SIG" "$tls" "$trej" "$extra")"
   curl "${ARGS[@]}" -X POST -H "Content-Type: application/json" --data "$body" "$URL/report" >/dev/null 2>&1 || true
@@ -144,6 +159,13 @@ if printf '%s' "$FLAT" | grep -q '"paused_inputs":'; then
   done
   # always the same order, whatever ASIX sent
   PI_ORD=""; for t in file http journald; do case ",$PI," in *",$t,"*) PI_ORD="${PI_ORD:+$PI_ORD,}$t";; esac; done; PI="$PI_ORD"
+fi
+
+# The Windows event filter: absent means no opinion (an ASIX from before this, or nothing to say); a 64-character hash names the program ASIX wants in win-filter.vrl.
+WF_SET=0; WF=""
+if printf '%s' "$FLAT" | grep -q '"win_filter":'; then
+  printf '%s' "$FLAT" | grep -q '"win_filter":"[0-9a-f]\{64\}"' || { echo "Unexpected win_filter in the answer from ASIX (not a 64-character hash); nothing changed." >&2; exit 1; }
+  WF_SET=1; WF="$(printf '%s' "$FLAT" | sed -n 's/.*"win_filter":"\([0-9a-f]\{64\}\)".*/\1/p')"
 fi
 
 BACKUP="$ENV_FILE.before-config"
@@ -277,4 +299,67 @@ apply_paused() {
   return 0
 }
 if [ "$PI_SET" -eq 1 ]; then apply_paused "$PI" || RC=1; fi
+
+# ---- 4. The Windows event filter ----
+# apply_winfilter HASH: makes $VECTOR_DIR/win-filter.vrl the program ASIX announced. Order, stopping at the first failure: skip when the file already has that hash; skip a hash tried and rejected before;
+# download; the hash must match what ASIX announced (a mismatch changes nothing and is NOT remembered: the policy may just have been saved again, the next pull asks again); the file's own sanity checks;
+# `vector validate` on a one-transform config that loads the candidate; then replace the file (the old one kept). Vector is restarted only when a Vector config in VECTOR_CONFIG reads win-filter.vrl.
+apply_winfilter() {
+  local WANT="$1" F="$VECTOR_DIR/win-filter.vrl" REJ="$STATE_DIR/win-filter-rejected" BAK="$VECTOR_DIR/win-filter.vrl.before-config" HAVE="" HS GOT CURVC e CONS=0 ent ok HEALTH HAD=0
+  [ -r "$F" ] && HAVE="$(sha256sum < "$F" 2>/dev/null | cut -d' ' -f1)"
+  if [ "$WANT" = "$HAVE" ]; then rm -f "$REJ"; return 0; fi
+  HS="${HAVE:0:12}"; [ -n "$HS" ] || HS=none   # what the file is now, short, for the messages
+  if [ -r "$REJ" ] && [ "$(cat "$REJ" 2>/dev/null)" = "$WANT" ]; then
+    echo "Windows filter ${WANT:0:12} was tried before and failed on this broker; not trying again until ASIX announces a different one."; return 0
+  fi
+  command -v sha256sum >/dev/null 2>&1 || { echo "sha256sum is needed to check the Windows filter; nothing changed." >&2; return 1; }
+  [ -n "$W" ] || W="$(mktemp -d)" || { echo "Cannot make a scratch folder; nothing changed." >&2; return 1; }
+  echo "ASIX announces Windows filter ${WANT:0:12} (now $HS). Downloading."
+  curl "${ARGS[@]}" --max-filesize 1048576 -o "$W/win-filter.vrl" "$URL/win-filter" \
+    || { echo "Could not download the Windows filter from ASIX; nothing changed." >&2; return 1; }
+  GOT="$(sha256sum < "$W/win-filter.vrl" | cut -d' ' -f1)"
+  [ "$GOT" = "$WANT" ] || { echo "The Windows filter ASIX served (${GOT:0:12}) is not the one it announced (${WANT:0:12}): the policy was saved again meanwhile, or the download was changed. Nothing changed; asking again at the next pull." >&2; return 1; }
+  [ -s "$W/win-filter.vrl" ] && [ "$(wc -c < "$W/win-filter.vrl")" -le 1048576 ] || { echo "The Windows filter is empty or too large; nothing changed." >&2; return 1; }
+  # Tab, newline and carriage return are allowed; every other control character, NUL included, is not (grep would not see a NUL, so the file is compared with a copy that has them removed).
+  tr -d '\000-\010\013\014\016-\037\177' < "$W/win-filter.vrl" | cmp -s - "$W/win-filter.vrl" || { echo "The Windows filter has control characters; nothing changed." >&2; return 1; }
+  mkdir -p "$W/wf-data"
+  printf '%s\n' "data_dir: $W/wf-data" "sources:" "  t: { type: demo_logs, format: json, count: 1 }" "transforms:" \
+    "  f: { type: remap, inputs: [t], file: $W/win-filter.vrl, drop_on_abort: true }" "sinks:" "  s: { type: blackhole, inputs: [f] }" > "$W/wf-check.yaml"
+  vector validate --no-environment "$W/wf-check.yaml" >/dev/null 2>&1 \
+    || { mkdir -p "$STATE_DIR" && echo "$WANT" > "$REJ"; echo "The Windows filter ${WANT:0:12} does not pass 'vector validate'. Nothing changed." >&2; return 1; }
+
+  restore() {  # puts the old file back (or removes the new one when there was none)
+    if [ "$HAD" -eq 1 ]; then cp -p "$BAK" "$F"; else rm -f "$F"; fi
+  }
+  if [ -e "$F" ]; then cp -p "$F" "$BAK" && HAD=1 || { echo "Cannot keep a copy of $F; nothing changed." >&2; return 1; }; else rm -f "$BAK"; fi
+  install -m 0644 "$W/win-filter.vrl" "$F.new" && mv "$F.new" "$F" || { rm -f "$F.new"; echo "Cannot write $F; nothing changed." >&2; return 1; }
+
+  CURVC="$( . "$ENV_FILE" >/dev/null 2>&1; printf '%s' "${VECTOR_CONFIG:-$VECTOR_DIR/vector.yaml}" )"
+  IFS=, read -ra ent <<< "$CURVC"
+  for e in "${ent[@]}"; do [ -r "$e" ] && grep -q 'win-filter\.vrl' "$e" 2>/dev/null && CONS=1; done
+  if [ "$CONS" -eq 0 ]; then
+    rm -f "$REJ"; echo "Done: Windows filter $HS -> ${WANT:0:12}. No Vector config reads $F yet, so Vector was not restarted."; return 0
+  fi
+  reject_wf() {  # $1 = why, $2 = restart if Vector was already restarted
+    echo "$1 Putting the old Windows filter back." >&2
+    restore
+    mkdir -p "$STATE_DIR" && echo "$WANT" > "$REJ"
+    if [ "${2:-}" = restart ]; then systemctl restart vector || echo "Restarting Vector on the old Windows filter failed: journalctl -u vector -n 50" >&2; fi
+    return 1
+  }
+  ( set -a; . "$ENV_FILE"; set +a; vector validate --no-environment "${ent[@]}" ) >/dev/null 2>&1 \
+    || { reject_wf "The config does not pass 'vector validate' with Windows filter ${WANT:0:12}."; return 1; }
+  systemctl restart vector || { reject_wf "systemctl restart vector failed with Windows filter ${WANT:0:12}." restart; return 1; }
+  HEALTH="${ASIX_VECTOR_HEALTH_URL:-http://127.0.0.1:8686/health}"
+  ok=0
+  for _ in $(seq 1 "$WAIT_S"); do
+    if curl -fsS -m 3 "$HEALTH" >/dev/null 2>&1; then ok=1; break; fi
+    sleep 1
+  done
+  [ "$ok" -eq 1 ] || { reject_wf "Vector did not become healthy within ${WAIT_S}s with Windows filter ${WANT:0:12}." restart; return 1; }
+  rm -f "$REJ"
+  echo "Done: Windows filter $HS -> ${WANT:0:12}, Vector healthy."
+  return 0
+}
+if [ "$WF_SET" -eq 1 ]; then apply_winfilter "$WF" || RC=1; fi
 exit $RC

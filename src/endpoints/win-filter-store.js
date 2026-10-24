@@ -9,6 +9,7 @@ const wf = require('./win-filter');
 
 const DEFAULT_CHANNELS = ['Security', 'System', 'Application'];
 const MAX_EVENTS = 50, MAX_FIELDS = 50, MAX_MESSAGE = 20000;
+const PROGRAM_HEADER_ALLOWANCE = 300;   // the comment lines win-filter-broker.js puts in front of the program
 
 const fail = (error) => ({ error });
 const whole = (v) => (typeof v === 'number' ? Number.isInteger(v) && v >= 0 && v <= 2147483647 : typeof v === 'string' && /^(0|[1-9][0-9]{0,9})$/.test(v.trim()) && Number(v) <= 2147483647);
@@ -33,6 +34,9 @@ function parseBody(body) {
   }
   const v = wf.validate(b.policy);
   if (!v.ok) return fail(errText(v.errors));
+  // A broker downloads the program this policy makes (win-filter-broker.js): refuse now what could never be delivered, rather than save it and have no broker take it.
+  const bytes = Buffer.byteLength(wf.toVrl(v.policy), 'utf8') + PROGRAM_HEADER_ALLOWANCE;
+  if (bytes > wf.MAX_PROGRAM_BYTES) return fail('The policy is too large to send to a broker (its program would be about ' + Math.round(bytes / 1024) + ' kB, the limit is ' + Math.round(wf.MAX_PROGRAM_BYTES / 1024) + ' kB): remove rules or event IDs');
   return { policy: v.policy, canonical: wf.toInput(v.policy), if_revision: ifRevision };
 }
 

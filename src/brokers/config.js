@@ -6,6 +6,7 @@
 
 const { tsMs } = require('../collectors/status');
 const pausedInputs = require('./paused');
+const winFilterBroker = require('../endpoints/win-filter-broker');
 
 // Ports a broker must never be told to listen on: SSH, HTTPS, Vector's local health API, and the ASIX HTTPS NodePort.
 const RESERVED = { 22: 'SSH', 443: 'HTTPS', 8686: "Vector's local health API", 30443: 'ASIX HTTPS' };
@@ -123,7 +124,11 @@ function checkReport(body) {
       pausedRejected = q.value;
     }
   }
+  // Optional (scripts older than the Windows event filter do not send these): the hash of the filter program this broker has now ('' = none) and of the one it rejected.
+  const wfr = winFilterBroker.checkReport(b);
+  if (wfr.error) return { error: wfr.error };
   const out = { name, port: port.value, rejected: rej.value, signature, tls, tlsRejected };
+  if (wfr.winFilter !== undefined) { out.winFilter = wfr.winFilter; out.winFilterRejected = wfr.winFilterRejected; }
   if (paused !== undefined) { out.paused = paused; if (pausedRejected !== undefined) out.pausedRejected = pausedRejected; }   // only when the broker sent them: every other report keeps the shape it had
   return out;
 }

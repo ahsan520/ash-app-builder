@@ -565,6 +565,18 @@ A pause or resume that a broker never applies **and never rejects** used to read
 
 Not raised: a broker that is **Not reporting** because it stopped reporting for 15 minutes (the disconnect alert covers a dead broker), an applied list, and an ask made before this column existed (there is no time to measure from; asking again stamps it). A **rejection** always wins: if the broker then rejects the list, the overdue alert is closed and the rejection alert is raised. If you close an overdue alert yourself it is not raised again for the same ask; asking the same list again later is a new ask. Details: `docs/product-plan.md`, "Overdue pauses".
 
+## The Windows event filter on a broker (done 2026-10-24)
+
+If the tenant saved a **Windows event filter** policy (Settings, Windows event filter), a broker set up with `--accept-config` and the current `asix-broker-config.sh` pulls it every 5 minutes and keeps it as `/etc/vector/win-filter.vrl`. Design and every check: `docs/endpoints.md`, "E3 as built".
+
+- **Nothing reads the file yet.** No broker input uses Windows events until the Wazuh manager work (E4). Until then the file is placed and checked and Vector is **not** restarted. Once a Vector config listed in `VECTOR_CONFIG` mentions `win-filter.vrl`, a change to the file is validated, Vector is restarted and its health checked, and the old file is put back if any of that fails.
+- **What the broker checks before it puts the file in:** the downloaded program hashes to exactly what ASIX announced (inside the signature when signing is on), it is not empty, has no control characters and passes `vector validate` as a transform that loads it. Otherwise nothing changes; a program that fails `vector validate`, or a restart that fails, is remembered in `/var/lib/asix-broker/win-filter-rejected` and not retried until ASIX announces a different one (save the policy again after fixing it). A download that fails or a hash that does not match is just tried again at the next pull.
+- **Removing the policy** makes the broker replace the file with the keep-everything program `.`. A broker that never had a file is left alone.
+- **On the Brokers page** the **Windows filter** column shows **Applied rev N**, **Pending rev N**, **Removing...**, **Rejected rev N**, **Not asking** or **Not reporting** (a policy is set but this broker never reported: it was not set up with `--accept-config`, or its script is older). Information only, no alert.
+- **Look on the broker:** `journalctl -u asix-broker-config -n 30`, `sha256sum /etc/vector/win-filter.vrl` (the hash the report sends), `cat /etc/vector/win-filter.vrl`, and `/var/lib/asix-broker/win-filter-rejected` when a program was refused.
+- **Updating a broker for this:** after an ASIX deploy (the schema job adds two columns) re-run the bootstrap on each broker with `--no-install --accept-config` and every flag again, so the new `asix-broker-config.sh` is installed. A broker with the old script ignores the new field and reports nothing about it.
+- **Not run on a real broker VM yet** (real Vector 0.59.0 and real openssl in the sandbox only), and no transform reads the file until E4.
+
 ## Getting an alert when a broker goes quiet
 A broker that stops (Vector down, VM off, network cut) shows as Disconnected on the Collectors and Brokers pages, but nothing tells you unless you look. On the
 Collectors page, press **Alert if down** on the broker's row: ASIX then raises a `Collector disconnected: <broker name>` alert (severity high) once the broker has

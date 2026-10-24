@@ -506,6 +506,10 @@ data:
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS config_rejected_paused TEXT CHECK (config_rejected_paused IS NULL OR (length(config_rejected_paused) <= 40 AND config_rejected_paused ~ '^[a-z,]+$'));
     -- When the list in inputs_paused last CHANGED (src/brokers/paused.js): the time to measure "asked, still not applied" from. NULL = an ask made before this column existed (never overdue).
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS inputs_paused_at TIMESTAMP;
+    -- The Windows event filter program a broker reports having (src/endpoints/win-filter-broker.js): the SHA-256 of /etc/vector/win-filter.vrl, '' = no such file, NULL = never said (older script or no
+    -- --accept-config). config_rejected_win_filter is the hash of the program it tried and put back. Information only, like config_syslog_port.
+    ALTER TABLE collectors ADD COLUMN IF NOT EXISTS config_win_filter TEXT CHECK (config_win_filter IS NULL OR config_win_filter ~ '^([0-9a-f]{64})?$');
+    ALTER TABLE collectors ADD COLUMN IF NOT EXISTS config_rejected_win_filter TEXT CHECK (config_rejected_win_filter IS NULL OR config_rejected_win_filter ~ '^[0-9a-f]{64}$');
     CREATE INDEX IF NOT EXISTS idx_collectors_tenant_seen ON collectors(tenant_id, last_seen);
     CREATE INDEX IF NOT EXISTS idx_collectors_key ON collectors(key_id);
 
