@@ -8,7 +8,7 @@
 #       [--tls-cert server.crt --tls-key server.key [--tls-port 6514] [--tls-client-ca ca.pem]] [--accept-config [--config-pubkey config-signing.pub]]
 #       [--timezone America/Toronto]
 #       [--file-glob '/var/log/myapp/*.log' [--file-glob '/srv/other/*.log' ...]] [--http-user svc --http-password-file /root/http.pw [--http-port 8088] [--http-tls]]
-#       [--journald [--journald-priority 6]]
+#       [--journald [--journald-priority 6]] [--wazuh [--wazuh-archives /var/ossec/logs/archives/archives.json]]
 #
 # --timezone       The time zone (IANA name, default UTC) that senders write in on syslog lines that carry none (RFC 3164). Vector reads those as
 #                  UTC, so a sender in another zone shows hours off in search and detections. Written as ASIX_SYSLOG_TIMEZONE. Like every option here it
@@ -26,6 +26,12 @@
 #                  Installs vector-journald.yaml; re-running without it turns journal reading off again (the group membership stays).
 #   --journald-priority N  With --journald: send only entries at least this important, N from 0 (emerg) to 7 (debug); default 6 (everything but
 #                  debug), 4 is warnings and worse. Written as ASIX_JOURNALD_MAX_PRIORITY.
+# --wazuh          Also read WINDOWS EVENTS from a Wazuh manager's archive file (default /var/ossec/logs/archives/archives.json, the manager must have
+#                  <logall_json>yes</logall_json> in its ossec.conf), apply the tenant's Windows event filter policy (Settings, Windows event filter) and send
+#                  what is left with source type "windows-event". Adds the vector user to the wazuh group when there is one. Installs vector-wazuh.yaml and,
+#                  when there is none yet, the keep-everything filter /etc/vector/win-filter.vrl (Vector will not start without it; asix-broker-config.sh
+#                  keeps it in step with the policy when the broker accepts config). Re-running without --wazuh turns it off (the filter file stays).
+#   --wazuh-archives PATH  With --wazuh: another archive file. Written as ASIX_WAZUH_ARCHIVES.
 # --no-install     Vector is already installed (offline or pinned install); skip the package repo.
 # --tls-cert/key   Also accept syslog over TLS (RFC 5425) on --tls-port (default 6514), with this server certificate.
 #                  Both are needed together. Re-running without them turns the TLS listener off again.
@@ -40,7 +46,7 @@
 
 set -euo pipefail
 
-URL=""; KEY=""; NAME=""; PORT="514"; CA=""; INSTALL=1; TLS_CERT=""; TLS_KEY=""; TLS_PORT="6514"; TLS_CLIENT_CA=""; ACCEPT_CONFIG=0; CONFIG_PUBKEY=""; TIMEZONE="UTC"; FILE_GLOB=""; HTTP_USER=""; HTTP_PW_FILE=""; HTTP_PORT="8088"; HTTP_TLS=0; JOURNALD=0; JOURNALD_PRIORITY="6"
+URL=""; KEY=""; NAME=""; PORT="514"; CA=""; INSTALL=1; TLS_CERT=""; TLS_KEY=""; TLS_PORT="6514"; TLS_CLIENT_CA=""; ACCEPT_CONFIG=0; CONFIG_PUBKEY=""; TIMEZONE="UTC"; FILE_GLOB=""; HTTP_USER=""; HTTP_PW_FILE=""; HTTP_PORT="8088"; HTTP_TLS=0; JOURNALD=0; JOURNALD_PRIORITY="6"; WAZUH=0; WAZUH_ARCHIVES="/var/ossec/logs/archives/archives.json"; WAZUH_ARCHIVES_SET=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --url) URL="$2"; shift 2;;
@@ -63,6 +69,8 @@ while [ $# -gt 0 ]; do
     --http-tls) HTTP_TLS=1; shift;;
     --journald) JOURNALD=1; shift;;
     --journald-priority) JOURNALD_PRIORITY="$2"; shift 2;;
+    --wazuh) WAZUH=1; shift;;
+    --wazuh-archives) WAZUH_ARCHIVES="$2"; WAZUH_ARCHIVES_SET=1; shift 2;;
     *) echo "Unknown option: $1" >&2; exit 2;;
   esac
 done
@@ -112,6 +120,16 @@ elif [ "$JOURNALD_PRIORITY" != "6" ]; then
   echo "--journald-priority only makes sense with --journald." >&2; exit 2
 fi
 # (end of the journal checks)
+
+# Extra input: Windows events from a Wazuh manager. Checked before anything is written; the path goes into broker.env, so only plain characters.
+WAZUH_CFG=""   # the config file to validate; empty when Wazuh is not read
+if [ "$WAZUH" -eq 1 ]; then
+  WAZUH_CFG="/etc/vector/vector-wazuh.yaml"
+  [[ "$WAZUH_ARCHIVES" =~ ^/[A-Za-z0-9._/-]{1,200}$ ]] && [[ "$WAZUH_ARCHIVES" != *..* ]] || { echo "--wazuh-archives must be an absolute path of plain characters (letters, digits, . _ - /)." >&2; exit 2; }
+elif [ "$WAZUH_ARCHIVES_SET" -eq 1 ]; then
+  echo "--wazuh-archives only makes sense with --wazuh." >&2; exit 2
+fi
+# (end of the Wazuh checks)
 
 # Extra inputs: files and HTTP. Checked before anything is written; the values go into broker.env and into a quoted YAML string, so only plain characters.
 if [ -n "$FILE_GLOB" ]; then
@@ -191,6 +209,7 @@ fi
   fi
   [ -z "$FILE_GLOB" ] || echo "ASIX_FILE_GLOB=$(printf '%s\n' "$FILE_GLOB" | paste -sd, -)"   # all globs, comma separated: for reading; vector-file.yaml has them written out
   [ "$JOURNALD" -eq 0 ] || echo "ASIX_JOURNALD_MAX_PRIORITY=$JOURNALD_PRIORITY"
+  [ "$WAZUH" -eq 0 ] || echo "ASIX_WAZUH_ARCHIVES=$WAZUH_ARCHIVES"
   if [ -n "$HTTP_USER" ]; then
     echo "ASIX_HTTP_USER=$HTTP_USER"
     echo "ASIX_HTTP_PASSWORD=$HTTP_PW"
@@ -203,6 +222,7 @@ fi
   [ -z "$FILE_GLOB" ] || CONFIGS="$CONFIGS,/etc/vector/vector-file.yaml"
   [ -z "$HTTP_USER" ] || CONFIGS="$CONFIGS,/etc/vector/vector-http.yaml"
   [ "$JOURNALD" -eq 0 ] || CONFIGS="$CONFIGS,/etc/vector/vector-journald.yaml"
+  [ "$WAZUH" -eq 0 ] || CONFIGS="$CONFIGS,/etc/vector/vector-wazuh.yaml"
   [ "$CONFIGS" = "/etc/vector/vector.yaml" ] || echo "VECTOR_CONFIG=$CONFIGS"
 } > /etc/asix-broker/broker.env
 chown root:vector /etc/asix-broker/broker.env; chmod 640 /etc/asix-broker/broker.env
@@ -243,12 +263,25 @@ if [ "$JOURNALD" -eq 1 ]; then
 else
   rm -f /etc/vector/vector-journald.yaml   # re-run without --journald: the journal is no longer read (the group membership is left alone)
 fi
+if [ "$WAZUH" -eq 1 ]; then
+  install -m 644 "$SRC/vector-wazuh.yaml" /etc/vector/vector-wazuh.yaml
+  # Vector will not start when the filter file it loads is missing: put the keep-everything program there, but never over a policy that is already in place.
+  [ -e /etc/vector/win-filter.vrl ] || install -m 644 "$SRC/win-filter-identity.vrl" /etc/vector/win-filter.vrl
+  # The archive directory belongs to the wazuh group. Vector is restarted below, which is what picks the new group up.
+  if getent group wazuh >/dev/null 2>&1; then
+    id -nG vector 2>/dev/null | tr ' ' '\n' | grep -qx wazuh || usermod -aG wazuh vector
+  else
+    echo "   note: no wazuh group on this machine (the manager is not installed here yet); make sure the vector user can read $WAZUH_ARCHIVES." >&2
+  fi
+else
+  rm -f /etc/vector/vector-wazuh.yaml   # re-run without --wazuh: Windows events are no longer read (win-filter.vrl and the group membership are left alone)
+fi
 install -d /etc/systemd/system/vector.service.d
 install -m 644 "$SRC/vector-asix.conf" /etc/systemd/system/vector.service.d/asix.conf
 install -d /var/lib/vector && chown vector:vector /var/lib/vector
 
 echo "-- 4. Validating the config before restarting --"
-( set -a; . /etc/asix-broker/broker.env; set +a; vector validate --no-environment ${TLS_CERT:+/etc/vector/vector-tls.yaml} ${FILE_GLOB:+/etc/vector/vector-file.yaml} ${HTTP_USER:+/etc/vector/vector-http.yaml} ${JOURNALD_CFG} /etc/vector/vector.yaml )
+( set -a; . /etc/asix-broker/broker.env; set +a; vector validate --no-environment ${TLS_CERT:+/etc/vector/vector-tls.yaml} ${FILE_GLOB:+/etc/vector/vector-file.yaml} ${HTTP_USER:+/etc/vector/vector-http.yaml} ${WAZUH_CFG} ${JOURNALD_CFG} /etc/vector/vector.yaml )
 
 echo "-- 5. Heartbeat timer --"
 install -d /usr/local/lib/asix-broker
@@ -285,3 +318,4 @@ echo "Open $PORT/udp and $PORT/tcp on this VM's firewall for the devices that wi
 [ -z "$FILE_GLOB" ] || echo "Reading files matching ${FILE_GLOB//$'\n'/, } as source type 'file' (the vector user must be able to read them: ls -l, or setfacl). Watch: journalctl -u vector -n 30"
 [ -z "$HTTP_USER" ] || echo "HTTP input is on $HTTP_PORT/tcp$([ "$HTTP_TLS" -eq 1 ] && echo ' (HTTPS)' || echo ' (plain HTTP: the password travels in clear text)'): open it too. Test: curl -u $HTTP_USER:PASSWORD -H 'Content-Type: application/json' -d '{\"message\":\"hello\"}' http$([ "$HTTP_TLS" -eq 1 ] && echo s)://127.0.0.1:$HTTP_PORT/events"
 [ "$JOURNALD" -eq 0 ] || echo "Reading the systemd journal as source type 'journald' (entries at priority $JOURNALD_PRIORITY or more important; only entries written from now on). Watch: journalctl -u vector -n 30. Test: logger -t asixtest 'journald test'"
+[ "$WAZUH" -eq 0 ] || echo "Reading Windows events from $WAZUH_ARCHIVES as source type 'windows-event', through /etc/vector/win-filter.vrl (the tenant's Windows event filter). The manager needs <logall_json>yes</logall_json>, and the vector user must be able to read the file. Watch: journalctl -u vector -n 30"

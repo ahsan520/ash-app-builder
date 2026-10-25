@@ -7,8 +7,8 @@
 // by the senders it was installed for. Pure rules plus small database helpers.
 const { tsMs } = require('../collectors/status');
 
-const KINDS = ['file', 'http', 'journald'];   // the fixed order everything is stored and sent in
-const MAX_TEXT = 40;                           // 'file,http,journald' is 18 characters
+const KINDS = ['file', 'http', 'journald', 'wazuh'];   // the fixed order everything is stored and sent in
+const MAX_TEXT = 40;                           // 'file,http,journald,wazuh' is 25 characters
 
 const order = (set) => KINDS.filter((k) => set.has(k));
 

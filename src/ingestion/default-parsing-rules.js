@@ -64,6 +64,136 @@ filter app_name ~= "^(CRON|cron|crond)$" and message contains "CMD"
 /* ------------ linux_cron --------- */
 
 /* -------------------------------------
+   ---- Windows events from Wazuh ------
+   Sent by a broker that reads a Wazuh manager's archive file (deploy/broker/vector-wazuh.yaml): the line is
+   "[Channel] Provider id=N <text>" as below, and the event's named data comes alongside it as fields under their
+   Windows names (TargetUserName ...), marked asix_via = "wazuh". The text is EMPTY when the Windows event filter
+   policy strips messages, so these rules read the fields. A Wazuh event of any other kind falls through to the
+   rules below, which still give it its channel, provider, event id and, for most kinds, its category.
+   ------------------------------------- */
+
+/* ------------ wazuh_windows_logon --------- */
+[INGEST:vendor="microsoft", product="windows", source_type="windows-event", no_hit=keep, content_id="wazuh_windows_logon"]
+// 4624 successful logon, 4625 failed logon
+filter asix_via = "wazuh" and win_event_id in ("4624", "4625")
+| alter
+    event_id = to_integer(win_event_id),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
+    event_category = "authentication",
+    event_outcome = if(win_event_id = "4624", "success", "failure"),
+    tmp_user = TargetUserName,
+    tmp_domain = TargetDomainName,
+    target_user = if(tmp_user = "-", null, tmp_user),
+    target_domain = if(tmp_domain = "-", null, tmp_domain),
+    target_sid = if(win_event_id = "4624", TargetUserSid, null),
+    logon_type = to_integer(LogonType),
+    failure_reason = if(win_event_id = "4624", null, FailureReason = "%%2313", "Unknown user name or bad password.", FailureReason = "%%2304", "An Error occurred during Logon.", FailureReason = "%%2305", "The specified user account has expired.", FailureReason = "%%2306", "The NetLogon component is not active.", FailureReason = "%%2307", "Account locked out.", FailureReason = "%%2308", "The user has not been granted the requested logon type at this machine.", FailureReason = "%%2309", "The specified account's password has expired.", FailureReason = "%%2310", "Account currently disabled.", FailureReason = "%%2311", "Account logon time restriction violation.", FailureReason = "%%2312", "User not allowed to logon at this computer.", FailureReason),
+    auth_package = AuthenticationPackageName,
+    process_path = if(win_event_id = "4624", ProcessName, null),
+    workstation = WorkstationName,
+    src_ip = arrayindex(regextract(IpAddress, "^([0-9a-fA-F:.]+)$"), 0),
+    src_port = to_integer(IpPort)
+| fields -tmp_*;
+/* ------------ wazuh_windows_logon --------- */
+
+/* ------------ wazuh_windows_process --------- */
+[INGEST:vendor="microsoft", product="windows", source_type="windows-event", no_hit=keep, content_id="wazuh_windows_process"]
+// 4688: process creation (the command line is only there when the audit policy includes it)
+filter asix_via = "wazuh" and win_event_id = "4688"
+| alter
+    event_id = 4688,
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
+    event_category = "process",
+    event_action = "process_created",
+    event_outcome = "success",
+    user = SubjectUserName,
+    user_domain = SubjectDomainName,
+    process_path = NewProcessName,
+    process_name = arrayindex(regextract(process_path, "([^\\]+)$"), 0),
+    process_id = NewProcessId,
+    parent_path = ParentProcessName,
+    parent_name = arrayindex(regextract(parent_path, "([^\\]+)$"), 0),
+    parent_pid = ProcessId,
+    command_line = if(CommandLine = "", null, CommandLine);
+/* ------------ wazuh_windows_process --------- */
+
+/* ------------ wazuh_windows_scheduled_task --------- */
+[INGEST:vendor="microsoft", product="windows", source_type="windows-event", no_hit=keep, content_id="wazuh_windows_scheduled_task"]
+// 4698 created, 4699 deleted, 4700 enabled, 4701 disabled, 4702 updated
+filter asix_via = "wazuh" and win_event_id in ("4698", "4699", "4700", "4701", "4702")
+| alter
+    event_id = to_integer(win_event_id),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
+    event_category = "scheduled_task",
+    event_action = if(event_id = 4698, "task_created", event_id = 4699, "task_deleted", event_id = 4700, "task_enabled", event_id = 4701, "task_disabled", "task_updated"),
+    event_outcome = "success",
+    user = SubjectUserName,
+    user_domain = SubjectDomainName,
+    task_name = TaskName,
+    tmp_cmd = arrayindex(regextract(TaskContent, "<Command>(.*?)</Command>"), 0),
+    tmp_args = arrayindex(regextract(TaskContent, "<Arguments>(.*?)</Arguments>"), 0),
+    command_line = if(tmp_cmd = null, null, tmp_args != null, concat(tmp_cmd, " ", tmp_args), tmp_cmd)
+| fields -tmp_*;
+/* ------------ wazuh_windows_scheduled_task --------- */
+
+/* ------------ wazuh_windows_account --------- */
+[INGEST:vendor="microsoft", product="windows", source_type="windows-event", no_hit=keep, content_id="wazuh_windows_account"]
+// 4720 created, 4722 enabled, 4723 password change, 4724 password reset, 4725 disabled, 4726 deleted, 4738 changed, 4740 locked out
+filter asix_via = "wazuh" and win_event_id in ("4720", "4722", "4723", "4724", "4725", "4726", "4738", "4740")
+| alter
+    event_id = to_integer(win_event_id),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
+    event_category = "account_management",
+    event_action = if(event_id = 4720, "user_created", event_id = 4722, "user_enabled", event_id = 4723, "password_change", event_id = 4724, "password_reset", event_id = 4725, "user_disabled", event_id = 4726, "user_deleted", event_id = 4740, "user_locked_out", "user_changed"),
+    event_outcome = "success",
+    user = SubjectUserName,
+    user_domain = SubjectDomainName,
+    target_user = TargetUserName,
+    target_domain = TargetDomainName,
+    target_sid = TargetSid;
+/* ------------ wazuh_windows_account --------- */
+
+/* ------------ wazuh_windows_group --------- */
+[INGEST:vendor="microsoft", product="windows", source_type="windows-event", no_hit=keep, content_id="wazuh_windows_group"]
+// 4728/4732/4756 member added (global/local/universal group), 4729/4733/4757 member removed
+filter asix_via = "wazuh" and win_event_id in ("4728", "4729", "4732", "4733", "4756", "4757")
+| alter
+    event_id = to_integer(win_event_id),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
+    event_category = "group_membership",
+    event_action = if(event_id in (4728, 4732, 4756), "member_added", "member_removed"),
+    event_outcome = "success",
+    user = SubjectUserName,
+    user_domain = SubjectDomainName,
+    member_sid = MemberSid,
+    member_name = arrayindex(regextract(MemberName, "^([^\s-]\S*)"), 0),
+    group_name = TargetUserName,
+    group_sid = TargetSid;
+/* ------------ wazuh_windows_group --------- */
+
+/* ------------ wazuh_windows_service --------- */
+[INGEST:vendor="microsoft", product="windows", source_type="windows-event", no_hit=keep, content_id="wazuh_windows_service"]
+// 7045 (System log) and 4697 (Security log): a service was installed
+filter asix_via = "wazuh" and win_event_id in ("7045", "4697")
+| alter
+    event_id = to_integer(win_event_id),
+    channel = arrayindex(regextract(message, "^\[([^\]]+)\]"), 0),
+    provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
+    event_category = "service_install",
+    event_action = "service_installed",
+    event_outcome = "success",
+    user = if(win_event_id = "4697", SubjectUserName, null),
+    service_name = ServiceName,
+    service_path = if(ImagePath != null, ImagePath, ServiceFileName),
+    service_account = if(AccountName != null, AccountName, ServiceAccount);
+/* ------------ wazuh_windows_service --------- */
+
+/* -------------------------------------
    ---------- Windows events ----------
    Sent by the ASIX Windows forwarder as
    "[Channel] Provider id=N <message text>"

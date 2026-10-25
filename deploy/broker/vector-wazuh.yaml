@@ -1,0 +1,128 @@
+# Optional config file: the broker reads WINDOWS EVENTS that a Wazuh manager on this VM (or mounted here) has written, applies the tenant's Windows event
+# filter policy (Settings > Windows event filter in ASIX), and sends what is left to ASIX with source type "windows-event". bootstrap-broker.sh installs it
+# only when run with --wazuh, and then starts Vector with
+#   VECTOR_CONFIG=/etc/vector/vector.yaml,/etc/vector/vector-wazuh.yaml        (set in broker.env; the TLS, file, HTTP and journal configs join the same list)
+#
+# WHAT IT READS: the manager's archive file, one JSON object per line, standard path /var/ossec/logs/archives/archives.json (ASIX_WAZUH_ARCHIVES in
+# broker.env changes it). The manager only writes that file when `<logall_json>yes</logall_json>` is set in its ossec.conf. Only Windows event channel
+# events (those with data.win.system) are used; every other line in the file (Linux agents, the manager's own messages, anything that is not JSON) is skipped.
+# The vector user must be able to read the file (bootstrap adds it to the "wazuh" group when that group exists). On the first start the file is read from
+# its END, so turning this on does not send the backlog; a file that appears later (the daily rotation) is read from its start.
+#
+# THE FILTER: /etc/vector/win-filter.vrl (ASIX_WIN_FILTER_VRL) is the program asix-broker-config.sh keeps in step with the policy saved in ASIX (docs/endpoints.md,
+# E3). It reads and may drop or change the Wazuh event itself (data.win.system.channel, .eventID, .message, data.win.eventdata.*). bootstrap-broker.sh puts the
+# keep-everything program there when there is none, because Vector will not start without the file. A change to the file is validated, Vector restarted and
+# its health checked by asix-broker-config.sh, with the old file put back on any failure.
+#
+# WHAT ASIX GETS: one JSON event per Windows event in the shape of ASIX's own Windows parsing rules (src/ingestion/default-parsing-rules.js):
+#   message  "[Channel] Provider id=N <the event's message text on one line>"   (the text is empty when the policy strips messages)
+#   time     the event's own time (data.win.system.systemTime), else the manager's time
+#   host     the Windows computer name, else the Wazuh agent name
+#   fields   the event's named data with the first letter upper-cased again (Wazuh writes targetUserName for TargetUserName), so Image, CommandLine,
+#            TargetUserName ... reach the rules under their Windows names, plus asix_via=wazuh, agent_name, agent_id, agent_ip, win_event_id, win_record_id.
+# The body is a JSON array, which POST /v1/ingest/http accepts with the collector and source type in headers.
+#
+# Test without a network:   ASIX_WIN_FILTER_VRL=deploy/broker/win-filter-identity.vrl vector validate --no-environment deploy/broker/vector.yaml deploy/broker/vector-wazuh.yaml
+sources:
+  wazuh_in:
+    type: file
+    include:
+      - "${ASIX_WAZUH_ARCHIVES:-/var/ossec/logs/archives/archives.json}"
+    read_from: end
+    # Windows events with long messages are big; a line cut in the middle is not JSON and would be skipped.
+    max_line_bytes: 262144
+    ignore_older_secs: 604800
+
+transforms:
+  # One line of the archive -> the Wazuh event itself, or nothing (not JSON, or not a Windows event channel event).
+  wazuh_parse:
+    type: remap
+    inputs: [wazuh_in]
+    drop_on_abort: true
+    source: |
+      ev, err = parse_json(string(.message) ?? "")
+      if err != null || !is_object(ev) { abort }
+      . = object!(ev)
+      if !is_object(.data.win.system) { abort }
+      if !is_string(.data.win.system.eventID) && !is_integer(.data.win.system.eventID) { abort }
+
+  # The tenant's policy (a program kept in step by asix-broker-config.sh): may drop the event (abort) or change it. Reads a FILE, so a regex that ends in a dollar sign or
+  # has a dollar-brace in it reaches it as written (a file is not subject to Vector's environment variable interpolation).
+  win_filter:
+    type: remap
+    inputs: [wazuh_parse]
+    file: "${ASIX_WIN_FILTER_VRL:-/etc/vector/win-filter.vrl}"
+    drop_on_abort: true
+
+  # The Wazuh event -> one ASIX event: the message line the Windows rules expect and the named fields next to it.
+  wazuh_to_event:
+    type: remap
+    inputs: [win_filter]
+    source: |
+      sys = object(.data.win.system) ?? {}
+      ch = replace(string(sys.channel) ?? "Windows", r'[\r\n\]]', "")
+      prov = replace(string(sys.providerName) ?? "Windows", r'[\r\n]', "")
+      id = replace(to_string(sys.eventID) ?? "0", r'[^0-9]', "")
+      if id == "" { id = "0" }
+
+      # Wazuh wraps the message in quotes and keeps the Windows line breaks and tabs; the ASIX rules read it as one line.
+      text = replace(string(sys.message) ?? "", r'\s+', " ")
+      text = replace(strip_whitespace(text), r'^"|"$', "")
+      text = strip_whitespace(text)
+      text = slice(text, start: 0, end: 6000) ?? text
+
+      host = replace(string(sys.computer) ?? string(.agent.name) ?? "unknown-host", r'\s+', "_")
+
+      t = string(sys.systemTime) ?? string(.timestamp) ?? null
+      if t == null { t = format_timestamp!(now(), format: "%+") }
+
+      # The event's data: Wazuh lowers the first letter of every name (targetUserName); the ASIX rules use the Windows names (TargetUserName).
+      data = object(.data.win.eventdata) ?? {}
+      data = map_keys(data) -> |key| { upcase(slice(key, start: 0, end: 1) ?? "") + (slice(key, start: 1) ?? "") }
+      data = map_values(data) -> |v| { slice(to_string(v) ?? "", start: 0, end: 2000) ?? "" }
+      fields = merge(data, {
+        "asix_via": "wazuh",
+        "win_event_id": id,
+        "win_record_id": to_string(sys.eventRecordID) ?? "",
+        "agent_name": string(.agent.name) ?? "",
+        "agent_id": string(.agent.id) ?? "",
+        "agent_ip": string(.agent.ip) ?? ""
+      })
+
+      . = {
+        "message": "[" + ch + "] " + prov + " id=" + id + " " + text,
+        "time": t,
+        "host": host,
+        "fields": fields
+      }
+
+sinks:
+  asix_wazuh:
+    type: http
+    inputs: [wazuh_to_event]
+    uri: ${ASIX_INGEST_URL}
+    method: post
+    encoding:
+      codec: json
+    request:
+      headers:
+        Authorization: "Bearer ${ASIX_INGEST_KEY}"
+        Content-Type: application/json
+        X-ASIX-Collector: ${ASIX_BROKER_NAME}
+        X-ASIX-Platform: linux
+        X-ASIX-Source-Type: windows-event
+        X-ASIX-Version: vector-broker
+      retry_attempts: 100000
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 60
+      timeout_secs: 30
+    batch:
+      max_events: 500
+      max_bytes: 900000
+      timeout_secs: 5
+    buffer:
+      type: disk
+      max_size: 536870912
+      when_full: block
+    tls:
+      ca_file: ${ASIX_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}

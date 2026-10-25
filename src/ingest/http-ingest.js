@@ -6,6 +6,7 @@
 //                  -Version, -Source-Type)
 //     application/json  { collector: {name, platform, os, version}, source_type,
 //                         events: [ { message | raw, time?, host?, fields? } ] }
+//     application/json  [ { message | raw, time?, host?, fields? }, ... ]   (collector, platform, source type from the same headers as text lines)
 //
 // Each ingestion key belongs to one tenant, is stored only as a SHA-256 hash and can be
 // revoked. The first batch from a new sender registers it in the `collectors` table.
@@ -120,6 +121,13 @@ router.post(
       platform = hdr('x-asix-platform'); os = hdr('x-asix-os'); version = hdr('x-asix-version');
       sourceType = hdr('x-asix-source-type') || 'syslog';
       items = body.split(/\r?\n/).filter((l) => l.trim()).map((l) => parseLine(l, collector));
+    } else if (Array.isArray(body)) {
+      // A JSON ARRAY of events, what a Vector http sink with codec json sends (the broker's Wazuh input, deploy/broker/vector-wazuh.yaml): each element is { message | raw, time?, host?, fields? } as
+      // below, and the collector, platform and source type come from the headers exactly as for text lines. Elements that are not objects or have no message are skipped.
+      collector = hdr('x-asix-collector') || key.name;
+      platform = hdr('x-asix-platform'); os = hdr('x-asix-os'); version = hdr('x-asix-version');
+      sourceType = hdr('x-asix-source-type') || 'json';
+      items = body.map((e) => jsonEvent(e, collector)).filter(Boolean);
     } else if (body && typeof body === 'object' && Array.isArray(body.events)) {
       const c = body.collector && typeof body.collector === 'object' ? body.collector : {};
       collector = String(c.name || hdr('x-asix-collector') || key.name);
@@ -127,7 +135,7 @@ router.post(
       sourceType = String(body.source_type || 'json');
       items = body.events.map((e) => jsonEvent(e, collector)).filter(Boolean);
     } else {
-      return err(res, 400, 'INGEST_INVALID_BODY', 'Send text/plain lines or JSON {"events":[{"message":"..."}]}');
+      return err(res, 400, 'INGEST_INVALID_BODY', 'Send text/plain lines, a JSON array of events or JSON {"events":[{"message":"..."}]}');
     }
     if (!NAME_RE.test(collector)) return err(res, 400, 'INGEST_INVALID_COLLECTOR', 'Collector name: 1-100 chars of letters, digits . _ : -');
     if (!SOURCE_RE.test(sourceType)) return err(res, 400, 'INGEST_INVALID_SOURCE', 'source_type: 1-50 chars of letters, digits . _ -');

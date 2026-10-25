@@ -577,6 +577,19 @@ If the tenant saved a **Windows event filter** policy (Settings, Windows event f
 - **Updating a broker for this:** after an ASIX deploy (the schema job adds two columns) re-run the bootstrap on each broker with `--no-install --accept-config` and every flag again, so the new `asix-broker-config.sh` is installed. A broker with the old script ignores the new field and reports nothing about it.
 - **Not run on a real broker VM yet** (real Vector 0.59.0 and real openssl in the sandbox only), and no transform reads the file until E4.
 
+## Windows events from a Wazuh manager (E4a, done 2026-10-24)
+
+With `--wazuh` the broker reads Windows events that a Wazuh manager wrote to its archive file, applies the Windows event filter policy (Settings, Windows event filter) and sends what is left to ASIX as source type `windows-event`. Design, the event shape, the parsing rules and every check: `docs/endpoints.md`, "E4a as built".
+
+- **Turn it on:** re-run the bootstrap with `--no-install` and EVERY flag again plus `--wazuh` (and `--accept-config` so the policy reaches the broker). The standard file is `/var/ossec/logs/archives/archives.json`; `--wazuh-archives PATH` changes it. There is no Wazuh manager on the broker yet (that is E4b): until a file appears the input just waits, and nothing is sent.
+- **What it needs from the manager:** `<logall_json>yes</logall_json>` in `ossec.conf` (otherwise the archive file is not written), and the `vector` user able to read the file (the bootstrap adds it to the `wazuh` group when that group exists).
+- **The filter file:** `/etc/vector/win-filter.vrl`. The bootstrap puts the keep-everything program there when there is none (Vector will not start without it) and never replaces a policy already there. With `--accept-config` the broker keeps it in step with the policy: a change is validated against the whole config, Vector is restarted and its health checked, and the old file is put back on any failure (see "The Windows event filter on a broker").
+- **Only Windows event channel events are used.** Anything else in the file (Linux agents, the manager's own lines) is skipped.
+- **On the Brokers page:** Inputs shows **Windows events**; Paused can pause it (Vector keeps its place in the file, so resuming continues where it stopped).
+- **Look on the broker:** `journalctl -u vector -n 30`, `ls -l /var/ossec/logs/archives/archives.json`, `id vector` (the `wazuh` group), `cat /etc/vector/win-filter.vrl`.
+- **Turn it off:** re-run the bootstrap without `--wazuh`: the config is removed, the filter file and the group membership stay.
+- **Not run on a real broker VM or against a real Wazuh manager yet.**
+
 ## Getting an alert when a broker goes quiet
 A broker that stops (Vector down, VM off, network cut) shows as Disconnected on the Collectors and Brokers pages, but nothing tells you unless you look. On the
 Collectors page, press **Alert if down** on the broker's row: ASIX then raises a `Collector disconnected: <broker name>` alert (severity high) once the broker has

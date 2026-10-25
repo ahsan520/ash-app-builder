@@ -1,10 +1,10 @@
 'use strict';
 // The inputs a broker VM runs, as its heartbeat reports them (deploy/broker/asix-broker-heartbeat.sh). A broker takes syslog, and optionally
-// syslog over TLS, log files, HTTP/JSON and the systemd journal (docs/broker-vm.md). It sends one short text, "syslog:514,syslog-tls:6514,file,http:8088,journald": a name,
+// syslog over TLS, log files, HTTP/JSON, the systemd journal and Windows events from a Wazuh manager (docs/broker-vm.md). It sends one short text, "syslog:514,syslog-tls:6514,file,http:8088,journald,wazuh": a name,
 // plus a port where there is one (for `file`, a count of globs when there is more than one: "file:2"; the globs themselves are never sent). This file checks that text and turns it into what the Brokers page shows. Pure functions, no database.
 // Information only: nothing here raises an alert, and a broker that never says (older script) is simply "not reporting".
 
-const KINDS = ['syslog', 'syslog-tls', 'file', 'http', 'https', 'journald'];
+const KINDS = ['syslog', 'syslog-tls', 'file', 'http', 'https', 'journald', 'wazuh'];
 const WITH_PORT = new Set(['syslog', 'syslog-tls', 'http', 'https']);
 const COUNTED = new Set(['file']);   // "file:2" = two file globs (bootstrap --file-glob, up to 10); never the globs themselves
 const MAX_COUNT = 10;
@@ -47,7 +47,7 @@ function listInputs(stored) {
   });
 }
 
-const LABEL = { syslog: 'Syslog', 'syslog-tls': 'Syslog TLS', file: 'Log files', http: 'HTTP/JSON', https: 'HTTPS/JSON', journald: 'Journal' };
+const LABEL = { syslog: 'Syslog', 'syslog-tls': 'Syslog TLS', file: 'Log files', http: 'HTTP/JSON', https: 'HTTPS/JSON', journald: 'Journal', wazuh: 'Windows events' };
 const label = (i) => LABEL[i.kind] + (i.port ? ' ' + i.port : '') + (i.count > 1 ? ' (' + i.count + ' globs)' : '');
 
 module.exports = { KINDS, parseInputs, listInputs, label };
