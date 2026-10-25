@@ -581,6 +581,30 @@ data:
         WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
     GRANT SELECT, INSERT, UPDATE, DELETE ON win_filter_policy TO asix_admin;
 
+    -- The Wazuh manager a tenant's agents report to, when ASIX runs it centrally (src/endpoints/wazuh-manager-store.js, docs/endpoints.md task E4c). One row per tenant;
+    -- NO ROW = no central manager. The proxy (src/endpoints/wazuh-api.js) reaches ONLY the address stored here for the caller's own tenant, and no HTTP route can write this
+    -- table: an operator registers a manager with src/endpoints/wazuh-manager-cli.js, so a tenant user can never point the API at an address of their choosing.
+    -- ca_pem is the manager API's own (self-signed) certificate, used as the only trusted certificate when connecting; api_secret_enc is the API password sealed with
+    -- NOTIFY_ENCRYPTION_KEY (src/notifications/secret-box.js); neither the password nor the certificate is ever returned by a route.
+    CREATE TABLE IF NOT EXISTS wazuh_managers (
+        tenant_id UUID PRIMARY KEY REFERENCES tenants(id),
+        api_url TEXT NOT NULL CHECK (api_url ~ '^https://[^/@?#[:space:]]+$'),
+        api_user VARCHAR(64) NOT NULL,
+        api_secret_enc TEXT NOT NULL,
+        ca_pem TEXT NOT NULL,
+        cert_sha256 VARCHAR(64) NOT NULL CHECK (cert_sha256 ~ '^[0-9a-f]{64}$'),
+        label VARCHAR(100),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_by TEXT
+    );
+    ALTER TABLE wazuh_managers ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS wazuh_managers_tenant_isolation ON wazuh_managers;
+    CREATE POLICY wazuh_managers_tenant_isolation ON wazuh_managers FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+    GRANT SELECT, INSERT, UPDATE, DELETE ON wazuh_managers TO asix_admin;
+
     -- ============================================================
     -- Alert notifications: channels (email / Slack / webhook) and the delivery outbox
     -- ============================================================

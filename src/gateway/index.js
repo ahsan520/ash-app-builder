@@ -74,6 +74,7 @@ app.use(require('./routes/packs'));
 app.use(require('./routes/parser-status'));
 app.use(require('./routes/parser-alert'));
 app.use(require('./routes/win-filter'));
+app.use(require('./routes/wazuh-manager'));
 
 app.get('/', (req, res) => {
   res.json({

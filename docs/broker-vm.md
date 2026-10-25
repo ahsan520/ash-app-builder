@@ -635,3 +635,7 @@ If `apt-get update` fails with "Release file ... is not valid yet", the broker's
 self-correct, add the line `makestep 1 -1` to `/etc/chrony/chrony.conf` (`/etc/chrony/conf.d/` is not read on every install: check with `grep -n 'confdir\|conf.d' /etc/chrony/chrony.conf`) and restart chrony.
 A wrong clock also puts wrong times on what the broker sends, so check `date -u` against another machine first. The package repository can lag behind a Vector release for one architecture
 (`apt-cache madison vector` lists what this machine can install; arm64 had only 0.58.0 and 0.59.0 when this was written), and the script refuses a `--version` that is not in that list.
+
+## A central manager VM for a mid-size client (E4c, built 2026-10-25)
+
+A client with 1,000 to 3,000 endpoints gets its own manager VM run by ASIX. It is set up like a broker VM with the manager (`bootstrap-broker.sh ... --wazuh-manager`, that tenant's own broker key, sized 8 CPUs, 16 GB, 250 GB SSD to start: an estimate), and then `sudo ./scripts/deploy/wazuh-api-setup.sh --address <address ASIX reaches> --label "<client> central manager"` makes the manager's API ready for ASIX (changes the default API passwords, creates a read-only user, writes `asix-wazuh-registration.json`). Open 1514/tcp and 1515/tcp for the client's agents and 55000/tcp for the ASIX API node only. Registering it and everything else: `docs/endpoints.md`, "E4c as built".
