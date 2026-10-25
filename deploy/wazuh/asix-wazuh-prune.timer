@@ -1,0 +1,10 @@
+[Unit]
+Description=ASIX: daily clean-up of rotated Wazuh files
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=10m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

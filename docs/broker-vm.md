@@ -590,6 +590,20 @@ With `--wazuh` the broker reads Windows events that a Wazuh manager wrote to its
 - **Turn it off:** re-run the bootstrap without `--wazuh`: the config is removed, the filter file and the group membership stay.
 - **Not run on a real broker VM or against a real Wazuh manager yet.**
 
+## The Wazuh manager on the broker VM (E4b, built 2026-10-24)
+
+`bootstrap-broker.sh --wazuh-manager` installs a Wazuh manager (version **4.14.9-1**, held back from upgrades) on the broker VM, so Windows machines can report to it and the broker can send their events to ASIX. Everything about it, including the sizing table and the checks: `docs/endpoints.md`, "E4b as built".
+
+- **Size the VM first:** recommended **4 CPUs, 8 GB memory, 100 GB SSD** for a small client (about 50 agents, 200 events/s). The installer refuses less than 2 CPUs, 3.5 GB memory or 20 GB free unless you add `--force`. Check without changing anything: `sudo ./scripts/deploy/install-wazuh-manager.sh --check`.
+- **Run it:** re-run the bootstrap with `--no-install` and EVERY flag again plus `--wazuh-manager` (optionally `--wazuh-keep-days 3`, how many days of the manager's rotated files to keep). `--port`, `--tls-port` and `--http-port` must not be 1514, 1515, 1516 or 55000.
+- **Firewall:** open **1514/tcp** (agents) and **1515/tcp** (enrolment) for the Windows machines. The script does not do it.
+- **Enrolment password:** the line in `/var/ossec/etc/authd.pass` (created once, readable by root and the `wazuh` group). An agent needs it to register.
+- **Look:** `sudo /var/ossec/bin/agent_control -l` (agents), `systemctl status wazuh-manager`, `tail -f /var/ossec/logs/ossec.log`, `ls -l /var/ossec/logs/archives/archives.json`, `journalctl -u asix-wazuh-prune` (the daily clean-up and the disk guard), `df -h /var`.
+- **Disk:** archives.json grows all day (about 2 KB per event); the manager rotates it at midnight and the clean-up removes rotated files after `--wazuh-keep-days`. If the disk gets 90% full the clean-up keeps one day only. The filter on the broker does not make the file smaller.
+- **Config from ASIX and the manager's ports:** a broker that has the manager ignores a syslog or TLS port of 1514, 1515, 1516 or 55000 from ASIX (`journalctl -u asix-broker-config`).
+- **Upgrading the manager** is deliberate: back up `/var/ossec/etc`, then `./scripts/deploy/install-wazuh-manager.sh --version NEW --upgrade`. Agents must be the same version or older.
+- **Not run on a real VM yet.** If the first run stops, keep the last 30 lines of its output and `tail -n 50 /var/ossec/logs/ossec.log`.
+
 ## Getting an alert when a broker goes quiet
 A broker that stops (Vector down, VM off, network cut) shows as Disconnected on the Collectors and Brokers pages, but nothing tells you unless you look. On the
 Collectors page, press **Alert if down** on the broker's row: ASIX then raises a `Collector disconnected: <broker name>` alert (severity high) once the broker has

@@ -45,6 +45,9 @@ VECTOR_DIR="${ASIX_VECTOR_DIR:-/etc/vector}"
 STATE_DIR="${ASIX_CONFIG_STATE_DIR:-/var/lib/asix-broker}"
 WAIT_S="${ASIX_CONFIG_WAIT_S:-30}"
 
+# Ports of a Wazuh manager installed on this broker (agents 1514, enrolment 1515, cluster 1516, API 55000): never given to syslog then. Without a manager here they are ordinary ports.
+wazuh_clash() { [ -x "${ASIX_WAZUH_DIR:-/var/ossec}/bin/wazuh-control" ] || return 1; case "$1" in 1514|1515|1516|55000) return 0;; esac; return 1; }
+
 [ "$(id -u)" -eq 0 ] || { echo "Run as root." >&2; exit 1; }
 [ -r "$ENV_FILE" ] || { echo "$ENV_FILE not found: this machine was not set up with bootstrap-broker.sh." >&2; exit 1; }
 [[ "$WAIT_S" =~ ^[0-9]{1,3}$ ]] || { echo "ASIX_CONFIG_WAIT_S must be a number of seconds." >&2; exit 2; }
@@ -141,6 +144,7 @@ if ! printf '%s' "$FLAT" | grep -q '"syslog_port":null'; then
   # The broker's own rules, independent of what ASIX sent.
   [[ "$PORT" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$PORT" -le 65535 ] || { echo "ASIX asked for syslog port $PORT, which is not a valid port; ignored." >&2; exit 1; }
   case "$PORT" in 22|443|8686|30443) echo "ASIX asked for syslog port $PORT, which this broker never uses for syslog; ignored." >&2; exit 1;; esac
+  if wazuh_clash "$PORT"; then echo "ASIX asked for syslog port $PORT, which the Wazuh manager on this broker uses; ignored." >&2; exit 1; fi
   [ "$PORT" != "${ASIX_SYSLOG_TLS_PORT:-}" ] || { echo "ASIX asked for syslog port $PORT, which is this broker's syslog-over-TLS port; ignored." >&2; exit 1; }
 fi
 # The syslog-over-TLS port: absent or null (an ASIX or a signed answer from before it existed, or none set) means no opinion.
@@ -221,10 +225,11 @@ fi
 
 # ---- 2. The syslog-over-TLS port ----
 # Only moves the port of a TLS listener this broker ALREADY has (bootstrap-broker.sh --tls-cert/--tls-key). ASIX cannot turn TLS on or off: that needs
-# certificates here. The broker's own rules apply whatever ASIX sent: a valid port, not a reserved one, not the syslog port it now uses.
+# certificates here. The broker's own rules apply whatever ASIX sent: a valid port, not a reserved one, not the syslog port it now uses, not a port of a Wazuh manager installed on this broker.
 if [ -n "$TPORT" ]; then
   [[ "$TPORT" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$TPORT" -le 65535 ] || { echo "ASIX asked for syslog-over-TLS port $TPORT, which is not a valid port; ignored." >&2; exit 1; }
   case "$TPORT" in 22|443|8686|30443) echo "ASIX asked for syslog-over-TLS port $TPORT, which this broker never uses for syslog; ignored." >&2; exit 1;; esac
+  if wazuh_clash "$TPORT"; then echo "ASIX asked for syslog-over-TLS port $TPORT, which the Wazuh manager on this broker uses; ignored." >&2; exit 1; fi
   CURT="$( . "$ENV_FILE" >/dev/null 2>&1; printf '%s' "${ASIX_SYSLOG_TLS_PORT:-}" )"   # read again: step 1 may just have changed the file
   NOWP="$( . "$ENV_FILE" >/dev/null 2>&1; printf '%s' "${ASIX_SYSLOG_PORT:-514}" )"
   if [ -z "$CURT" ] || [ ! -r "$VECTOR_DIR/vector-tls.yaml" ]; then

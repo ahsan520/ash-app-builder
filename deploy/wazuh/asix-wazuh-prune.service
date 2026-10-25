@@ -1,0 +1,7 @@
+[Unit]
+Description=ASIX: remove old rotated Wazuh archive and alert files
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/asix-broker/wazuh.env
+ExecStart=/usr/local/lib/asix-broker/asix-wazuh-prune.sh

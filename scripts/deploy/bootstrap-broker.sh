@@ -9,6 +9,7 @@
 #       [--timezone America/Toronto]
 #       [--file-glob '/var/log/myapp/*.log' [--file-glob '/srv/other/*.log' ...]] [--http-user svc --http-password-file /root/http.pw [--http-port 8088] [--http-tls]]
 #       [--journald [--journald-priority 6]] [--wazuh [--wazuh-archives /var/ossec/logs/archives/archives.json]]
+#       [--wazuh-manager [--wazuh-keep-days 3]]
 #
 # --timezone       The time zone (IANA name, default UTC) that senders write in on syslog lines that carry none (RFC 3164). Vector reads those as
 #                  UTC, so a sender in another zone shows hours off in search and detections. Written as ASIX_SYSLOG_TIMEZONE. Like every option here it
@@ -32,6 +33,11 @@
 #                  when there is none yet, the keep-everything filter /etc/vector/win-filter.vrl (Vector will not start without it; asix-broker-config.sh
 #                  keeps it in step with the policy when the broker accepts config). Re-running without --wazuh turns it off (the filter file stays).
 #   --wazuh-archives PATH  With --wazuh: another archive file. Written as ASIX_WAZUH_ARCHIVES.
+# --wazuh-manager  Also INSTALL a Wazuh manager on this machine (scripts/deploy/install-wazuh-manager.sh: pinned version, held back from upgrades, agents need
+#                  an enrolment password, archives.json switched on, a daily clean-up) and read its archive file as with --wazuh, which this implies. Windows
+#                  agents then report to this machine on 1514/tcp (agents) and 1515/tcp (enrolment); open them on the firewall. Needs 2+ CPUs, 3.5 GB memory
+#                  (8 GB and 4 CPUs recommended) and 20 GB free (100 GB recommended). --port, --tls-port and --http-port must not be 1514, 1515, 1516 or 55000.
+#   --wazuh-keep-days N  With --wazuh-manager: keep N days (1 to 90, default 3) of the manager's rotated archive and alert files.
 # --no-install     Vector is already installed (offline or pinned install); skip the package repo.
 # --tls-cert/key   Also accept syslog over TLS (RFC 5425) on --tls-port (default 6514), with this server certificate.
 #                  Both are needed together. Re-running without them turns the TLS listener off again.
@@ -46,7 +52,7 @@
 
 set -euo pipefail
 
-URL=""; KEY=""; NAME=""; PORT="514"; CA=""; INSTALL=1; TLS_CERT=""; TLS_KEY=""; TLS_PORT="6514"; TLS_CLIENT_CA=""; ACCEPT_CONFIG=0; CONFIG_PUBKEY=""; TIMEZONE="UTC"; FILE_GLOB=""; HTTP_USER=""; HTTP_PW_FILE=""; HTTP_PORT="8088"; HTTP_TLS=0; JOURNALD=0; JOURNALD_PRIORITY="6"; WAZUH=0; WAZUH_ARCHIVES="/var/ossec/logs/archives/archives.json"; WAZUH_ARCHIVES_SET=0
+URL=""; KEY=""; NAME=""; PORT="514"; CA=""; INSTALL=1; TLS_CERT=""; TLS_KEY=""; TLS_PORT="6514"; TLS_CLIENT_CA=""; ACCEPT_CONFIG=0; CONFIG_PUBKEY=""; TIMEZONE="UTC"; FILE_GLOB=""; HTTP_USER=""; HTTP_PW_FILE=""; HTTP_PORT="8088"; HTTP_TLS=0; JOURNALD=0; JOURNALD_PRIORITY="6"; WAZUH=0; WAZUH_ARCHIVES="/var/ossec/logs/archives/archives.json"; WAZUH_ARCHIVES_SET=0; WAZUH_MANAGER=0; WAZUH_KEEP_DAYS="3"; WAZUH_KEEP_SET=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --url) URL="$2"; shift 2;;
@@ -71,6 +77,8 @@ while [ $# -gt 0 ]; do
     --journald-priority) JOURNALD_PRIORITY="$2"; shift 2;;
     --wazuh) WAZUH=1; shift;;
     --wazuh-archives) WAZUH_ARCHIVES="$2"; WAZUH_ARCHIVES_SET=1; shift 2;;
+    --wazuh-manager) WAZUH_MANAGER=1; WAZUH=1; shift;;   # reading its archive file is part of it
+    --wazuh-keep-days) WAZUH_KEEP_DAYS="$2"; WAZUH_KEEP_SET=1; shift 2;;
     *) echo "Unknown option: $1" >&2; exit 2;;
   esac
 done
@@ -130,6 +138,17 @@ elif [ "$WAZUH_ARCHIVES_SET" -eq 1 ]; then
   echo "--wazuh-archives only makes sense with --wazuh." >&2; exit 2
 fi
 # (end of the Wazuh checks)
+
+# Extra input: a Wazuh manager installed on this machine. Its ports must be free of the ones this script gives to syslog and the other listeners.
+if [ "$WAZUH_MANAGER" -eq 1 ]; then
+  [[ "$WAZUH_KEEP_DAYS" =~ ^[0-9]{1,2}$ ]] && [ "$WAZUH_KEEP_DAYS" -ge 1 ] && [ "$WAZUH_KEEP_DAYS" -le 90 ] || { echo "--wazuh-keep-days must be a number from 1 to 90." >&2; exit 2; }
+  for pair in "--port:$PORT" ${TLS_CERT:+"--tls-port:$TLS_PORT"} ${HTTP_USER:+"--http-port:$HTTP_PORT"}; do
+    case "${pair#*:}" in 1514|1515|1516|55000) echo "${pair%%:*} ${pair#*:} is a port of the Wazuh manager (1514 agents, 1515 enrolment, 1516 cluster, 55000 API); choose another with --wazuh-manager." >&2; exit 2;; esac
+  done
+elif [ "$WAZUH_KEEP_SET" -eq 1 ]; then
+  echo "--wazuh-keep-days only makes sense with --wazuh-manager." >&2; exit 2
+fi
+# (end of the Wazuh manager checks)
 
 # Extra inputs: files and HTTP. Checked before anything is written; the values go into broker.env and into a quoted YAML string, so only plain characters.
 if [ -n "$FILE_GLOB" ]; then
@@ -227,6 +246,11 @@ fi
 } > /etc/asix-broker/broker.env
 chown root:vector /etc/asix-broker/broker.env; chmod 640 /etc/asix-broker/broker.env
 
+if [ "$WAZUH_MANAGER" -eq 1 ]; then
+  echo "-- 2b. Wazuh manager (install-wazuh-manager.sh) --"
+  "$(dirname "$0")/install-wazuh-manager.sh" --keep-days "$WAZUH_KEEP_DAYS"
+fi
+
 echo "-- 3. Installing Vector config and service drop-in --"
 install -m 644 "$SRC/vector.yaml" /etc/vector/vector.yaml
 if [ -n "$TLS_CERT" ]; then
@@ -319,3 +343,4 @@ echo "Open $PORT/udp and $PORT/tcp on this VM's firewall for the devices that wi
 [ -z "$HTTP_USER" ] || echo "HTTP input is on $HTTP_PORT/tcp$([ "$HTTP_TLS" -eq 1 ] && echo ' (HTTPS)' || echo ' (plain HTTP: the password travels in clear text)'): open it too. Test: curl -u $HTTP_USER:PASSWORD -H 'Content-Type: application/json' -d '{\"message\":\"hello\"}' http$([ "$HTTP_TLS" -eq 1 ] && echo s)://127.0.0.1:$HTTP_PORT/events"
 [ "$JOURNALD" -eq 0 ] || echo "Reading the systemd journal as source type 'journald' (entries at priority $JOURNALD_PRIORITY or more important; only entries written from now on). Watch: journalctl -u vector -n 30. Test: logger -t asixtest 'journald test'"
 [ "$WAZUH" -eq 0 ] || echo "Reading Windows events from $WAZUH_ARCHIVES as source type 'windows-event', through /etc/vector/win-filter.vrl (the tenant's Windows event filter). The manager needs <logall_json>yes</logall_json>, and the vector user must be able to read the file. Watch: journalctl -u vector -n 30"
+[ "$WAZUH_MANAGER" -eq 0 ] || echo "A Wazuh manager runs on this machine: open 1514/tcp (agents) and 1515/tcp (enrolment) for the Windows machines. The enrolment password is the line in /var/ossec/etc/authd.pass. Agent list: /var/ossec/bin/agent_control -l"
