@@ -215,6 +215,7 @@ const NAV = [
   { id: 'dashboard', label: 'Dashboards & Reports', ic: '\u25A6', page: pgDashboard, crumb: ['Dashboards & Reports', 'Command Center'] },
   { id: 'incidents', label: 'Cases & Issues', ic: '\u2691', page: pgAlerts, crumb: ['Cases & Issues', 'Alerts'] },
   { id: 'search', label: 'Investigation & Response', ic: '\u25C9', page: pgSearch, crumb: ['Investigation & Response', 'Log search'] },
+  { id: 'endpoints', label: 'Endpoints', ic: '\u25A4', page: pgEndpoints, crumb: ['Endpoints', 'Agents'] },
   { id: 'threat', label: 'Threat Management', ic: '\u25CE', home: 'threat/correlations' },
   { id: 'posture', label: 'Posture Management', ic: '\u2630', soon: true },
   { id: 'inventory', label: 'Inventory', ic: '\u25A3', soon: true },
@@ -1475,6 +1476,101 @@ function brokerPauseEdit(b) {
   return m;
 }
 // Read-only: the broker VMs that report to this install (docs/broker-vm.md), and the command to add one.
+// ---- Endpoints (docs/endpoints.md task E6) ---------------------------------------------------------
+// A read-only view of the tenant's endpoint manager, through the E4c routes (GET /v1/endpoints/manager, /agents/summary, /agents, /agents/:id; permission capacity:read).
+// Nothing here changes anything: a manager is registered by an operator (wazuh-manager-cli.js) and a machine is enrolled by its installer. The product name
+// is not shown on these tabs on purpose (docs/endpoints.md, decision 2); it is named, with its licence, on the Third-party notices tab (decision 3).
+const EP_STATUS = { active: ['Active', 'ok'], disconnected: ['Disconnected', 'bad'], never_connected: ['Never connected', 'off'], pending: ['Pending', 'off'] };
+const EP_SORT = [['+name', 'Name'], ['+status', 'Status'], ['-lastKeepAlive', 'Last seen, newest first'], ['-dateAdd', 'Registered, newest first']];
+const EP_LIMIT = 50;
+const EP_NOTICES = [{ name: 'Wazuh (endpoint agent and manager)', licence: 'GNU General Public License, version 2', source: 'https://github.com/wazuh/wazuh',
+  note: 'Copyright Wazuh, Inc. and contributors. Wazuh is a trademark of its owner and is not used here as an ASIX name. Where ASIX gives you a modified build, the source of the changes is available on request.' }];
+async function pgEndpoints() {
+  const m = (await api('/v1/endpoints/manager')).manager;
+  const top = el('div', { style: 'display:flex;align-items:baseline;gap:12px;flex-wrap:wrap' }, el('h2', { textContent: 'Endpoints' }),
+    el('button', { className: 'btn', style: 'margin-left:auto', textContent: 'Refresh', onclick: () => route() }));
+  const intro = el('p', { className: 'desc', textContent: 'Machines that run the ASIX endpoint agent, as reported by this tenant\u2019s endpoint manager. Read only: a machine is enrolled with its installer and the manager is registered by an operator.' });
+  if (!m || !m.available) return [top, intro, card('', pill('Not ready', 'off'), el('span', { className: 'mute', style: 'margin-left:8px', textContent: 'The database has no wazuh_managers table yet. A normal deploy runs the schema job and creates it.' }))];
+  if (!m.registered) {
+    return [top, intro, card('No endpoint manager registered', el('p', { className: 'mute', textContent: 'No endpoint manager is registered for this tenant. After the manager setup script has run on its VM, an operator registers it with the registration file it wrote:' }),
+      el('pre', { style: 'overflow:auto;font-size:12px', textContent: 'kubectl -n asix-platform exec -i deploy/asix-api -- node src/endpoints/wazuh-manager-cli.js register --tenant "NAME" < asix-wazuh-registration.json' }))];
+  }
+  const st = m.status || {}, up = !!st.reachable;
+  let sum = null, sumErr = '';
+  if (up) { try { sum = (await api('/v1/endpoints/agents/summary')).summary; } catch (e) { sumErr = e.message; } }
+  let tab = 'overview';
+  const q = { search: '', status: '', sort: '+name', offset: 0 };
+  const tabs = el('div', {}), body = el('div', {});
+
+  const overview = () => [
+    el('div', { className: 'grid' },
+      ...(sum ? [['Total', sum.total], ['Active', sum.active], ['Disconnected', sum.disconnected], ['Never connected', sum.never_connected], ['Pending', sum.pending]]
+        .map(([t, n]) => card(t, el('div', { className: 'stat' }, String(n)))) : [])),
+    sumErr ? card('', el('div', { className: 'err', textContent: sumErr })) : '',
+    card('Endpoint manager', el('div', { style: 'margin-bottom:8px' }, up ? pill('\u2713 Reachable', 'ok') : pill('\u2715 Not reachable', 'bad'),
+        up ? '' : el('span', { className: 'mute', style: 'margin-left:8px', textContent: (st.code ? st.code + ': ' : '') + (st.message || 'No answer') })),
+      kv({ Label: m.label, Address: m.host + ':' + m.port, 'API user': m.api_user, 'Manager version': st.version, 'Most agents': st.max_agents, Timezone: st.timezone,
+        'Pinned certificate (SHA-256)': m.cert_sha256, 'Registered or changed (UTC)': when(m.updated_at) })),
+    card('Windows event filter', el('div', { className: 'mute', textContent: 'The filter that decides which Windows events are kept is set under Settings, Data collection, Windows event filter.' }),
+      el('div', { style: 'margin-top:10px' }, el('button', { className: 'btn', textContent: 'Open the filter', onclick: () => { location.hash = '#/settings/winfilter'; } }))),
+  ];
+
+  const agentsView = () => {
+    const out = el('div', {}), detail = el('div', {});
+    const search = el('input', { placeholder: 'Search name, address or id', value: q.search, style: 'min-width:240px' });
+    const status = el('select', {}, el('option', { value: '', textContent: 'Any status' }), ...Object.entries(EP_STATUS).map(([v, s]) => el('option', { value: v, textContent: s[0] })));
+    const sort = el('select', {}, ...EP_SORT.map(([v, t]) => el('option', { value: v, textContent: t })));
+    status.value = q.status; sort.value = q.sort;
+    const showOne = async (id) => {
+      detail.replaceChildren(el('div', { className: 'mute', textContent: 'Loading...' }));
+      try {
+        const a = (await api('/v1/endpoints/agents/' + encodeURIComponent(id))).agent, o = a.os || {};
+        detail.replaceChildren(card('Agent ' + a.id, kv({ Name: a.name, Status: (EP_STATUS[a.status] || [a.status])[0], Address: a.ip, 'Registered from': a.register_ip, Version: a.version, Groups: (a.groups || []).join(', '),
+          OS: [o.name, o.version, o.arch].filter(Boolean).join(' '), Platform: o.platform, 'Last seen (UTC)': when(a.last_keep_alive), 'Registered (UTC)': when(a.date_added), Node: a.node, Manager: a.manager })));
+      } catch (e) { detail.replaceChildren(el('div', { className: 'err', textContent: e.message })); }
+    };
+    const cols = [
+      { h: 'ID', f: (a) => el('span', { style: 'cursor:pointer;text-decoration:underline', textContent: a.id, onclick: () => showOne(a.id) }) },
+      { h: 'Name', f: (a) => a.name }, { h: 'Address', f: (a) => a.ip }, { h: 'Status', f: (a) => { const s = EP_STATUS[a.status] || [a.status || '-', 'off']; return pill(s[0], s[1]); } },
+      { h: 'Agent version', f: (a) => a.version }, { h: 'Groups', f: (a) => (a.groups || []).join(', ') },
+      { h: 'OS', f: (a) => [a.os && a.os.name, a.os && a.os.version].filter(Boolean).join(' ') || (a.os && a.os.platform) || '-' },
+      { h: 'Last seen (UTC)', f: (a) => when(a.last_keep_alive) }, { h: 'Registered (UTC)', f: (a) => when(a.date_added) },
+    ];
+    const load = async () => {
+      out.replaceChildren(el('div', { className: 'mute', textContent: 'Loading...' }));
+      const p = new URLSearchParams({ limit: String(EP_LIMIT), offset: String(q.offset), sort: q.sort });
+      if (q.search.trim()) p.set('search', q.search.trim());
+      if (q.status) p.set('status', q.status);
+      try {
+        const r = await api('/v1/endpoints/agents?' + p.toString()), to = q.offset + r.agents.length;
+        const prev = el('button', { className: 'btn', textContent: 'Previous', onclick: () => { q.offset = Math.max(0, q.offset - EP_LIMIT); load(); } });
+        const next = el('button', { className: 'btn', textContent: 'Next', onclick: () => { q.offset += EP_LIMIT; load(); } });
+        prev.disabled = q.offset === 0; next.disabled = to >= r.total;
+        out.replaceChildren(table(cols, r.agents, 'No agents match. A machine appears here once its installer has run and it has connected.'),
+          el('div', { className: 'mute', style: 'margin-top:8px;display:flex;gap:8px;align-items:center' }, prev, next, (r.total ? (q.offset + 1) + ' to ' + to : '0') + ' of ' + r.total));
+      } catch (e) { out.replaceChildren(el('div', { className: 'err', textContent: e.message })); }
+    };
+    const apply = () => { q.search = search.value; q.status = status.value; q.sort = sort.value; q.offset = 0; detail.replaceChildren(); load(); };
+    search.onkeydown = (ev) => { if (ev.key === 'Enter') apply(); };
+    status.onchange = apply; sort.onchange = apply;
+    load();
+    return [el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px' }, search, status, sort, el('button', { className: 'btn pri', textContent: 'Search', onclick: apply })), card('', out), detail];
+  };
+
+  const notices = () => [card('Third-party notices',
+    el('p', { className: 'mute', textContent: 'The endpoint agent and manager are built on open source software. Its licence requires these notices to stay with the product, so they are listed here and in the installer. Draft: a lawyer is to read this page before the first client installer ships (docs/endpoints.md, E7).' }),
+    table([{ h: 'Component', f: (n) => n.name }, { h: 'Version in use', f: () => st.version || '-' }, { h: 'Licence', f: (n) => n.licence },
+      { h: 'Source', f: (n) => el('a', { href: n.source, target: '_blank', rel: 'noopener noreferrer', textContent: n.source }) }, { h: 'Notice', f: (n) => n.note }], EP_NOTICES))];
+
+  const TABS = [['overview', 'Overview', overview], ['agents', 'Agents', agentsView], ['notices', 'Third-party notices', notices]];
+  function draw() {
+    tabs.replaceChildren(...TABS.map(([id, label]) => el('div', { className: 'xtab' + (tab === id ? ' on' : ''), textContent: label, onclick: () => { tab = id; draw(); } })));
+    body.replaceChildren(...(TABS.find((t) => t[0] === tab) || TABS[0])[2]());
+  }
+  draw();
+  return [top, intro, tabs, el('div', { style: 'margin-top:12px' }, body)];
+}
+
 async function pgBrokers() {
   const r = await api('/v1/brokers'), s = r.summary;
   let bcfg = null; try { bcfg = (await api('/v1/broker-config')).config; } catch (e) { bcfg = null; }
