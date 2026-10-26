@@ -202,7 +202,7 @@ describe('route GET /v1/endpoints/installer/linux', () => {
 
   it('is a GET guarded by capacity:read like the other endpoint routes', () => {
     assert.ok(perms.length >= 5 && perms.every((p) => p === 'capacity:read'), perms.join());
-    const src = fs.readFileSync(path.join(root, 'src/gateway/routes/wazuh-manager.js'), 'utf8'); assert.match(src, /router\.get\('\/v1\/endpoints\/installer\/linux', \.\.\.guarded\('capacity:read'\)/); assert.ok(!/router\.(post|put|patch|delete)\(/.test(src));
+    const src = fs.readFileSync(path.join(root, 'src/gateway/routes/wazuh-manager.js'), 'utf8'); assert.match(src, /\['linux', installer\.render\]/); assert.match(src, /router\.get\('\/v1\/endpoints\/installer\/' \+ platform, \.\.\.guarded\('capacity:read'\)/); assert.ok(!/router\.(post|put|patch|delete)\(/.test(src));
   });
   it('returns the script for the registered manager, at the manager\'s version, with the group asked for', async () => {
     const { status, body } = await get('?group=servers'); assert.strictEqual(status, 200); const i = body.installer;

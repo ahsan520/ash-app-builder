@@ -40,6 +40,8 @@ async function open(manager = MANAGER, answers = {}) {
     if (p.startsWith('/v1/endpoints/agents?')) return { success: true, ...LIST };
     if (p.startsWith('/v1/endpoints/installer/linux?')) return { success: true, installer: { platform: 'linux', manager: '192.168.68.54', group: new URLSearchParams(p.split('?')[1]).get('group'), agent_version: '4.14.9-1', from_manager: true, filename: 'asix-endpoint-install.sh',
       password_token: '__ASIX_ENROLL_PASSWORD__', script: "#!/bin/bash\nEMBEDDED_PASSWORD='__ASIX_ENROLL_PASSWORD__'; PLACEHOLDER=\"__ASIX_ENROLL_\"\"PASSWORD__\"\necho hi\n" } };
+    if (p.startsWith('/v1/endpoints/installer/windows?')) return { success: true, installer: { platform: 'windows', manager: '192.168.68.54', group: new URLSearchParams(p.split('?')[1]).get('group'), agent_version: '4.14.9-1', from_manager: true, filename: 'asix-endpoint-install.ps1',
+      password_token: '__ASIX_ENROLL_PASSWORD__', script: "$EmbeddedPassword = '__ASIX_ENROLL_PASSWORD__'; $Placeholder = '__ASIX_ENROLL_' + 'PASSWORD__'\nWrite-Host hi\n" } };
     const one = /^\/v1\/endpoints\/agents\/(\d+)$/.exec(p);
     if (one) return { success: true, agent: LIST.agents.find((x) => x.id === one[1]) };
     throw new Error('unexpected call ' + p);
@@ -136,6 +138,26 @@ describe('Endpoints page', () => {
     const script = p.all().find((n) => n.tag === 'pre').attrs.textContent;
     assert.ok(script.includes("EMBEDDED_PASSWORD='a'\\''b$&c\\d'"), script); assert.ok(!script.includes('__ASIX_ENROLL_PASSWORD__;') && !/EMBEDDED_PASSWORD='__ASIX/.test(script));
     assert.ok(script.includes('PLACEHOLDER="__ASIX_ENROLL_""PASSWORD__"'), 'the script\u2019s own comparison string is not touched'); assert.match(p.text(), /ASIX never received it/);
+  });
+  it('Add a machine, Windows: asks the windows route by group only, says how to run the PowerShell script, and offers the PowerShell names for the password', async () => {
+    const p = await open(); await p.click('Add a machine'); const sel = p.all().find((n) => n.tag === 'select' && n.kids.some((k) => k.attrs && k.attrs.value === 'windows'));
+    sel.value = 'windows'; await sel.attrs.onchange(); assert.match(p.text(), /Windows PowerShell 5\.1/); assert.match(p.text(), /elevated PowerShell/); assert.ok(!/bash asix-endpoint-install/.test(p.text()));
+    await p.click('Create script'); assert.strictEqual(p.calls.at(-1).p, '/v1/endpoints/installer/windows?group=default'); assert.strictEqual(p.calls.at(-1).method, 'GET');
+    const t = p.text(); assert.match(t, /Made for 192\.168\.68\.54, group default, agent package 4\.14\.9-1/); assert.match(t, /-PasswordFile FILE/); assert.ok(!/--password-file/.test(t.split('Made for')[1]));
+  });
+  it('Windows: a typed password goes into the script in the browser only, as base64 of its UTF-8 bytes (quotes, $, backticks, non-ASCII cannot break out), token gone', async () => {
+    const p = await open(); await p.click('Add a machine'); const sel = p.all().find((n) => n.tag === 'select' && n.kids.some((k) => k.attrs && k.attrs.value === 'windows')); sel.value = 'windows';
+    const pwText = "a'b$`c\u2019\u00fc\\"; const [group, pw] = p.all().filter((n) => n.tag === 'input'); group.value = ' win servers '; pw.value = pwText; await p.click('Create script');
+    assert.strictEqual(p.calls.at(-1).p, '/v1/endpoints/installer/windows?group=win+servers'); assert.ok(!p.calls.some((c) => c.p.includes('a%27b') || c.p.includes("a'b")));
+    const script = p.all().find((n) => n.tag === 'pre').attrs.textContent; const b64 = Buffer.from(pwText, 'utf8').toString('base64');
+    assert.ok(script.includes("$EmbeddedPassword = '" + b64 + "';"), script); assert.ok(!script.includes(pwText), 'the password itself is not in the script'); assert.ok(!script.includes('__ASIX_ENROLL_PASSWORD__;') && !/EmbeddedPassword = '__ASIX/.test(script));
+    assert.ok(script.includes("$Placeholder = '__ASIX_ENROLL_' + 'PASSWORD__'"), 'the script\u2019s own comparison string is not touched'); assert.match(p.text(), /ASIX never received it/);
+  });
+  it('Windows: a failing route shows its message; switching system clears the old script', async () => {
+    const f = await open(MANAGER, { '/v1/endpoints/installer/windows': new Error('400 INSTALLER_BAD_GROUP') }); await f.click('Add a machine');
+    const sel = f.all().find((n) => n.tag === 'select' && n.kids.some((k) => k.attrs && k.attrs.value === 'windows')); sel.value = 'windows'; await f.click('Create script'); assert.match(f.text(), /INSTALLER_BAD_GROUP/);
+    const p = await open(); await p.click('Add a machine'); await p.click('Create script'); assert.ok(p.all().some((n) => n.tag === 'pre'));
+    const s2 = p.all().find((n) => n.tag === 'select' && n.kids.some((k) => k.attrs && k.attrs.value === 'windows')); s2.value = 'windows'; await s2.attrs.onchange(); assert.ok(!p.all().some((n) => n.tag === 'pre'));
   });
   it('a password with a line break is refused before any request; a failing route shows its message', async () => {
     const p = await open(); await p.click('Add a machine'); const before = p.calls.length;

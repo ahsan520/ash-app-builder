@@ -83,16 +83,18 @@ router.get('/v1/endpoints/agents/:id', ...guarded('capacity:read'), (req, res, n
   res.status(200).json({ success: true, agent });
 }));
 
-// The Linux agent installer for this tenant's manager (docs/endpoints.md, task E5). A GET that reads the registry and asks the manager for its version, and fills a script template:
+// The agent installers for this tenant's manager (docs/endpoints.md, task E5; Linux and Windows). A GET that reads the registry and asks the manager for its version, and fills a script template:
 // the address comes from the registered manager, never from the request; the only parameter, `group`, is validated to a strict alphabet. The enrolment password is not known to ASIX
 // and is not in the answer: the portal puts it into the script in the browser, or the script asks for it on the machine.
-router.get('/v1/endpoints/installer/linux', ...guarded('capacity:read'), handle(async (m, req, res) => {
-  let managerVersion = null;
-  try { managerVersion = (await api.managerInfo(m)).version; } catch (e) { /* the manager does not answer: the default version is used and the answer says so */ }
-  let out;
-  try { out = installer.render({ host: new URL(m.api_url).hostname, group: req.query.group, managerVersion }); }
-  catch (e) { if (e instanceof installer.InstallerError) return apiError(res, 400, 'INSTALLER_' + e.code, e.message); throw e; }
-  res.status(200).json({ success: true, installer: { platform: 'linux', ...out, password_token: installer.PASSWORD_TOKEN } });
-}));
+for (const [platform, make] of [['linux', installer.render], ['windows', installer.renderWindows]]) {
+  router.get('/v1/endpoints/installer/' + platform, ...guarded('capacity:read'), handle(async (m, req, res) => {
+    let managerVersion = null;
+    try { managerVersion = (await api.managerInfo(m)).version; } catch (e) { /* the manager does not answer: the default version is used and the answer says so */ }
+    let out;
+    try { out = make({ host: new URL(m.api_url).hostname, group: req.query.group, managerVersion }); }
+    catch (e) { if (e instanceof installer.InstallerError) return apiError(res, 400, 'INSTALLER_' + e.code, e.message); throw e; }
+    res.status(200).json({ success: true, installer: { platform, ...out, password_token: installer.PASSWORD_TOKEN } });
+  }));
+}
 
 module.exports = router;
