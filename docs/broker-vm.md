@@ -590,6 +590,18 @@ With `--wazuh` the broker reads Windows events that a Wazuh manager wrote to its
 - **Turn it off:** re-run the bootstrap without `--wazuh`: the config is removed, the filter file and the group membership stay.
 - **Not run on a real broker VM or against a real Wazuh manager yet.**
 
+## Wazuh alerts from a manager (E4d, built 2026-10-25)
+
+With `--wazuh-alerts` the broker reads the **alerts** a Wazuh manager raises (`/var/ossec/logs/alerts/alerts.json`, written by default), from every agent (Windows, Linux, macOS), and sends each one to ASIX as source type `endpoint-alert`. It is separate from `--wazuh` (the raw Windows events): use either or both, with or without `--wazuh-manager`. Design, field list, parsing rule and checks: `docs/endpoints.md`, "E4d as built".
+
+- **Turn it on:** re-run the bootstrap with `--no-install` and EVERY flag again plus `--wazuh-alerts`. `--wazuh-alerts-file PATH` changes the file; `--wazuh-alerts-min-level N` (0 to 15, default 0 = everything the manager wrote) sends only alerts of that rule level or higher. The manager's own `log_alert_level` (default 3) applies before that.
+- **The Windows event filter does not apply to alerts** (it thins raw Windows events; an alert is what the manager already chose to raise).
+- **The `vector` user must read the file:** the bootstrap adds it to the `wazuh` group when that group exists. Only alerts raised after the start are sent (no backlog).
+- **On the Brokers page:** Inputs shows **Endpoint alerts**; Paused can pause it on its own (internal name `wazuhalerts`; pausing Windows events leaves it running and the other way round).
+- **Look on the broker:** `journalctl -u vector -n 30`, `ls -l /var/ossec/logs/alerts/alerts.json`, `id vector`.
+- **Turn it off:** re-run the bootstrap without `--wazuh-alerts`.
+- **Not run on a real broker VM or against a real Wazuh manager yet.**
+
 ## The Wazuh manager on the broker VM (E4b, built 2026-10-24)
 
 `bootstrap-broker.sh --wazuh-manager` installs a Wazuh manager (version **4.14.9-1**, held back from upgrades) on the broker VM, so Windows machines can report to it and the broker can send their events to ASIX. Everything about it, including the sizing table and the checks: `docs/endpoints.md`, "E4b as built".

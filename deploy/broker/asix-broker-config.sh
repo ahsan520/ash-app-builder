@@ -26,7 +26,7 @@
 # last answer passed) or the reason the last answer was refused (unsigned, bad_signature, wrong_broker, clock_skew, bad_format, no_key_file, no_openssl).
 # The TLS port is moved only on a broker that has a TLS listener (ASIX_SYSLOG_TLS_PORT in broker.env and vector-tls.yaml present); otherwise it is ignored with a note.
 # OPTIONAL INPUTS (pause / resume): the answer may also say `paused_inputs` ("file,journald"; "" = run them all): the optional inputs this broker should NOT run. Only file, http,
-# journald and wazuh can be paused (never syslog or syslog over TLS). The broker takes those inputs' config files out of VECTOR_CONFIG (and puts back the ones it paused earlier and ASIX no longer
+# journald, wazuh and wazuhalerts can be paused (never syslog or syslog over TLS). The broker takes those inputs' config files out of VECTOR_CONFIG (and puts back the ones it paused earlier and ASIX no longer
 # lists), writes ASIX_INPUTS_PAUSED, runs `vector validate` on the new list, restarts Vector, waits for health, and puts broker.env back on any failure (remembering the rejected list in
 # config-paused-rejected). The config files stay installed, so resuming needs nothing from ASIX but an empty list. A re-run of bootstrap-broker.sh writes the full list again; the next pull pauses again.
 # The report also says which inputs this broker has paused (paused_inputs) and the list it rejected (rejected_paused_inputs).
@@ -157,12 +157,12 @@ if printf '%s' "$FLAT" | grep -q '"paused_inputs":'; then
   PI_SET=1; PI="$(printf '%s' "$FLAT" | sed -n 's/.*"paused_inputs":"\([a-z,]\{0,40\}\)".*/\1/p')"
   PI_SEEN=","
   for t in ${PI//,/ }; do
-    case "$t" in file|http|journald|wazuh) ;; *) echo "ASIX asked to pause '$t', which cannot be paused (only file, http, journald, wazuh); ignored." >&2; exit 1;; esac
+    case "$t" in file|http|journald|wazuh|wazuhalerts) ;; *) echo "ASIX asked to pause '$t', which cannot be paused (only file, http, journald, wazuh, wazuhalerts); ignored." >&2; exit 1;; esac
     case "$PI_SEEN" in *",$t,"*) echo "ASIX listed '$t' twice in paused_inputs; ignored." >&2; exit 1;; esac
     PI_SEEN="$PI_SEEN$t,"
   done
   # always the same order, whatever ASIX sent
-  PI_ORD=""; for t in file http journald wazuh; do case ",$PI," in *",$t,"*) PI_ORD="${PI_ORD:+$PI_ORD,}$t";; esac; done; PI="$PI_ORD"
+  PI_ORD=""; for t in file http journald wazuh wazuhalerts; do case ",$PI," in *",$t,"*) PI_ORD="${PI_ORD:+$PI_ORD,}$t";; esac; done; PI="$PI_ORD"
 fi
 
 # The Windows event filter: absent means no opinion (an ASIX from before this, or nothing to say); a 64-character hash names the program ASIX wants in win-filter.vrl.
@@ -194,7 +194,7 @@ apply_env() {
   }
 
   TLS=""; [ -r "$VECTOR_DIR/vector-tls.yaml" ] && TLS="$VECTOR_DIR/vector-tls.yaml"
-  EXTRA=(); for f in vector-file.yaml vector-http.yaml vector-journald.yaml vector-wazuh.yaml; do [ -r "$VECTOR_DIR/$f" ] && EXTRA+=("$VECTOR_DIR/$f"); done   # the optional file, HTTP, journal and Wazuh inputs, when installed
+  EXTRA=(); for f in vector-file.yaml vector-http.yaml vector-journald.yaml vector-wazuh.yaml vector-wazuhalerts.yaml; do [ -r "$VECTOR_DIR/$f" ] && EXTRA+=("$VECTOR_DIR/$f"); done   # the optional file, HTTP, journal, Wazuh events and Wazuh alerts inputs, when installed
   ( set -a; . "$ENV_FILE"; set +a; vector validate --no-environment ${TLS:+"$TLS"} ${EXTRA[@]+"${EXTRA[@]}"} "$VECTOR_DIR/vector.yaml" ) >/dev/null 2>&1 \
     || { reject "The config does not pass 'vector validate' with $LABEL $VAL."; return 1; }
   systemctl restart vector || { reject "systemctl restart vector failed with $LABEL $VAL." restart; return 1; }

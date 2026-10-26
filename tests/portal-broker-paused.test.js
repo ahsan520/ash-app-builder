@@ -50,7 +50,7 @@ describe('Brokers page: the Inputs dialog', () => {
       api: async (p, o) => { calls.push({ p, o }); if (fail) throw new Error(fail); return {}; }, route: () => routes.push(1) });
     brokerPauseEdit(b);
     const all = [...tree, appended].flatMap(walk);
-    const boxes = Object.fromEntries(all.filter((n) => n.tag === 'input' && n.type === 'checkbox').map((n, i) => [['file', 'http', 'journald', 'wazuh'][i], n]));
+    const boxes = Object.fromEntries(all.filter((n) => n.tag === 'input' && n.type === 'checkbox').map((n, i) => [['file', 'http', 'journald', 'wazuh', 'wazuhalerts'][i], n]));
     const btn = (label) => all.find((n) => n.tag === 'button' && n.attrs.textContent === label);
     const err = all.find((n) => n.className === 'err');
     return { calls, routes, boxes, btn, err, tree, appended, closed: () => closed };
@@ -59,8 +59,8 @@ describe('Brokers page: the Inputs dialog', () => {
 
   it('one checkbox per pausable input, in the fixed order, ticked for what is asked; syslog has none', () => {
     const d = open(shape({ inputs_paused: 'http,file', config_paused_inputs: 'http,file', inputs: undefined }));
-    assert.deepStrictEqual(Object.keys(d.boxes), ['file', 'http', 'journald', 'wazuh']);
-    assert.deepStrictEqual(Object.values(d.boxes).map((b) => b.checked), [true, true, false, false]);
+    assert.deepStrictEqual(Object.keys(d.boxes), ['file', 'http', 'journald', 'wazuh', 'wazuhalerts']);
+    assert.deepStrictEqual(Object.values(d.boxes).map((b) => b.checked), [true, true, false, false, false]);
     assert.match(text(d.tree), /Log files/); assert.match(text(d.tree), /Syslog and syslog over TLS cannot be paused/);
   });
   it('the note under each input says what it is doing now', () => {

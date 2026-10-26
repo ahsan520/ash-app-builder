@@ -1,0 +1,152 @@
+# Optional config file: the broker reads the ALERTS a Wazuh manager on this VM (or mounted here) has raised, from any agent (Windows, Linux, macOS), and sends them to ASIX
+# with source type "endpoint-alert". bootstrap-broker.sh installs it only when run with --wazuh-alerts, and then starts Vector with
+#   VECTOR_CONFIG=/etc/vector/vector.yaml,/etc/vector/vector-wazuhalerts.yaml        (set in broker.env; the other optional configs join the same list)
+# It is independent of vector-wazuh.yaml (the raw Windows events, E4a): either can run alone, or both. Pausing it from the Brokers page takes this file out of that list.
+#
+# WHAT IT READS: the manager's alert file, one JSON object per line, standard path /var/ossec/logs/alerts/alerts.json (ASIX_WAZUH_ALERTS in broker.env changes it).
+# The manager writes it by default (jsonout_output is on in its ossec.conf). A line that is not JSON, or has no rule, is skipped. The vector user must be able to read the
+# file (bootstrap adds it to the "wazuh" group when that group exists). On the first start the file is read from its END, so turning this on does not send the backlog;
+# a file that appears later (the daily rotation) is read from its start.
+#
+# NO WINDOWS EVENT FILTER HERE: the filter policy (Settings > Windows event filter) thins RAW Windows events. An alert is what the manager already decided is worth
+# raising, so it is sent as it is. The only broker-side cut is a minimum rule level (ASIX_WAZUH_ALERT_MIN_LEVEL, 0 to 15, default 0 = everything the manager wrote;
+# the manager's own setting log_alert_level, default 3, applies before this).
+#
+# WHAT ASIX GETS: one JSON event per alert, the shape of ASIX's HTTP lane (src/ingest/http-ingest.js):
+#   message  "[Endpoint alert] rule <id> level <n>: <rule description on one line>"
+#   time     the alert's own time (the manager writes it as 2026-10-25T13:00:00.123+0000), else the time it was read
+#   host     the agent's name, else the manager's name
+#   fields   asix_via=wazuh, rule_id, rule_level, rule_description, rule_groups (comma list), mitre_ids, mitre_tactics, mitre_techniques, alert_id, agent_id,
+#            agent_name, agent_ip, manager_name, decoder_name, location, full_log (first 2000 characters), and everything the manager put under data and
+#            syscheck (file integrity) as data_<path> and syscheck_<path> (nested names joined with _, every value text, first 500 characters). Windows alerts
+#            carry their event under data_win_system_* and data_win_eventdata_*.
+# The body is a JSON array, which POST /v1/ingest/http accepts with the collector and source type in headers.
+#
+# Test without a network:   vector validate --no-environment deploy/broker/vector.yaml deploy/broker/vector-wazuhalerts.yaml
+sources:
+  wazuh_alerts_in:
+    type: file
+    include:
+      - "${ASIX_WAZUH_ALERTS:-/var/ossec/logs/alerts/alerts.json}"
+    read_from: end
+    # An alert with a long full_log is big; a line cut in the middle is not JSON and would be skipped.
+    max_line_bytes: 262144
+    ignore_older_secs: 604800
+
+transforms:
+  # One line of the alert file -> the alert itself, or nothing (not JSON, no rule, or below the minimum level).
+  wazuh_alerts_parse:
+    type: remap
+    inputs: [wazuh_alerts_in]
+    drop_on_abort: true
+    source: |
+      ev, err = parse_json(string(.message) ?? "")
+      if err != null || !is_object(ev) { abort }
+      . = object!(ev)
+      if !is_object(.rule) { abort }
+      if !is_string(.rule.id) && !is_integer(.rule.id) { abort }
+      lvl = to_int(.rule.level) ?? 0
+      min = to_int("${ASIX_WAZUH_ALERT_MIN_LEVEL:-0}") ?? 0
+      if lvl < min { abort }
+
+  # The Wazuh alert -> one ASIX event: a one-line message and every detail as a named field.
+  wazuh_alerts_to_event:
+    type: remap
+    inputs: [wazuh_alerts_parse]
+    source: |
+      rule = object(.rule) ?? {}
+      lvl = to_int(rule.level) ?? 0
+      rid = replace(to_string(rule.id) ?? "0", r'[^0-9]', "")
+      if rid == "" { rid = "0" }
+      desc = replace(string(rule.description) ?? "", r'\s+', " ")
+      desc = strip_whitespace(desc)
+      if desc == "" { desc = "no description" }
+      desc = slice(desc, start: 0, end: 500) ?? desc
+
+      host = replace(string(.agent.name) ?? string(.manager.name) ?? "unknown-host", r'\s+', "_")
+
+      # The manager writes 2026-10-25T13:00:00.123+0000 (no colon in the zone), which a plain RFC 3339 reader would refuse: read it, write it back as RFC 3339.
+      t, terr = parse_timestamp(string(.timestamp) ?? "", "%Y-%m-%dT%H:%M:%S%.f%z")
+      if terr != null { t = now() }
+      t = format_timestamp!(t, format: "%+")
+
+      mitre = object(rule.mitre) ?? {}
+      list = {
+        "groups": join(array(rule.groups) ?? [], ",") ?? "",
+        "mitre_ids": join(array(mitre.id) ?? [], ",") ?? "",
+        "mitre_tactics": join(array(mitre.tactic) ?? [], ",") ?? "",
+        "mitre_techniques": join(array(mitre.technique) ?? [], ",") ?? ""
+      }
+
+      # The manager's own details, flattened: a name like data.win.eventdata.image becomes data_win_eventdata_image. Names are cut down to plain characters.
+      data = flatten(object(.data) ?? {}, separator: "_")
+      data = map_keys(data, recursive: false) -> |key| { "data_" + replace(key, r'[^A-Za-z0-9_]', "_") }
+      sc = flatten(object(.syscheck) ?? {}, separator: "_")
+      sc = map_keys(sc, recursive: false) -> |key| { "syscheck_" + replace(key, r'[^A-Za-z0-9_]', "_") }
+      extra = merge(data, sc)
+      # A list (the changed attributes of a file, the references of a vulnerability) becomes one comma list; anything else becomes text.
+      extra = map_values(extra, recursive: false) -> |v| {
+        # (a variable set inside this block is visible outside it: do not reuse the name of one that is needed later, such as t, the alert's time)
+        txt = if is_array(v) { join(array(v) ?? [], ",") ?? encode_json(v) } else { to_string(v) ?? "" }
+        slice(txt, start: 0, end: 500) ?? txt
+      }
+
+      full = replace(string(.full_log) ?? "", r'[\r\n\t]+', " ")
+      full = slice(full, start: 0, end: 2000) ?? full
+
+      fields = merge(extra, {
+        "asix_via": "wazuh",
+        "rule_id": rid,
+        "rule_level": to_string(lvl),
+        "rule_description": desc,
+        "rule_groups": list.groups,
+        "mitre_ids": list.mitre_ids,
+        "mitre_tactics": list.mitre_tactics,
+        "mitre_techniques": list.mitre_techniques,
+        "alert_id": string(.id) ?? "",
+        "agent_id": string(.agent.id) ?? "",
+        "agent_name": string(.agent.name) ?? "",
+        "agent_ip": string(.agent.ip) ?? "",
+        "manager_name": string(.manager.name) ?? "",
+        "decoder_name": string(.decoder.name) ?? "",
+        "location": slice(string(.location) ?? "", start: 0, end: 500) ?? "",
+        "full_log": full
+      })
+
+      . = {
+        "message": "[Endpoint alert] rule " + rid + " level " + to_string(lvl) + ": " + desc,
+        "time": t,
+        "host": host,
+        "fields": fields
+      }
+
+sinks:
+  asix_wazuh_alerts:
+    type: http
+    inputs: [wazuh_alerts_to_event]
+    uri: ${ASIX_INGEST_URL}
+    method: post
+    encoding:
+      codec: json
+    request:
+      headers:
+        Authorization: "Bearer ${ASIX_INGEST_KEY}"
+        Content-Type: application/json
+        X-ASIX-Collector: ${ASIX_BROKER_NAME}
+        X-ASIX-Platform: linux
+        X-ASIX-Source-Type: endpoint-alert
+        X-ASIX-Version: vector-broker
+      retry_attempts: 100000
+      retry_initial_backoff_secs: 1
+      retry_max_duration_secs: 60
+      timeout_secs: 30
+    batch:
+      max_events: 500
+      max_bytes: 900000
+      timeout_secs: 5
+    buffer:
+      type: disk
+      max_size: 536870912
+      when_full: block
+    tls:
+      ca_file: ${ASIX_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}

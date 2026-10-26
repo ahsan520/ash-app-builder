@@ -5,7 +5,7 @@
 //   win_filter: the SHA-256 of the Windows event filter program the broker should have in /etc/vector/win-filter.vrl (src/endpoints/win-filter-broker.js). Present when the tenant has a policy, or when this
 //   broker reported a program and the policy was removed (then the hash of the keep-everything program). The broker downloads the program from GET /v1/ingest/broker-config/win-filter and refuses it unless it hashes to this value.
 //   GET /v1/ingest/broker-config/win-filter   (same key) -> text/plain: the program for the tenant's CURRENT policy (the keep-everything program when there is none), X-ASIX-Win-Filter-Sha256 / -Revision headers.
-//   paused_inputs: optional inputs (file, http, journald) this broker should not run; "" = run them all again. Present only when something is asked or must be resumed.
+//   paused_inputs: optional inputs (file, http, journald, wazuh, wazuhalerts) this broker should not run; "" = run them all again. Present only when something is asked or must be resumed.
 //   tls_port: the tenant-wide syslog-over-TLS port; only a broker that already has a TLS listener acts on it. A broker left out gets null for both.
 //   Optional ?collector=broker-1: the broker's own port and its own TLS port (set on the Brokers page) win over the tenant-wide ones; found by this key AND that name.
 //   A broker that was left out of the tenant-wide port (and has no own port) is answered null: no opinion, it keeps what it has. The same for its TLS port.

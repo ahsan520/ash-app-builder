@@ -10,6 +10,7 @@
 #       [--file-glob '/var/log/myapp/*.log' [--file-glob '/srv/other/*.log' ...]] [--http-user svc --http-password-file /root/http.pw [--http-port 8088] [--http-tls]]
 #       [--journald [--journald-priority 6]] [--wazuh [--wazuh-archives /var/ossec/logs/archives/archives.json]]
 #       [--wazuh-manager [--wazuh-keep-days 3]]
+#       [--wazuh-alerts [--wazuh-alerts-file /var/ossec/logs/alerts/alerts.json] [--wazuh-alerts-min-level 0]]
 #
 # --timezone       The time zone (IANA name, default UTC) that senders write in on syslog lines that carry none (RFC 3164). Vector reads those as
 #                  UTC, so a sender in another zone shows hours off in search and detections. Written as ASIX_SYSLOG_TIMEZONE. Like every option here it
@@ -38,6 +39,12 @@
 #                  agents then report to this machine on 1514/tcp (agents) and 1515/tcp (enrolment); open them on the firewall. Needs 2+ CPUs, 3.5 GB memory
 #                  (8 GB and 4 CPUs recommended) and 20 GB free (100 GB recommended). --port, --tls-port and --http-port must not be 1514, 1515, 1516 or 55000.
 #   --wazuh-keep-days N  With --wazuh-manager: keep N days (1 to 90, default 3) of the manager's rotated archive and alert files.
+# --wazuh-alerts   Also send the ALERTS a Wazuh manager raises (default file /var/ossec/logs/alerts/alerts.json, written by default), from every agent, Windows and Linux,
+#                  with source type "endpoint-alert". Independent of --wazuh (the raw Windows events): use either or both, with or without --wazuh-manager. The Windows
+#                  event filter does not apply to alerts. Adds the vector user to the wazuh group when there is one. Installs vector-wazuhalerts.yaml. Re-running without
+#                  --wazuh-alerts turns it off.
+#   --wazuh-alerts-file PATH       With --wazuh-alerts: another alert file. Written as ASIX_WAZUH_ALERTS.
+#   --wazuh-alerts-min-level N     With --wazuh-alerts: send only alerts of rule level N (0 to 15) or higher; default 0 = all the manager wrote. Written as ASIX_WAZUH_ALERT_MIN_LEVEL.
 # --no-install     Vector is already installed (offline or pinned install); skip the package repo.
 # --tls-cert/key   Also accept syslog over TLS (RFC 5425) on --tls-port (default 6514), with this server certificate.
 #                  Both are needed together. Re-running without them turns the TLS listener off again.
@@ -52,7 +59,7 @@
 
 set -euo pipefail
 
-URL=""; KEY=""; NAME=""; PORT="514"; CA=""; INSTALL=1; TLS_CERT=""; TLS_KEY=""; TLS_PORT="6514"; TLS_CLIENT_CA=""; ACCEPT_CONFIG=0; CONFIG_PUBKEY=""; TIMEZONE="UTC"; FILE_GLOB=""; HTTP_USER=""; HTTP_PW_FILE=""; HTTP_PORT="8088"; HTTP_TLS=0; JOURNALD=0; JOURNALD_PRIORITY="6"; WAZUH=0; WAZUH_ARCHIVES="/var/ossec/logs/archives/archives.json"; WAZUH_ARCHIVES_SET=0; WAZUH_MANAGER=0; WAZUH_KEEP_DAYS="3"; WAZUH_KEEP_SET=0
+URL=""; KEY=""; NAME=""; PORT="514"; CA=""; INSTALL=1; TLS_CERT=""; TLS_KEY=""; TLS_PORT="6514"; TLS_CLIENT_CA=""; ACCEPT_CONFIG=0; CONFIG_PUBKEY=""; TIMEZONE="UTC"; FILE_GLOB=""; HTTP_USER=""; HTTP_PW_FILE=""; HTTP_PORT="8088"; HTTP_TLS=0; JOURNALD=0; JOURNALD_PRIORITY="6"; WAZUH=0; WAZUH_ARCHIVES="/var/ossec/logs/archives/archives.json"; WAZUH_ARCHIVES_SET=0; WAZUH_MANAGER=0; WAZUH_KEEP_DAYS="3"; WAZUH_KEEP_SET=0; WAZUH_ALERTS=0; WAZUH_ALERTS_FILE="/var/ossec/logs/alerts/alerts.json"; WAZUH_ALERTS_FILE_SET=0; WAZUH_ALERTS_MIN="0"; WAZUH_ALERTS_MIN_SET=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --url) URL="$2"; shift 2;;
@@ -79,6 +86,9 @@ while [ $# -gt 0 ]; do
     --wazuh-archives) WAZUH_ARCHIVES="$2"; WAZUH_ARCHIVES_SET=1; shift 2;;
     --wazuh-manager) WAZUH_MANAGER=1; WAZUH=1; shift;;   # reading its archive file is part of it
     --wazuh-keep-days) WAZUH_KEEP_DAYS="$2"; WAZUH_KEEP_SET=1; shift 2;;
+    --wazuh-alerts) WAZUH_ALERTS=1; shift;;
+    --wazuh-alerts-file) WAZUH_ALERTS_FILE="$2"; WAZUH_ALERTS_FILE_SET=1; shift 2;;
+    --wazuh-alerts-min-level) WAZUH_ALERTS_MIN="$2"; WAZUH_ALERTS_MIN_SET=1; shift 2;;
     *) echo "Unknown option: $1" >&2; exit 2;;
   esac
 done
@@ -138,6 +148,17 @@ elif [ "$WAZUH_ARCHIVES_SET" -eq 1 ]; then
   echo "--wazuh-archives only makes sense with --wazuh." >&2; exit 2
 fi
 # (end of the Wazuh checks)
+
+# Extra input: the alerts of a Wazuh manager. Checked before anything is written; the path and the level go into broker.env, so only plain characters.
+WAZUH_ALERTS_CFG=""   # the config file to validate; empty when alerts are not read
+if [ "$WAZUH_ALERTS" -eq 1 ]; then
+  WAZUH_ALERTS_CFG="/etc/vector/vector-wazuhalerts.yaml"
+  [[ "$WAZUH_ALERTS_FILE" =~ ^/[A-Za-z0-9._/-]{1,200}$ ]] && [[ "$WAZUH_ALERTS_FILE" != *..* ]] || { echo "--wazuh-alerts-file must be an absolute path of plain characters (letters, digits, . _ - /)." >&2; exit 2; }
+  [[ "$WAZUH_ALERTS_MIN" =~ ^[0-9]{1,2}$ ]] && [ "$WAZUH_ALERTS_MIN" -le 15 ] || { echo "--wazuh-alerts-min-level must be a number from 0 to 15." >&2; exit 2; }
+elif [ "$WAZUH_ALERTS_FILE_SET" -eq 1 ] || [ "$WAZUH_ALERTS_MIN_SET" -eq 1 ]; then
+  echo "--wazuh-alerts-file and --wazuh-alerts-min-level only make sense with --wazuh-alerts." >&2; exit 2
+fi
+# (end of the Wazuh alerts checks)
 
 # Extra input: a Wazuh manager installed on this machine. Its ports must be free of the ones this script gives to syslog and the other listeners.
 if [ "$WAZUH_MANAGER" -eq 1 ]; then
@@ -229,6 +250,7 @@ fi
   [ -z "$FILE_GLOB" ] || echo "ASIX_FILE_GLOB=$(printf '%s\n' "$FILE_GLOB" | paste -sd, -)"   # all globs, comma separated: for reading; vector-file.yaml has them written out
   [ "$JOURNALD" -eq 0 ] || echo "ASIX_JOURNALD_MAX_PRIORITY=$JOURNALD_PRIORITY"
   [ "$WAZUH" -eq 0 ] || echo "ASIX_WAZUH_ARCHIVES=$WAZUH_ARCHIVES"
+  if [ "$WAZUH_ALERTS" -eq 1 ]; then echo "ASIX_WAZUH_ALERTS=$WAZUH_ALERTS_FILE"; echo "ASIX_WAZUH_ALERT_MIN_LEVEL=$WAZUH_ALERTS_MIN"; fi
   if [ -n "$HTTP_USER" ]; then
     echo "ASIX_HTTP_USER=$HTTP_USER"
     echo "ASIX_HTTP_PASSWORD=$HTTP_PW"
@@ -242,6 +264,7 @@ fi
   [ -z "$HTTP_USER" ] || CONFIGS="$CONFIGS,/etc/vector/vector-http.yaml"
   [ "$JOURNALD" -eq 0 ] || CONFIGS="$CONFIGS,/etc/vector/vector-journald.yaml"
   [ "$WAZUH" -eq 0 ] || CONFIGS="$CONFIGS,/etc/vector/vector-wazuh.yaml"
+  [ "$WAZUH_ALERTS" -eq 0 ] || CONFIGS="$CONFIGS,/etc/vector/vector-wazuhalerts.yaml"
   [ "$CONFIGS" = "/etc/vector/vector.yaml" ] || echo "VECTOR_CONFIG=$CONFIGS"
 } > /etc/asix-broker/broker.env
 chown root:vector /etc/asix-broker/broker.env; chmod 640 /etc/asix-broker/broker.env
@@ -300,12 +323,23 @@ if [ "$WAZUH" -eq 1 ]; then
 else
   rm -f /etc/vector/vector-wazuh.yaml   # re-run without --wazuh: Windows events are no longer read (win-filter.vrl and the group membership are left alone)
 fi
+if [ "$WAZUH_ALERTS" -eq 1 ]; then
+  install -m 644 "$SRC/vector-wazuhalerts.yaml" /etc/vector/vector-wazuhalerts.yaml
+  # The alert directory belongs to the wazuh group, like the archive one. Vector is restarted below, which is what picks the new group up.
+  if getent group wazuh >/dev/null 2>&1; then
+    id -nG vector 2>/dev/null | tr ' ' '\n' | grep -qx wazuh || usermod -aG wazuh vector
+  else
+    echo "   note: no wazuh group on this machine (the manager is not installed here yet); make sure the vector user can read $WAZUH_ALERTS_FILE." >&2
+  fi
+else
+  rm -f /etc/vector/vector-wazuhalerts.yaml   # re-run without --wazuh-alerts: alerts are no longer read (the group membership is left alone)
+fi
 install -d /etc/systemd/system/vector.service.d
 install -m 644 "$SRC/vector-asix.conf" /etc/systemd/system/vector.service.d/asix.conf
 install -d /var/lib/vector && chown vector:vector /var/lib/vector
 
 echo "-- 4. Validating the config before restarting --"
-( set -a; . /etc/asix-broker/broker.env; set +a; vector validate --no-environment ${TLS_CERT:+/etc/vector/vector-tls.yaml} ${FILE_GLOB:+/etc/vector/vector-file.yaml} ${HTTP_USER:+/etc/vector/vector-http.yaml} ${WAZUH_CFG} ${JOURNALD_CFG} /etc/vector/vector.yaml )
+( set -a; . /etc/asix-broker/broker.env; set +a; vector validate --no-environment ${TLS_CERT:+/etc/vector/vector-tls.yaml} ${FILE_GLOB:+/etc/vector/vector-file.yaml} ${HTTP_USER:+/etc/vector/vector-http.yaml} ${WAZUH_CFG} ${WAZUH_ALERTS_CFG} ${JOURNALD_CFG} /etc/vector/vector.yaml )
 
 echo "-- 5. Heartbeat timer --"
 install -d /usr/local/lib/asix-broker
@@ -343,4 +377,5 @@ echo "Open $PORT/udp and $PORT/tcp on this VM's firewall for the devices that wi
 [ -z "$HTTP_USER" ] || echo "HTTP input is on $HTTP_PORT/tcp$([ "$HTTP_TLS" -eq 1 ] && echo ' (HTTPS)' || echo ' (plain HTTP: the password travels in clear text)'): open it too. Test: curl -u $HTTP_USER:PASSWORD -H 'Content-Type: application/json' -d '{\"message\":\"hello\"}' http$([ "$HTTP_TLS" -eq 1 ] && echo s)://127.0.0.1:$HTTP_PORT/events"
 [ "$JOURNALD" -eq 0 ] || echo "Reading the systemd journal as source type 'journald' (entries at priority $JOURNALD_PRIORITY or more important; only entries written from now on). Watch: journalctl -u vector -n 30. Test: logger -t asixtest 'journald test'"
 [ "$WAZUH" -eq 0 ] || echo "Reading Windows events from $WAZUH_ARCHIVES as source type 'windows-event', through /etc/vector/win-filter.vrl (the tenant's Windows event filter). The manager needs <logall_json>yes</logall_json>, and the vector user must be able to read the file. Watch: journalctl -u vector -n 30"
+[ "$WAZUH_ALERTS" -eq 0 ] || echo "Reading Wazuh alerts from $WAZUH_ALERTS_FILE as source type 'endpoint-alert' (rule level $WAZUH_ALERTS_MIN or higher; only alerts raised from now on). The vector user must be able to read the file. Watch: journalctl -u vector -n 30"
 [ "$WAZUH_MANAGER" -eq 0 ] || echo "A Wazuh manager runs on this machine: open 1514/tcp (agents) and 1515/tcp (enrolment) for the Windows machines. The enrolment password is the line in /var/ossec/etc/authd.pass. Agent list: /var/ossec/bin/agent_control -l"

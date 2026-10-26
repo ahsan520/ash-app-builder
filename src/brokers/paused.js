@@ -3,12 +3,12 @@
 // (docs/broker-vm.md). Each has its own Vector config file, listed in VECTOR_CONFIG in broker.env. "Pause" asks the broker to take that file out of the list
 // and restart Vector; "resume" asks it to put it back. ASIX runs nothing on the broker: a broker that opted in (bootstrap-broker.sh --accept-config) pulls the
 // list with its own key and applies it after its own checks (validate, restart, health, way back), exactly like the syslog port.
-// Only these three inputs can be paused. Syslog and syslog over TLS cannot: they are what the broker is for, and a broker with both off could not be reached
+// Only these optional inputs can be paused. Syslog and syslog over TLS cannot: they are what the broker is for, and a broker with both off could not be reached
 // by the senders it was installed for. Pure rules plus small database helpers.
 const { tsMs } = require('../collectors/status');
 
-const KINDS = ['file', 'http', 'journald', 'wazuh'];   // the fixed order everything is stored and sent in
-const MAX_TEXT = 40;                           // 'file,http,journald,wazuh' is 25 characters
+const KINDS = ['file', 'http', 'journald', 'wazuh', 'wazuhalerts'];   // the fixed order everything is stored and sent in; names are letters only (the database checks ^[a-z,]+$)
+const MAX_TEXT = 40;                           // 'file,http,journald,wazuh,wazuhalerts' is 36 characters (the database allows 40)
 
 const order = (set) => KINDS.filter((k) => set.has(k));
 

@@ -51,27 +51,27 @@ describe('broker Wazuh input: the files agree', () => {
   it('asix-broker-config.sh will find this file a reader of win-filter.vrl, so a change to the policy restarts Vector with a way back', () => {
     assert.match(cfg, /win-filter\.vrl/); const script = read('deploy/broker/asix-broker-config.sh');
     assert.match(script, /grep -q 'win-filter\\\.vrl' "\$e"/);
-    assert.match(script, /for f in vector-file\.yaml vector-http\.yaml vector-journald\.yaml vector-wazuh\.yaml; do/, 'and validates it with the others');
+    assert.match(script, /for f in vector-file\.yaml vector-http\.yaml vector-journald\.yaml vector-wazuh\.yaml(?: vector-wazuhalerts\.yaml)?; do/, 'and validates it with the others');
   });
   it('the bootstrap script installs the file only with --wazuh, never over a policy already in place, removes it on a re-run without, validates it and lists it', () => {
     assert.match(bootstrap, /--wazuh\) WAZUH=1; shift;;/); assert.match(bootstrap, /--wazuh-archives\) WAZUH_ARCHIVES="\$2"; WAZUH_ARCHIVES_SET=1; shift 2;;/);
     assert.match(bootstrap, /install -m 644 "\$SRC\/vector-wazuh\.yaml" \/etc\/vector\/vector-wazuh\.yaml/);
     assert.match(bootstrap, /\[ -e \/etc\/vector\/win-filter\.vrl \] \|\| install -m 644 "\$SRC\/win-filter-identity\.vrl" \/etc\/vector\/win-filter\.vrl/);
     assert.match(bootstrap, /rm -f \/etc\/vector\/vector-wazuh\.yaml/); assert.doesNotMatch(bootstrap, /rm -f[^\n#]*win-filter\.vrl/, 're-running without --wazuh leaves the filter file');
-    assert.match(bootstrap, /\$\{WAZUH_CFG\} \$\{JOURNALD_CFG\} \/etc\/vector\/vector\.yaml/); assert.match(bootstrap, /CONFIGS="\$CONFIGS,\/etc\/vector\/vector-wazuh\.yaml"/);
+    assert.match(bootstrap, /\$\{WAZUH_CFG\} (?:\$\{WAZUH_ALERTS_CFG\} )?\$\{JOURNALD_CFG\} \/etc\/vector\/vector\.yaml/); assert.match(bootstrap, /CONFIGS="\$CONFIGS,\/etc\/vector\/vector-wazuh\.yaml"/);
     assert.match(bootstrap, /echo "ASIX_WAZUH_ARCHIVES=\$WAZUH_ARCHIVES"/); assert.match(bootstrap, /usermod -aG wazuh vector/);
   });
   it('upgrade-broker.sh and the heartbeat know the input; the env example documents it', () => {
-    assert.match(read('scripts/deploy/upgrade-broker.sh'), /vector-journald\.yaml vector-wazuh\.yaml; do/);
+    assert.match(read('scripts/deploy/upgrade-broker.sh'), /vector-journald\.yaml vector-wazuh\.yaml(?: vector-wazuhalerts\.yaml)?; do/);
     assert.match(read('deploy/broker/asix-broker-heartbeat.sh'), /\*vector-wazuh\.yaml,\*\) INPUTS="\$INPUTS,wazuh"/);
     const env = read('deploy/broker/broker.env.example'); assert.match(env, /#ASIX_WAZUH_ARCHIVES=\/var\/ossec\/logs\/archives\/archives\.json/); assert.match(env, /vector-journald\.yaml,\/etc\/vector\/vector-wazuh\.yaml/);
   });
   it('the server knows the input: reported by the heartbeat, labelled, and one of the inputs that can be paused (and the pause list order is fixed)', () => {
     assert.strictEqual(inputs.parseInputs('syslog:514,wazuh'), 'syslog:514,wazuh'); assert.strictEqual(inputs.parseInputs('wazuh:99'), null, 'it has no port');
     assert.strictEqual(inputs.label({ kind: 'wazuh', port: null }), 'Windows events');
-    assert.deepStrictEqual(paused.KINDS, ['file', 'http', 'journald', 'wazuh']); assert.ok(('file,http,journald,wazuh').length <= 40);
-    const html = read('src/portal/index.html'); assert.match(html, /const BROKER_PAUSABLE = \['file', 'http', 'journald', 'wazuh'\];/); assert.match(html, /wazuh: 'Windows events'/);
-    assert.match(read('deploy/broker/asix-broker-config.sh'), /case "\$t" in file\|http\|journald\|wazuh\) ;;/);
+    assert.deepStrictEqual(paused.KINDS, ['file', 'http', 'journald', 'wazuh', 'wazuhalerts']); assert.ok(('file,http,journald,wazuh,wazuhalerts').length <= 40);
+    const html = read('src/portal/index.html'); assert.match(html, /const BROKER_PAUSABLE = \['file', 'http', 'journald', 'wazuh', 'wazuhalerts'\];/); assert.match(html, /wazuh: 'Windows events'/);
+    assert.match(read('deploy/broker/asix-broker-config.sh'), /case "\$t" in file\|http\|journald\|wazuh\|wazuhalerts\) ;;/);
   });
 });
 

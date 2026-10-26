@@ -526,4 +526,31 @@ filter message ~= "^\[[^\]]+\] .+? id=\d+ "
     provider = arrayindex(regextract(message, "^\[[^\]]+\] (.+?) id="), 0),
     event_category = "windows_event";
 /* ------------ windows_generic --------- */
+
+/* -------------------------------------
+   ---- Endpoint alerts (E4d) ----------
+   Sent by a broker that reads the alert file of a Wazuh manager (deploy/broker/vector-wazuhalerts.yaml) as source type
+   "endpoint-alert": the line is "[Endpoint alert] rule <id> level <n>: <description>" and everything the manager knew about the
+   alert comes alongside it as fields (rule_*, mitre_*, agent_*, data_*, syscheck_*), marked asix_via = "wazuh". The rule turns the
+   level into a number and a severity, and lifts the few fields most searches want (who, from where, which file) out of the
+   manager's own names. The original fields stay as they are.
+   ------------------------------------- */
+
+/* ------------ wazuh_alert --------- */
+[INGEST:vendor="asix", product="endpoint_security", source_type="endpoint-alert", no_hit=keep, content_id="wazuh_alert"]
+// Severity from the manager's rule level: 12 and up critical, 8 to 11 high, 5 to 7 medium, below 5 low.
+filter asix_via = "wazuh" and rule_id ~= "^[0-9]+$"
+| alter
+    event_category = "endpoint_alert",
+    alert_name = rule_description,
+    alert_rule_id = rule_id,
+    alert_level = to_integer(rule_level),
+    alert_severity = if(alert_level >= 12, "critical", alert_level >= 8, "high", alert_level >= 5, "medium", "low"),
+    tmp_win_user = data_win_eventdata_targetUserName,
+    user = if(tmp_win_user != null, tmp_win_user, data_srcuser),
+    src_ip = arrayindex(regextract(data_srcip, "^([0-9a-fA-F:.]+)$"), 0),
+    file_path = syscheck_path,
+    file_event = syscheck_event
+| fields -tmp_*;
+/* ------------ wazuh_alert --------- */
 `;
