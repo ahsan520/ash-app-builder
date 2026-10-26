@@ -1557,12 +1557,42 @@ async function pgEndpoints() {
     return [el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px' }, search, status, sort, el('button', { className: 'btn pri', textContent: 'Search', onclick: apply })), card('', out), detail];
   };
 
+  // Add a machine (Linux): the script comes from GET /v1/endpoints/installer/linux, made for this manager and group. The enrolment password is not known to ASIX; if the person types it
+  // here it is put into the script in THIS browser and is never sent anywhere (the request carries the group only).
+  const installView = () => {
+    const group = el('input', { value: 'default', placeholder: 'default', style: 'width:200px' });
+    const pw = el('input', { type: 'password', placeholder: 'optional', autocomplete: 'new-password', style: 'min-width:260px' });
+    const err = el('div', { className: 'err' }), out = el('div', {});
+    const download = (name, text) => { const a = el('a', { href: URL.createObjectURL(new Blob([text], { type: 'text/x-shellscript' })), download: name }); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); };
+    const make = async () => {
+      err.textContent = ''; out.replaceChildren();
+      const p = pw.value;
+      if (/[\r\n\0]/.test(p)) { err.textContent = 'The password must be one line.'; return; }
+      try {
+        const r = (await api('/v1/endpoints/installer/linux?' + new URLSearchParams({ group: group.value.trim() || 'default' }).toString())).installer;
+        const script = p ? r.script.split(r.password_token).join(p.replace(/'/g, "'\\''")) : r.script;
+        out.replaceChildren(
+          el('p', { className: 'mute', textContent: 'Made for ' + r.manager + ', group ' + r.group + ', agent package ' + r.agent_version + (r.from_manager ? ' (the manager\u2019s own release).' : ' (the manager did not answer, so this is the release ASIX was tested with).') }),
+          p ? el('p', { className: 'warn', textContent: 'The password you typed is inside this script. It stayed in this browser: ASIX never received it. Keep the script private and delete it after use.' })
+            : el('p', { className: 'mute', textContent: 'No password is in this script: it will ask for one, or use --password-file FILE, or the ASIX_ENROLL_PASSWORD variable.' }),
+          el('pre', { style: 'max-height:320px;overflow:auto;font-size:12px', textContent: script }),
+          el('div', { className: 'actions' }, copyBtn(() => script, 'Copy script'), el('button', { className: 'btn', textContent: 'Download', onclick: () => download(r.filename, script) })));
+      } catch (e) { err.textContent = e.message; }
+    };
+    return [card('Add a Linux machine',
+      el('p', { className: 'mute', textContent: 'Debian, Ubuntu, RHEL, Rocky, Alma, Fedora and Amazon Linux. Windows installers come later. The script installs the endpoint agent at the manager\u2019s release, enrols the machine and starts it; it is safe to run again.' }),
+      el('label', { className: 'fld' }, 'Group', group),
+      el('label', { className: 'fld' }, 'Enrolment password (optional)', pw, el('span', { className: 'mute', textContent: 'On the manager VM: sudo cat /var/ossec/etc/authd.pass. Leave it empty to be asked when the script runs.' })),
+      err, el('div', { className: 'actions' }, el('button', { className: 'btn pri', textContent: 'Create script', onclick: make })),
+      el('p', { className: 'mute', textContent: 'On the machine, as root: first "bash asix-endpoint-install.sh --check", which changes nothing, then "bash asix-endpoint-install.sh". It needs to reach the manager on 1514/tcp and 1515/tcp.' })), out];
+  };
+
   const notices = () => [card('Third-party notices',
     el('p', { className: 'mute', textContent: 'The endpoint agent and manager are built on open source software. Its licence requires these notices to stay with the product, so they are listed here and in the installer. Draft: a lawyer is to read this page before the first client installer ships (docs/endpoints.md, E7).' }),
     table([{ h: 'Component', f: (n) => n.name }, { h: 'Version in use', f: () => st.version || '-' }, { h: 'Licence', f: (n) => n.licence },
       { h: 'Source', f: (n) => el('a', { href: n.source, target: '_blank', rel: 'noopener noreferrer', textContent: n.source }) }, { h: 'Notice', f: (n) => n.note }], EP_NOTICES))];
 
-  const TABS = [['overview', 'Overview', overview], ['agents', 'Agents', agentsView], ['notices', 'Third-party notices', notices]];
+  const TABS = [['overview', 'Overview', overview], ['agents', 'Agents', agentsView], ['install', 'Add a machine', installView], ['notices', 'Third-party notices', notices]];
   function draw() {
     tabs.replaceChildren(...TABS.map(([id, label]) => el('div', { className: 'xtab' + (tab === id ? ' on' : ''), textContent: label, onclick: () => { tab = id; draw(); } })));
     body.replaceChildren(...(TABS.find((t) => t[0] === tab) || TABS[0])[2]());

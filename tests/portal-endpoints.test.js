@@ -13,7 +13,7 @@ const source = consts + cut('async function pgEndpoints');
 
 const el = (tag, attrs, ...kids) => Object.assign({}, attrs || {}, { tag, attrs: attrs || {}, kids: kids.flat(Infinity), replaceChildren(...k) { this.kids = k.flat(Infinity); }, append(...k) { this.kids.push(...k.flat(Infinity)); } });
 const walk = (n) => (typeof n === 'string' ? [n] : n && typeof n === 'object' ? (Array.isArray(n) ? n.flatMap(walk) : [n, ...(n.kids || []).flatMap(walk)]) : []);
-const texts = (n) => walk(n).map((x) => (typeof x === 'string' ? x : x.attrs && typeof x.attrs.textContent === 'string' ? x.attrs.textContent : '')).join(' | ');
+const texts = (n) => walk(n).map((x) => (typeof x === 'string' ? x : typeof x.textContent === 'string' ? x.textContent : '')).join(' | ');
 const card = (title, ...kids) => el('div', { className: 'card' }, title ? el('h3', { textContent: title }) : '', ...kids);
 const pill = (t, c) => el('span', { className: 'pill ' + (c || 'off'), textContent: t });
 const kv = (o) => el('div', {}, Object.entries(o).map(([k, v]) => el('div', { className: 'kv' }, el('span', { textContent: k }), el('span', { textContent: v === null || v === undefined ? '-' : String(v) }))));
@@ -38,11 +38,14 @@ async function open(manager = MANAGER, answers = {}) {
     if (p === '/v1/endpoints/manager') return { success: true, manager };
     if (p === '/v1/endpoints/agents/summary') return { success: true, summary: SUMMARY };
     if (p.startsWith('/v1/endpoints/agents?')) return { success: true, ...LIST };
+    if (p.startsWith('/v1/endpoints/installer/linux?')) return { success: true, installer: { platform: 'linux', manager: '192.168.68.54', group: new URLSearchParams(p.split('?')[1]).get('group'), agent_version: '4.14.9-1', from_manager: true, filename: 'asix-endpoint-install.sh',
+      password_token: '__ASIX_ENROLL_PASSWORD__', script: "#!/bin/bash\nEMBEDDED_PASSWORD='__ASIX_ENROLL_PASSWORD__'; PLACEHOLDER=\"__ASIX_ENROLL_\"\"PASSWORD__\"\necho hi\n" } };
     const one = /^\/v1\/endpoints\/agents\/(\d+)$/.exec(p);
     if (one) return { success: true, agent: LIST.agents.find((x) => x.id === one[1]) };
     throw new Error('unexpected call ' + p);
   };
-  const fn = new Function('el', 'card', 'pill', 'table', 'kv', 'when', 'api', 'route', source + '\nreturn pgEndpoints;')(el, card, pill, table, kv, when, api, () => routes.push(1));
+  const copyBtn = (get, label) => el('button', { textContent: label, onclick: () => get() });
+  const fn = new Function('el', 'card', 'pill', 'table', 'kv', 'when', 'api', 'route', 'copyBtn', source + '\nreturn pgEndpoints;')(el, card, pill, table, kv, when, api, () => routes.push(1), copyBtn);
   const tree = await fn();
   const click = async (label) => { const t = walk(tree).find((n) => typeof n === 'object' && n.attrs && n.attrs.textContent === label && typeof n.attrs.onclick === 'function'); assert.ok(t, label + ' not found'); await t.attrs.onclick(); await new Promise((r) => setImmediate(r)); };
   return { tree, calls, routes, click, text: () => texts(tree), all: () => walk(tree) };
@@ -118,6 +121,26 @@ describe('Endpoints page', () => {
     const evil = { ...agent('009', '<img src=x onerror=alert(1)>', 'active') };
     const p = await open(MANAGER, { '/v1/endpoints/agents': { success: true, total: 1, limit: 50, offset: 0, agents: [evil] } }); await p.click('Agents');
     assert.ok(p.text().includes('<img src=x onerror=alert(1)>')); assert.ok(!p.all().some((n) => n.tag === 'img'));
+  });
+
+  it('Add a machine: asks for the script by group only, and shows it without a password when none was typed', async () => {
+    const p = await open(); await p.click('Add a machine');
+    assert.match(p.text(), /Debian, Ubuntu, RHEL/); await p.click('Create script');
+    assert.strictEqual(p.calls.at(-1).p, '/v1/endpoints/installer/linux?group=default'); assert.strictEqual(p.calls.at(-1).method, 'GET');
+    const t = p.text(); assert.match(t, /Made for 192\.168\.68\.54, group default, agent package 4\.14\.9-1/); assert.match(t, /No password is in this script/); assert.ok(t.includes("EMBEDDED_PASSWORD='__ASIX_ENROLL_PASSWORD__'"));
+  });
+  it('a typed password goes into the script in the browser only: never in a request, quotes and $ kept, token gone', async () => {
+    const p = await open(); await p.click('Add a machine');
+    const [group, pw] = p.all().filter((n) => n.tag === 'input'); group.value = ' linux servers '; pw.value = "a'b$&c\\d"; await p.click('Create script');
+    assert.strictEqual(p.calls.at(-1).p, '/v1/endpoints/installer/linux?group=linux+servers'); assert.ok(!p.calls.some((c) => c.p.includes('a%27b') || c.p.includes("a'b")));
+    const script = p.all().find((n) => n.tag === 'pre').attrs.textContent;
+    assert.ok(script.includes("EMBEDDED_PASSWORD='a'\\''b$&c\\d'"), script); assert.ok(!script.includes('__ASIX_ENROLL_PASSWORD__;') && !/EMBEDDED_PASSWORD='__ASIX/.test(script));
+    assert.ok(script.includes('PLACEHOLDER="__ASIX_ENROLL_""PASSWORD__"'), 'the script\u2019s own comparison string is not touched'); assert.match(p.text(), /ASIX never received it/);
+  });
+  it('a password with a line break is refused before any request; a failing route shows its message', async () => {
+    const p = await open(); await p.click('Add a machine'); const before = p.calls.length;
+    p.all().filter((n) => n.tag === 'input')[1].value = 'a\nb'; await p.click('Create script'); assert.strictEqual(p.calls.length, before); assert.match(p.text(), /must be one line/);
+    const f = await open(MANAGER, { '/v1/endpoints/installer/linux': new Error('400 INSTALLER_BAD_GROUP') }); await f.click('Add a machine'); await f.click('Create script'); assert.match(f.text(), /INSTALLER_BAD_GROUP/);
   });
   it('third-party notices: the open source component, its licence and source, with the version the manager reports', async () => {
     const p = await open(); await p.click('Third-party notices'); const t = p.text();

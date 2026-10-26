@@ -3,6 +3,7 @@ const router = express.Router();
 const { db, guarded, apiError } = require('../shared');
 const store = require('../../endpoints/wazuh-manager-store');
 const api = require('../../endpoints/wazuh-api');
+const installer = require('../../endpoints/agent-installer');
 
 // ---- The tenant's central Wazuh manager, read-only (src/endpoints/wazuh-api.js, docs/endpoints.md task E4c) ----------------------------------------
 // Four GET routes, all `capacity:read` (the same permission as the Windows filter page: no role changes). Which manager is called is decided by the caller's tenant alone
@@ -80,6 +81,18 @@ router.get('/v1/endpoints/agents/:id', ...guarded('capacity:read'), (req, res, n
   const agent = await api.getAgent(m, req.params.id);
   if (!agent) return apiError(res, 404, 'WAZUH_NO_AGENT', 'The manager has no agent with that id');
   res.status(200).json({ success: true, agent });
+}));
+
+// The Linux agent installer for this tenant's manager (docs/endpoints.md, task E5). A GET that reads the registry and asks the manager for its version, and fills a script template:
+// the address comes from the registered manager, never from the request; the only parameter, `group`, is validated to a strict alphabet. The enrolment password is not known to ASIX
+// and is not in the answer: the portal puts it into the script in the browser, or the script asks for it on the machine.
+router.get('/v1/endpoints/installer/linux', ...guarded('capacity:read'), handle(async (m, req, res) => {
+  let managerVersion = null;
+  try { managerVersion = (await api.managerInfo(m)).version; } catch (e) { /* the manager does not answer: the default version is used and the answer says so */ }
+  let out;
+  try { out = installer.render({ host: new URL(m.api_url).hostname, group: req.query.group, managerVersion }); }
+  catch (e) { if (e instanceof installer.InstallerError) return apiError(res, 400, 'INSTALLER_' + e.code, e.message); throw e; }
+  res.status(200).json({ success: true, installer: { platform: 'linux', ...out, password_token: installer.PASSWORD_TOKEN } });
 }));
 
 module.exports = router;
