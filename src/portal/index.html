@@ -1418,7 +1418,7 @@ function brokerWinFilterCell(b) {
 // ---- Broker inputs report ----
 // The inputs a broker says it runs (b.inputs from GET /v1/brokers; src/brokers/inputs.js): syslog, syslog over TLS, log files, HTTP/JSON, the systemd journal, each with its port where
 // it has one. Reported by the broker's heartbeat. Information only: not a problem, no alert. A broker with an older heartbeat script says nothing.
-const BROKER_INPUT_LABEL = { syslog: 'Syslog', 'syslog-tls': 'Syslog TLS', file: 'Log files', http: 'HTTP/JSON', https: 'HTTPS/JSON', journald: 'Journal', wazuh: 'Windows events' };
+const BROKER_INPUT_LABEL = { syslog: 'Syslog', 'syslog-tls': 'Syslog TLS', file: 'Log files', http: 'HTTP/JSON', https: 'HTTPS/JSON', journald: 'Journal', wazuh: 'Windows events', wazuhalerts: 'Endpoint alerts' };
 function brokerInputsCell(b) {
   const list = b && Array.isArray(b.inputs) ? b.inputs : null;
   if (!list) return el('span', { className: 'mute', title: 'This broker has not said which inputs it runs. Its heartbeat script is older: copy the new one and re-run the bootstrap script (docs/broker-vm.md, Updating a broker after an ASIX deploy).', textContent: '-' });
@@ -1429,7 +1429,7 @@ function brokerInputsCell(b) {
 // PUT /v1/brokers/:id/inputs-paused. Pause or resume the optional inputs (log files, HTTP/JSON, the systemd journal) of ONE broker; syslog cannot be paused. Nothing is pushed:
 // a broker that opted in (--accept-config) and has the current config script takes the paused inputs' config files out of Vector and restarts it, and says so in its next report.
 // The Inputs button opens a dialog with one checkbox per pausable input.
-const BROKER_PAUSABLE = ['file', 'http', 'journald', 'wazuh'];
+const BROKER_PAUSABLE = ['file', 'http', 'journald', 'wazuh', 'wazuhalerts'];
 const BROKER_PAUSE_STATE = { applied: ['Paused', 'off'], pending: ['Pausing...', 'off'], stale: ['Not reporting', 'off'], rejected: ['Rejected', 'off'], unknown: ['Not reporting', 'off'] };
 function brokerPausedCell(b) {
   const p = b && b.inputs_paused ? b.inputs_paused : null;
@@ -1441,7 +1441,7 @@ function brokerPausedCell(b) {
   if (p.overdue) return el('span', { title: 'Asked ' + (p.asked_at ? new Date(p.asked_at).toLocaleString() : 'a while ago') + ' and still not applied. A broker asks every 5 minutes: check that it opted in (--accept-config), has the current asix-broker-config.sh and that its timer runs (systemctl status asix-broker-config.timer).', style: 'display:inline-flex;gap:6px;flex-wrap:wrap' }, p.asked.length ? pill(names, 'off') : '', pill('Not applied', 'bad'));
   return el('span', { title: hint, style: 'display:inline-flex;gap:6px;flex-wrap:wrap' }, p.asked.length ? pill(names, 'off') : '', pill(p.asked.length ? st[0] : 'Resuming...', st[1]));
 }
-const BROKER_PAUSE_HELP = { file: 'the log file globs this broker reads', http: 'the listener for applications that POST JSON events', journald: "this VM's systemd journal (sshd, sudo, cron, the kernel)", wazuh: "the Windows events read from the Wazuh manager's archive file" };
+const BROKER_PAUSE_HELP = { file: 'the log file globs this broker reads', http: 'the listener for applications that POST JSON events', journald: "this VM's systemd journal (sshd, sudo, cron, the kernel)", wazuh: "the Windows events read from the Wazuh manager's archive file", wazuhalerts: "the alerts the Wazuh manager raised, from every endpoint" };
 // What one input is doing now, for the dialog: asked and reported are compared the same way pausedState() does it (src/brokers/paused.js).
 function brokerPauseNote(b, k) {
   const p = b.inputs_paused || { asked: [], reported: null };
