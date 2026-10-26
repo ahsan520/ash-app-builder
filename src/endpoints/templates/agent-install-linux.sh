@@ -79,7 +79,8 @@ echo "== 1. Checks =="
 case "$(uname -m 2>/dev/null)" in x86_64|amd64|aarch64|arm64) ;; *) warn "the CPU type $(uname -m 2>/dev/null) is not one the agent packages are made for.";; esac
 if [ "$FAMILY" = deb ]; then
   INSTALLED="$(dpkg-query -W -f='${Version}' wazuh-agent 2>/dev/null || true)"
-  if dpkg-query -W wazuh-manager >/dev/null 2>&1; then problem "this machine runs the endpoint MANAGER; an agent must not be installed on it."; fi
+  # Installed means dpkg status "ii". A package dpkg only knows from a repository list (once the Wazuh repository is added, the manager is listed too) is not a manager on this machine.
+  case "$(dpkg-query -W -f='${db:Status-Abbrev}' wazuh-manager 2>/dev/null || true)" in ii*) problem "this machine runs the endpoint MANAGER; an agent must not be installed on it.";; esac
 else
   INSTALLED=""; if v="$(rpm -q --qf '%{VERSION}-%{RELEASE}' wazuh-agent 2>/dev/null)"; then INSTALLED="$v"; fi
   if rpm -q wazuh-manager >/dev/null 2>&1; then problem "this machine runs the endpoint MANAGER; an agent must not be installed on it."; fi

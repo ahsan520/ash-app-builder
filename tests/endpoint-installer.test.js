@@ -66,7 +66,7 @@ describe('the installer script', () => {
     sh('hostname', 'echo Web-01');
     sh('curl', 'echo "curl $*" >> "$STUB_LOG"\n[ "${STUB_REPO_DOWN:-0}" = 1 ] && case "$*" in *-fsSI*) exit 22;; esac\nout=""; prev=""; for a in "$@"; do [ "$prev" = -o ] && out="$a"; prev="$a"; done\n[ -z "$out" ] || echo "-----KEY-----" > "$out"\nexit 0');
     sh('gpg', 'case "$*" in *--show-keys*) [ "${STUB_NO_FPR:-0}" = 1 ] || echo "fpr:::::::::${STUB_FPR:-ABCDEF0123456789ABCDEF0123456789ABCDEF01}:";; *--dearmor*) cat;; esac');
-    sh('dpkg-query', 'pkg="${@: -1}"; f="$STUB_DIR/dpkg-$pkg"; [ -f "$f" ] || exit 1\ncase "$*" in *-f*) printf "%s" "$(cat "$f")";; esac');
+    sh('dpkg-query', 'pkg="${@: -1}"; f="$STUB_DIR/dpkg-$pkg"\ncase "$*" in *Status-Abbrev*) if [ -f "$f" ]; then printf "ii "; elif [ -f "$STUB_DIR/dpkg-known-$pkg" ]; then printf "un "; else exit 1; fi; exit 0;; esac\n[ -f "$f" ] || [ -f "$STUB_DIR/dpkg-known-$pkg" ] || exit 1\ncase "$*" in *-f*) [ ! -f "$f" ] || printf "%s" "$(cat "$f")";; esac');
     sh('apt-mark', 'echo "apt-mark $*" >> "$STUB_LOG"');
     sh('apt-get', 'echo "apt-get $*" >> "$STUB_LOG"\nif [ "$1" = install ]; then for a in "$@"; do case "$a" in wazuh-agent=*) VER="${a#wazuh-agent=}";; esac; done\n'
       + 'echo "env MANAGER=$WAZUH_MANAGER GROUP=$WAZUH_AGENT_GROUP NAME=$WAZUH_AGENT_NAME PW=$WAZUH_REGISTRATION_PASSWORD" >> "$STUB_LOG"\necho "$VER" > "$STUB_DIR/dpkg-wazuh-agent"\n. "$STUB_DIR/postinst.sh"\nfi');
@@ -102,6 +102,7 @@ describe('the installer script', () => {
   });
   it('an unreachable package repository is a problem, and nothing is changed', () => { const r = run([], { STUB_REPO_DOWN: '1' }); assert.strictEqual(r.status, 1); assert.match(r.out, /cannot reach the package repository/); nothingChanged(); });
   it('no enrolment password and nobody to ask: a problem, and nothing is changed', () => { const r = run([], { ASIX_ENROLL_PASSWORD: '' }); assert.strictEqual(r.status, 1); assert.match(r.out, /no enrolment password/); nothingChanged(); });
+  it('a manager package that dpkg only knows from the repository list (not installed) does not make this a manager machine: a re-run after a failed enrolment is not blocked', () => { fs.writeFileSync(path.join(state, 'dpkg-known-wazuh-manager'), ''); const r = run(['--check']); assert.strictEqual(r.status, 0, r.out); assert.ok(!/runs the endpoint MANAGER/.test(r.out)); assert.match(r.out, /Checks passed/); nothingChanged(); });
   it('a machine that runs the manager is refused', () => { fs.writeFileSync(path.join(state, 'dpkg-wazuh-manager'), '4.14.9-1'); const r = run(); assert.strictEqual(r.status, 1); assert.match(r.out, /runs the endpoint MANAGER/); nothingChanged(); });
 
   it('installs on Debian/Ubuntu: repository, the pinned version with the enrolment settings, hold, service name, start, connected', () => {
