@@ -1483,6 +1483,15 @@ function brokerPauseEdit(b) {
 const EP_STATUS = { active: ['Active', 'ok'], disconnected: ['Disconnected', 'bad'], never_connected: ['Never connected', 'off'], pending: ['Pending', 'off'] };
 const EP_SORT = [['+name', 'Name'], ['+status', 'Status'], ['-lastKeepAlive', 'Last seen, newest first'], ['-dateAdd', 'Registered, newest first']];
 const EP_LIMIT = 50;
+// Endpoint alerts tab (docs/endpoints.md, E6b): severity names and colours, the time windows the route accepts, and the one place a MITRE ATT&CK link is made. The server sends a
+// link only for a well-formed technique id; the page checks the address again before it makes an <a>, so nothing else can ever become a link here.
+const EP_SEV = ['critical', 'high', 'medium', 'low'];
+const EP_SEVCOL = { critical: '#e5484d', high: '#f08a24', medium: '#e6c229', low: '#6b7fa3', unknown: '#6b7fa3' };
+const EP_WINDOWS = [['1h', 'Last hour'], ['24h', 'Last 24 hours'], ['7d', 'Last 7 days'], ['30d', 'Last 30 days']];
+const EP_ALERT_LIMIT = 50;
+const EP_MITRE_URL = /^https:\/\/attack\.mitre\.org\/techniques\/T[0-9]{4}(\/[0-9]{3})?\/$/;
+const epSevPill = (s, n) => el('span', { className: 'pill', style: 'background:' + (EP_SEVCOL[s] || EP_SEVCOL.unknown) + '26;color:' + (EP_SEVCOL[s] || EP_SEVCOL.unknown) + ';font-weight:600', textContent: (s || 'unknown') + (n !== undefined ? '  ' + n : '') });
+const epMitreLink = (t) => (EP_MITRE_URL.test(t.url || '') ? el('a', { href: t.url, target: '_blank', rel: 'noopener noreferrer', textContent: t.id }) : el('span', { textContent: t.id }));
 const EP_NOTICES = [{ name: 'Wazuh (endpoint agent and manager)', licence: 'GNU General Public License, version 2', source: 'https://github.com/wazuh/wazuh',
   note: 'Copyright Wazuh, Inc. and contributors. Wazuh is a trademark of its owner and is not used here as an ASIX name. Where ASIX gives you a modified build, the source of the changes is available on request.' }];
 async function pgEndpoints() {
@@ -1500,6 +1509,7 @@ async function pgEndpoints() {
   if (up) { try { sum = (await api('/v1/endpoints/agents/summary')).summary; } catch (e) { sumErr = e.message; } }
   let tab = 'overview';
   const q = { search: '', status: '', sort: '+name', offset: 0 };
+  const af = { window: '24h', severity: '', q: '', agent: '', mitre: '', offset: 0 };
   const tabs = el('div', {}), body = el('div', {});
 
   const overview = () => [
@@ -1600,12 +1610,93 @@ async function pgEndpoints() {
       howto), out];
   };
 
+  // Alerts: the endpoint alerts stored from the manager (source type endpoint-alert), read through GET /v1/endpoints/alerts, /alerts/summary and /alerts/:id (permission search:events:read,
+  // the one that reads event contents). Cards on top (severity counts, then the top machines, rules and ATT&CK techniques of the newest alerts), a filtered list, and one alert open under
+  // it with its MITRE ATT&CK techniques and tactics, the log line and the details. Read only; every value is shown as text.
+  const alertsView = () => {
+    const cards = el('div', {}), out = el('div', {}), detail = el('div', {});
+    const win = el('select', {}, ...EP_WINDOWS.map(([v, t]) => el('option', { value: v, textContent: t })));
+    const sev = el('select', {}, el('option', { value: '', textContent: 'Any severity' }), ...EP_SEV.map((v) => el('option', { value: v, textContent: v })));
+    const text = el('input', { placeholder: 'Search description, user, address or file', value: af.q, style: 'min-width:260px' });
+    const agent = el('input', { placeholder: 'Machine name', value: af.agent, style: 'width:160px' });
+    const mitre = el('input', { placeholder: 'ATT&CK id, e.g. T1110', value: af.mitre, style: 'width:170px' });
+    win.value = af.window; sev.value = af.severity;
+    const base = (withSeverity) => {
+      const p = new URLSearchParams({ window: af.window });
+      if (withSeverity && af.severity) p.set('severity', af.severity);
+      for (const k of ['q', 'agent', 'mitre']) if (af[k].trim()) p.set(k, af[k].trim());
+      return p;
+    };
+    const pick = (k, v) => { af[k] = v; af.offset = 0; if (k === 'agent') agent.value = v; if (k === 'mitre') mitre.value = v; if (k === 'severity') sev.value = v; detail.replaceChildren(); loadList(); };
+    const chip = (label, k, v, n) => el('span', { className: 'pill off', style: 'cursor:pointer', title: 'Show only this', textContent: label + (n !== undefined ? '  ' + n : ''), onclick: () => pick(k, v) });
+    const section = (title, items) => el('div', { style: 'margin-top:10px' }, el('span', { className: 'mute', style: 'margin-right:8px', textContent: title }), items.length ? items : el('span', { className: 'mute', textContent: 'none' }));
+
+    const showOne = async (id) => {
+      detail.replaceChildren(el('div', { className: 'mute', textContent: 'Loading...' }));
+      try {
+        const a = (await api('/v1/endpoints/alerts/' + encodeURIComponent(id))).alert, m = a.mitre || { techniques: [], tactics: [], unpaired_names: [] };
+        const pairs = (o) => Object.entries(o || {});
+        detail.replaceChildren(
+          card('Alert', kv({ 'Time (UTC)': when(a.time), Severity: (a.severity || 'unknown') + (a.level !== null && a.level !== undefined ? ' (rule level ' + a.level + ')' : ''), Rule: (a.rule_id || '-') + ': ' + (a.description || '-'),
+            Machine: [a.agent.name, a.agent.id ? '(agent ' + a.agent.id + ')' : '', a.agent.ip].filter(Boolean).join(' '), Manager: a.manager, 'Rule groups': (a.groups || []).join(', '), User: a.user, 'Source address': a.src_ip,
+            File: a.file_path, 'File event': a.file_event, Decoder: a.decoder, Location: a.location, 'Alert reference': a.alert_ref })),
+          card('MITRE ATT&CK',
+            m.techniques.length ? table([{ h: 'Technique', f: (t) => epMitreLink(t) }, { h: 'Name', f: (t) => t.name || '-' }], m.techniques) : el('div', { className: 'mute', textContent: 'The manager rule that raised this alert carries no ATT&CK mapping.' }),
+            m.unpaired_names.length ? el('div', { className: 'mute', style: 'margin-top:8px', textContent: 'Technique names (could not be matched to the ids): ' + m.unpaired_names.join(', ') }) : '',
+            m.tactics.length ? section('Tactics', m.tactics.map((t) => el('span', { className: 'pill off', textContent: t }))) : ''),
+          a.full_log ? card('Log line', el('pre', { style: 'max-height:240px;overflow:auto;font-size:12px;white-space:pre-wrap', textContent: a.full_log })) : '',
+          pairs(a.data).length ? card('Details from the event', kv(a.data)) : '',
+          pairs(a.file_integrity).length ? card('File integrity', kv(a.file_integrity)) : '');
+      } catch (e) { detail.replaceChildren(el('div', { className: 'err', textContent: e.message })); }
+    };
+
+    const cols = [
+      { h: 'Time (UTC)', f: (a) => el('span', { style: 'cursor:pointer;text-decoration:underline', textContent: when(a.time), onclick: () => showOne(a.id) }) },
+      { h: 'Severity', f: (a) => epSevPill(a.severity, a.level !== null && a.level !== undefined ? a.level : undefined) },
+      { h: 'Rule', f: (a) => (a.rule_id || '-') + ': ' + (a.description || '-') }, { h: 'Machine', f: (a) => a.agent.name || '-' },
+      { h: 'ATT&CK', f: (a) => a.mitre.techniques.map((t) => t.id).join(', ') || '-' },
+      { h: 'Detail', f: (a) => [a.file_path, a.user && 'user ' + a.user, a.src_ip && 'from ' + a.src_ip].filter(Boolean).join('; ') || '-' },
+    ];
+    const loadCards = async () => {
+      cards.replaceChildren(el('div', { className: 'mute', textContent: 'Loading...' }));
+      try {
+        const r = await api('/v1/endpoints/alerts/summary?' + base(false).toString()), s = r.severity, t = r.top;
+        cards.replaceChildren(card('Alerts, ' + (EP_WINDOWS.find((w) => w[0] === r.window) || [0, r.window])[1].toLowerCase(),
+          el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, el('span', { className: 'stat', textContent: String(s.total) }),
+            ...EP_SEV.map((k) => el('span', { style: 'cursor:pointer', title: 'Show only ' + k, onclick: () => pick('severity', k) }, epSevPill(k, s[k]))),
+            s.unknown ? el('span', { className: 'mute', textContent: s.unknown + ' without a severity' }) : ''),
+          section('Machines', t.agents.slice(0, 6).map((x) => chip(x.name, 'agent', x.name, x.count))),
+          section('ATT&CK techniques', t.techniques.slice(0, 8).map((x) => chip(x.id + (x.name ? ' ' + x.name : ''), 'mitre', x.id, x.count))),
+          section('Tactics', t.tactics.slice(0, 8).map((x) => el('span', { className: 'pill off', textContent: x.name + '  ' + x.count }))),
+          section('Rules', t.rules.slice(0, 5).map((x) => el('span', { className: 'pill off', textContent: x.rule_id + ' ' + (x.description || '') + '  ' + x.count }))),
+          el('div', { className: 'mute', style: 'margin-top:8px;font-size:12px', textContent: 'Severity counts are exact. The machines, techniques, tactics and rules are counted over the newest ' + r.sampled.events + ' alerts' + (r.sampled.truncated ? ' (there are more)' : '') + '.' })));
+      } catch (e) { cards.replaceChildren(el('div', { className: 'err', textContent: e.message })); }
+    };
+    const loadList = async () => {
+      out.replaceChildren(el('div', { className: 'mute', textContent: 'Loading...' }));
+      const p = base(true); p.set('limit', String(EP_ALERT_LIMIT)); p.set('offset', String(af.offset));
+      try {
+        const r = await api('/v1/endpoints/alerts?' + p.toString());
+        const prev = el('button', { className: 'btn', textContent: 'Previous', onclick: () => { af.offset = Math.max(0, af.offset - EP_ALERT_LIMIT); loadList(); } });
+        const next = el('button', { className: 'btn', textContent: 'Next', onclick: () => { af.offset += EP_ALERT_LIMIT; loadList(); } });
+        prev.disabled = af.offset === 0; next.disabled = !r.more;
+        out.replaceChildren(table(cols, r.alerts, 'No alerts match. Alerts appear here once a broker set up for endpoint alerts has sent some, and the manager has raised them.'),
+          el('div', { className: 'mute', style: 'margin-top:8px;display:flex;gap:8px;align-items:center' }, prev, next, r.count ? (af.offset + 1) + ' to ' + (af.offset + r.count) + (r.more ? ' (more)' : '') : '0'));
+      } catch (e) { out.replaceChildren(el('div', { className: 'err', textContent: e.message })); }
+    };
+    const apply = () => { af.window = win.value; af.severity = sev.value; af.q = text.value; af.agent = agent.value; af.mitre = mitre.value; af.offset = 0; detail.replaceChildren(); loadCards(); loadList(); };
+    text.onkeydown = agent.onkeydown = mitre.onkeydown = (ev) => { if (ev.key === 'Enter') apply(); };
+    win.onchange = apply; sev.onchange = apply;
+    loadCards(); loadList();
+    return [el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px' }, win, sev, text, agent, mitre, el('button', { className: 'btn pri', textContent: 'Search', onclick: apply })), cards, card('', out), detail];
+  };
+
   const notices = () => [card('Third-party notices',
     el('p', { className: 'mute', textContent: 'The endpoint agent and manager are built on open source software. Its licence requires these notices to stay with the product, so they are listed here and in the installer. Draft: a lawyer is to read this page before the first client installer ships (docs/endpoints.md, E7).' }),
     table([{ h: 'Component', f: (n) => n.name }, { h: 'Version in use', f: () => st.version || '-' }, { h: 'Licence', f: (n) => n.licence },
       { h: 'Source', f: (n) => el('a', { href: n.source, target: '_blank', rel: 'noopener noreferrer', textContent: n.source }) }, { h: 'Notice', f: (n) => n.note }], EP_NOTICES))];
 
-  const TABS = [['overview', 'Overview', overview], ['agents', 'Agents', agentsView], ['install', 'Add a machine', installView], ['notices', 'Third-party notices', notices]];
+  const TABS = [['overview', 'Overview', overview], ['agents', 'Agents', agentsView], ['alerts', 'Alerts', alertsView], ['install', 'Add a machine', installView], ['notices', 'Third-party notices', notices]];
   function draw() {
     tabs.replaceChildren(...TABS.map(([id, label]) => el('div', { className: 'xtab' + (tab === id ? ' on' : ''), textContent: label, onclick: () => { tab = id; draw(); } })));
     body.replaceChildren(...(TABS.find((t) => t[0] === tab) || TABS[0])[2]());
