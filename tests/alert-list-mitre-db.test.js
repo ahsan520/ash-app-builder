@@ -1,0 +1,88 @@
+'use strict';
+// E4g: ATT&CK on the alert list and the technique filter, against a real PostgreSQL with the platform schema applied (docs/endpoints.md, "E4g as built"):
+//   ASIX_TEST_DB=1 DB_HOST=127.0.0.1 DB_PASSWORD=... node tests/alert-list-mitre-db.test.js
+// The real route and the real SQL run; only the sign-in chain is replaced. Skips itself without ASIX_TEST_DB, so `npm test` is unaffected.
+if (!process.env.ASIX_TEST_DB) { console.log('skipped (set ASIX_TEST_DB=1 to run against Postgres)'); process.exit(0); }
+
+const assert = require('assert');
+const express = require('express');
+const db = require('../src/db');
+const shared = require('../src/gateway/shared');
+
+let TENANT;
+require.cache[require.resolve('../src/gateway/shared')].exports = {
+  ...shared, guarded: () => [(req, res, next) => { req.tenant_id = TENANT; req.user_id = null; next(); }],
+};
+const routes = require('../src/gateway/routes/alerts');
+
+async function main() {
+  const stamp = Date.now();
+  TENANT = (await db.query('INSERT INTO tenants (name) VALUES ($1) RETURNING id', ['alert-mitre-a-' + stamp])).rows[0].id;
+  const OTHER = (await db.query('INSERT INTO tenants (name) VALUES ($1) RETURNING id', ['alert-mitre-b-' + stamp])).rows[0].id;
+  const app = express(); app.use(routes);
+  const srv = app.listen(0); const base = 'http://127.0.0.1:' + srv.address().port;
+  const get = async (q) => { const r = await fetch(base + '/v1/alerts?' + new URLSearchParams(q)); return { status: r.status, json: await r.json() }; };
+  const ins = async (tenant, title, details, o = {}) => (await db.query(
+    `INSERT INTO alerts (tenant_id, rule_name, severity, status, title, group_key, event_count, first_event_at, last_event_at, details)
+     VALUES ($1,'r',$2,$3,$4,$4,1, localtimestamp, localtimestamp, $5::jsonb) RETURNING id`,
+    [tenant, o.sev || 'high', o.status || 'open', title, details === undefined ? undefined : JSON.stringify(details)])).rows[0].id;
+  const titles = (r) => r.json.alerts.map((a) => a.title).sort();
+
+  try {
+    const brute = await ins(TENANT, 'brute', { mitre: { techniques: [{ id: 'T1110', name: 'Brute Force' }], tactics: ['Credential Access'] } });
+    await ins(TENANT, 'sub', { mitre: { techniques: [{ id: 'T1110.003', name: 'Password Spraying' }, { id: 'T1078', name: 'Valid Accounts' }], tactics: ['Credential Access', 'Initial Access'] } });
+    await ins(TENANT, 'fim', { mitre: { techniques: [{ id: 'T1565.001', name: 'Stored Data Manipulation' }], tactics: ['Impact'] } });
+    await ins(TENANT, 'lookalike', { mitre: { techniques: [{ id: 'T1111', name: 'MFA Interception' }], tactics: [] } });
+    await ins(TENANT, 'none', { threshold: 3 });
+    await ins(TENANT, 'empty-details', {});
+    await ins(TENANT, 'null-mitre', { mitre: null });
+    await ins(TENANT, 'odd-shape', { mitre: { techniques: 'T1110' } });
+    await ins(TENANT, 'odd-elements', { mitre: { techniques: [7, null, { name: 'no id' }, 'T1110', { id: 'T1059', name: 'Command Interpreter' }] } });
+    await ins(TENANT, 'closed-brute', { mitre: { techniques: [{ id: 'T1110', name: 'Brute Force' }], tactics: [] } }, { status: 'closed' });
+    await ins(OTHER, 'other tenant brute', { mitre: { techniques: [{ id: 'T1110', name: 'Brute Force' }], tactics: [] } });
+
+    let r = await get({ status: 'all' });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.json.alerts.length, 10, 'the unfiltered list is unchanged: every alert of the tenant and no other tenant');
+    assert.ok(r.json.alerts.every((a) => !('mitre_stored' in a) && !('details' in a)), 'the raw column and the details are not returned');
+    const by = Object.fromEntries(r.json.alerts.map((a) => [a.title, a.mitre]));
+    assert.deepStrictEqual(by.brute, { techniques: [{ id: 'T1110', name: 'Brute Force', url: 'https://attack.mitre.org/techniques/T1110/' }], tactics: ['Credential Access'] });
+    assert.deepStrictEqual(by.sub.techniques.map((t) => t.id), ['T1110.003', 'T1078']);
+    assert.strictEqual(by.sub.techniques[0].url, 'https://attack.mitre.org/techniques/T1110/003/');
+    for (const t of ['none', 'empty-details', 'null-mitre', 'odd-shape']) assert.deepStrictEqual(by[t], { techniques: [], tactics: [] }, t + ' has an empty ATT&CK, not a crash');
+    assert.deepStrictEqual(by['odd-elements'].techniques.map((t) => t.id), ['T1059'], 'only the well-formed element survives');
+
+    r = await get({ status: 'all', mitre: 'T1110' });
+    assert.deepStrictEqual(titles(r), ['brute', 'closed-brute', 'sub'], 'T1110 finds itself and its sub-technique, not T1111, not another tenant');
+    r = await get({ mitre: 't1110' });
+    assert.deepStrictEqual(titles(r), ['brute', 'sub'], 'lower case is accepted; the default status hides closed alerts');
+    r = await get({ status: 'all', mitre: 'T1110.003' });
+    assert.deepStrictEqual(titles(r), ['sub'], 'a sub-technique finds only itself');
+    r = await get({ status: 'all', mitre: 'T1078' });
+    assert.deepStrictEqual(titles(r), ['sub'], 'the second technique of an alert is found too');
+    r = await get({ status: 'all', mitre: 'T1059' });
+    assert.deepStrictEqual(titles(r), ['odd-elements'], 'a malformed neighbour element does not stop the filter');
+    r = await get({ status: 'all', mitre: 'T1565.001' });
+    assert.deepStrictEqual(titles(r), ['fim']);
+    r = await get({ status: 'all', mitre: 'T9999' });
+    assert.deepStrictEqual(r.json.alerts, [], 'a well-formed id nothing carries gives an empty list');
+    r = await get({ status: 'all', mitre: 'T1110', severity: 'low' });
+    assert.deepStrictEqual(r.json.alerts, [], 'the technique filter combines with the others (all alerts are high)');
+    r = await get({ status: 'all', mitre: 'T1110', severity: 'high', limit: '1' });
+    assert.strictEqual(r.json.alerts.length, 1, 'and with paging');
+
+    for (const bad of ['', 'T111', 'T11100', 'T1110.3', "T1110' OR '1'='1", 'T1110%', 'x', 'T1110.003.001', ' ']) {
+      r = await get({ mitre: bad });
+      assert.strictEqual(r.status, 400, JSON.stringify(bad) + ' is refused'); assert.strictEqual(r.json.error && r.json.error.code || r.json.code, 'INVALID_MITRE');
+    }
+    r = await fetch(base + '/v1/alerts?mitre=T1110&mitre=T1078'); assert.strictEqual(r.status, 400, 'a repeated parameter is refused');
+    assert.ok(brute);
+    console.log('alert-list-mitre-db: all checks passed');
+  } finally {
+    srv.close();
+    await db.query('DELETE FROM alerts WHERE tenant_id = ANY($1)', [[TENANT, OTHER]]);
+    await db.query('DELETE FROM tenants WHERE id = ANY($1)', [[TENANT, OTHER]]);
+    await db.pool.end();
+  }
+}
+main().catch((e) => { console.error(e); process.exit(1); });

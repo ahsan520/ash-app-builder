@@ -5,7 +5,7 @@ const {
   guarded, UUID_RE, SEVERITIES, ALERT_STATUSES, apiError,
 } = require('../shared');
 const { getEventStore } = require('../../events');
-const { mitreOfEvents, mitreView } = require('../../endpoints/endpoint-alerts');
+const { mitreOfEvents, mitreView, MITRE_RE } = require('../../endpoints/endpoint-alerts');
 
 router.get('/v1/alerts/summary', ...guarded('alerts:read'), async (req, res) => {
   try {
@@ -46,6 +46,14 @@ router.get('/v1/alerts', ...guarded('alerts:read'), async (req, res) => {
     if (!UUID_RE.test(assignee)) return apiError(res, 400, 'INVALID_ASSIGNEE', 'assignee must be me, unassigned or a user id');
     params.push(assignee); where.push(`assignee_id = $${params.length}`);
   }
+  // ATT&CK technique (E4g): only alerts whose stored details.mitre lists it; T1110 also finds T1110.003. Alerts raised before E4f carry none stored and are not found.
+  if (req.query.mitre !== undefined) {
+    const t = typeof req.query.mitre === 'string' ? req.query.mitre.trim().toUpperCase() : '';
+    if (!MITRE_RE.test(t)) return apiError(res, 400, 'INVALID_MITRE', 'mitre must be an ATT&CK technique id such as T1110 or T1110.003');
+    params.push(t);
+    where.push(`EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(details->'mitre'->'techniques') = 'array' THEN details->'mitre'->'techniques' ELSE '[]'::jsonb END) AS m(v)
+                        WHERE m.v->>'id' = $${params.length}::text OR m.v->>'id' LIKE $${params.length}::text || '.%')`);
+  }
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
   const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
   try {
@@ -53,6 +61,7 @@ router.get('/v1/alerts', ...guarded('alerts:read'), async (req, res) => {
       client.query(
         `SELECT id, rule_id, rule_name, severity, status, title, summary, group_key,
                 event_count, first_event_at, last_event_at, created_at, assignee_id, merged_into_id, merged_count,
+                details->'mitre' AS mitre_stored,
                 (SELECT u.username FROM users u WHERE u.id = alerts.assignee_id) AS assignee_name
          FROM alerts WHERE ${where.join(' AND ')}
          ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
@@ -61,7 +70,9 @@ router.get('/v1/alerts', ...guarded('alerts:read'), async (req, res) => {
         params
       )
     );
-    res.status(200).json({ success: true, count: r.rows.length, alerts: r.rows });
+    // The stored ATT&CK of each alert, read back through the same safe view as the alert page (links only for well-formed ids); the raw column is not returned.
+    const alerts = r.rows.map(({ mitre_stored: stored, ...row }) => ({ ...row, mitre: mitreView(stored) }));
+    res.status(200).json({ success: true, count: alerts.length, alerts });
   } catch (error) {
     console.error('Alert listing failed:', error.message);
     apiError(res, 500, 'ALERTS_LIST_ERROR', 'Failed to list alerts');
