@@ -10,6 +10,7 @@
 const db = require('../db');
 const { buildRuleMatch } = require('./rule-query');
 const { getEventStore } = require('../events');
+const { mitreForGroups } = require('../endpoints/endpoint-alerts');
 
 const LOCK_KEY = 7412001; // arbitrary app-wide advisory lock id
 
@@ -370,6 +371,12 @@ async function evaluateRule(client, tenantId, rule) {
   const hits = { rows: (await getEventStore().matchGroups(tenantId, buildRuleMatch(d))).map((r) => ({ ...r, gkey: r.key })) };
   const supp = d.suppression && d.suppression.enabled ? d.suppression.minutes : 0;
 
+  // Alerts raised from endpoint alerts carry the ATT&CK techniques and tactics of the events they were raised from (E4f). Best effort: a failure here leaves the alert without them.
+  let mitreByGroup = new Map();
+  if (d.source_type === 'endpoint-alert' && hits.rows.length) {
+    try { mitreByGroup = await mitreForGroups(getEventStore(), tenantId, hits.rows); } catch (e) { console.error('Endpoint alert MITRE lookup failed:', e && e.message); }
+  }
+
   let created = 0;
   let updated = 0;
   let suppressed = 0;
@@ -382,6 +389,7 @@ async function evaluateRule(client, tenantId, rule) {
       kind: rule.kind,
       category: rule.category || null,
       sample_raw: row.sample_raw ? String(row.sample_raw).slice(0, 500) : null,
+      ...(mitreByGroup.has(row.gkey) ? { mitre: mitreByGroup.get(row.gkey) } : {}),
     });
     // Merge into a still-active alert for the same rule + group instead of
     // raising a new alert every cycle.
@@ -513,4 +521,4 @@ function start() {
   console.log(`[detection] rule runner started (every ${every / 1000}s)`);
 }
 
-module.exports = { start, runOnce, runTenant, ensureBuiltinRules, BUILTIN_RULES };
+module.exports = { start, runOnce, runTenant, ensureBuiltinRules, evaluateRule, BUILTIN_RULES };

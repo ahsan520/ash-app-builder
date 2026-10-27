@@ -150,5 +150,46 @@ function severityCounts(rows) {
   return out;
 }
 
-module.exports = { SOURCE_TYPE, SEVERITIES, BANDS, WINDOWS, DEFAULT_WINDOW, MAX_LIMIT, DEFAULT_LIMIT, MAX_OFFSET, MAX_EXCLUDE, SAMPLE, QUERY_KEYS, MITRE_RE,
+// ---- MITRE on the ASIX alerts raised from endpoint alerts (E4f) ---------------------------------------------------------------------------------------
+// The rule runner raises an ASIX alert per group of endpoint-alert events (the E4e rules). The built-in rules carry no ATT&CK list of their own (which technique applies
+// depends on the manager rule that fired), so each alert takes it from its sample events: the union of the techniques and tactics of the events the alert was raised from.
+const MAX_ALERT_TECHNIQUES = 20, MAX_ALERT_TACTICS = 14;
+
+// Union of the MITRE details of several events (envelopes or { parsed } objects), in the order first seen, without duplicates.
+function mitreOfEvents(events) {
+  const tech = new Map(), tactics = new Set();
+  for (const e of events || []) {
+    const m = mitreOf(e && e.parsed);
+    for (const t of m.techniques) { const old = tech.get(t.id); if (!old) tech.set(t.id, { id: t.id, name: t.name }); else if (!old.name && t.name) old.name = t.name; }
+    for (const t of m.tactics) tactics.add(t);
+  }
+  return { techniques: [...tech.values()].slice(0, MAX_ALERT_TECHNIQUES), tactics: [...tactics].slice(0, MAX_ALERT_TACTICS) };
+}
+
+// What is stored in an alert's details.mitre -> what the alert view shows (a link only for a well-formed id). Anything of the wrong shape is ignored, not trusted.
+function mitreView(stored) {
+  const s = stored && typeof stored === 'object' ? stored : {};
+  const str = (v, n) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, n) : '');
+  const techniques = (Array.isArray(s.techniques) ? s.techniques : []).slice(0, MAX_ALERT_TECHNIQUES)
+    .map((t) => ({ id: str(t && t.id, 20), name: str(t && t.name, 200) || null })).filter((t) => t.id).map((t) => ({ ...t, url: mitreUrl(t.id) }));
+  const tactics = (Array.isArray(s.tactics) ? s.tactics : []).slice(0, MAX_ALERT_TACTICS).map((t) => str(t, 100)).filter(Boolean);
+  return { techniques, tactics };
+}
+
+// For the rule runner: the MITRE details of each group the rule matched, read from the groups' sample events through the event store (one batched read per cycle).
+// Returns Map(group key -> { techniques, tactics }) with only the groups that have something. The caller treats a failure as "no MITRE", never as a failure to alert.
+async function mitreForGroups(store, tenantId, rows) {
+  const ids = [...new Set((rows || []).flatMap((r) => (Array.isArray(r.sample_ids) ? r.sample_ids : [])))];
+  const byId = new Map();
+  for (let i = 0; i < ids.length; i += 500) for (const e of await store.getByIds(tenantId, ids.slice(i, i + 500))) byId.set(e.id, e);
+  const out = new Map();
+  for (const r of rows || []) {
+    const m = mitreOfEvents((r.sample_ids || []).map((id) => byId.get(id)).filter(Boolean));
+    if (m.techniques.length || m.tactics.length) out.set(r.gkey !== undefined ? r.gkey : r.key, m);
+  }
+  return out;
+}
+
+module.exports = {
+  mitreOfEvents, mitreView, mitreForGroups, MAX_ALERT_TECHNIQUES, MAX_ALERT_TACTICS, SOURCE_TYPE, SEVERITIES, BANDS, WINDOWS, DEFAULT_WINDOW, MAX_LIMIT, DEFAULT_LIMIT, MAX_OFFSET, MAX_EXCLUDE, SAMPLE, QUERY_KEYS, MITRE_RE,
   parseQuery, listPlan, severityPlan, samplePlan, shape, mitreOf, mitreUrl, topLists, severityCounts };

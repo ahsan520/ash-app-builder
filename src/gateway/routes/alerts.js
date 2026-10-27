@@ -5,6 +5,7 @@ const {
   guarded, UUID_RE, SEVERITIES, ALERT_STATUSES, apiError,
 } = require('../shared');
 const { getEventStore } = require('../../events');
+const { mitreOfEvents, mitreView } = require('../../endpoints/endpoint-alerts');
 
 router.get('/v1/alerts/summary', ...guarded('alerts:read'), async (req, res) => {
   try {
@@ -77,10 +78,13 @@ router.get('/v1/alerts/:id', ...guarded('alerts:read'), async (req, res) => {
       const ids = ((a.rows[0].details && a.rows[0].details.sample_event_ids) || []).filter((i) => typeof i === 'string' && UUID_RE.test(i));
       // sample events are read through the event store, newest first
       const ev = { rows: ids.length ? await getEventStore().getByIds(req.tenant_id, ids) : [] };
+      // ATT&CK techniques and tactics: as stored on the alert when the rule runner raised it (E4f); an older alert, or one raised before the sample events were read, takes them
+      // from its sample events as they are now. Empty lists for alerts that have none (most rules carry their own list on the rule, not here).
+      const mitre = mitreView(a.rows[0].details && a.rows[0].details.mitre ? a.rows[0].details.mitre : mitreOfEvents(ev.rows));
       ev.rows = ev.rows
         .map(({ id, source_type, collector_id, received_at, event_time, raw }) => ({ id, source_type, collector_id, received_at, event_time, raw }))
         .sort((x, y) => Date.parse(y.event_time || y.received_at) - Date.parse(x.event_time || x.received_at));
-      return { alert: a.rows[0], events: ev.rows };
+      return { alert: a.rows[0], events: ev.rows, mitre };
     });
     if (!out) return apiError(res, 404, 'NOT_FOUND', 'Alert not found');
     res.status(200).json({ success: true, ...out });

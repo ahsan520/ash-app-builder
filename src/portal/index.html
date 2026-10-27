@@ -385,17 +385,25 @@ function sevRow(sm) {
   return el('div', { style: 'display:flex;align-items:center;gap:10px;margin-top:14px' }, el('span', { className: 'mute', textContent: 'Active alerts by severity:' }),
     ...SEV.map((s) => el('a', { href: '#/incidents?sev=' + s, style: 'text-decoration:none' }, sevPill(s, sm.active[s]))));
 }
+// MITRE ATT&CK of one alert (techniques taken from the endpoint alerts it was raised from, E4f). Nothing is drawn for an alert that has none. Links only for ATT&CK addresses (epMitreLink).
+function alertMitre(m) {
+  if (!m || ((m.techniques || []).length === 0 && (m.tactics || []).length === 0)) return '';
+  return el('div', { style: 'margin:12px 0' }, el('h3', { textContent: 'MITRE ATT&CK' }),
+    (m.techniques || []).length ? table([{ h: 'Technique', f: (t) => epMitreLink(t) }, { h: 'Name', f: (t) => t.name || '-' }], m.techniques) : '',
+    (m.tactics || []).length ? el('div', { style: 'margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center' }, el('span', { className: 'mute', textContent: 'Tactics' }), ...m.tactics.map((t) => el('span', { className: 'pill off', textContent: t }))) : '');
+}
 async function openAlert(id, holder) {
   holder.replaceChildren(el('div', { className: 'mute', textContent: 'Loading alert...' }));
   try {
-    const { alert: a, events } = await api('/v1/alerts/' + id);
+    const { alert: a, events, mitre } = await api('/v1/alerts/' + id);
     const act = (st, label, pri) => el('button', { className: 'btn' + (pri ? ' pri' : ''), textContent: label, onclick: async () => { try { await api('/v1/alerts/' + id, { method: 'PATCH', body: { status: st } }); route(); } catch (e) { window.alert(e.message); } } });
     const buttons = el('div', { style: 'display:flex;gap:8px;margin:12px 0' },
       ...(a.status === 'open' ? [act('acknowledged', 'Acknowledge', true), act('closed', 'Close')] : a.status === 'acknowledged' ? [act('closed', 'Close', true), act('open', 'Reopen')] : [act('open', 'Reopen', true)]));
     const d = a.details || {};
     holder.replaceChildren(card(a.title,
       kv({ rule: a.rule_name, severity: a.severity, status: a.status, group: a.group_key, matching_events: a.event_count, first_seen_utc: when(a.first_event_at), last_seen_utc: when(a.last_event_at), condition: (d.threshold || '?') + ' in ' + (d.window_minutes || '?') + ' min', merged_alerts: a.merged_count || 0, merged_into: a.merged_into_id || '-' }),
-      buttons, a.merged_count ? await mergedPanel(a) : '', await triagePanel(a), el('h3', { textContent: 'Latest matching events' }),
+      buttons, a.merged_count ? await mergedPanel(a) : '', await triagePanel(a), alertMitre(mitre),
+      el('h3', { textContent: 'Latest matching events' }),
       table([{ h: 'Time (UTC)', f: (e) => when(e.event_time || e.received_at) }, { h: 'Event', cls: 'msg', f: (e) => e.raw }], events, 'The sample events are no longer available.')));
     holder.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   } catch (e) { holder.replaceChildren(errBox(e)); }
