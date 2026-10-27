@@ -409,9 +409,9 @@ async function openAlert(id, holder) {
   } catch (e) { holder.replaceChildren(errBox(e)); }
 }
 // ---- ATT&CK on the alert list (E4g) ----
-// A technique id the list can be filtered by (T1110 or T1110.003); anything else is dropped before it reaches the address or the server.
-const ALERT_MITRE_RE = /^T[0-9]{4}(\.[0-9]{3})?$/;
-const alertMitreId = (v) => { const t = String(v || '').trim().toUpperCase(); return ALERT_MITRE_RE.test(t) ? t : ''; };
+// The start of a technique id the list can be filtered by (t15, T15*, T1110, T1110.003; any case); anything else is dropped before it reaches the address or the server.
+const ALERT_MITRE_RE = /^T[0-9]{1,4}(\.[0-9]{1,3})?$/;
+const alertMitreId = (v) => { const t = String(v || '').trim().replace(/\*+$/, '').toUpperCase(); return ALERT_MITRE_RE.test(t) ? t : ''; };
 // The ATT&CK cell of one row: up to three technique ids (a click filters the list by it, without opening the alert), "+N" for the rest, a dash for an alert with none stored.
 function alertMitreCell(a, pick) {
   const ts = (a.mitre && a.mitre.techniques) || [];
@@ -423,7 +423,7 @@ function alertMitreCell(a, pick) {
 async function pgAlerts() {
   const status = routeQuery.get('status') || 'active', sev = routeQuery.get('sev') || '', who = routeQuery.get('assignee') || '', tech = alertMitreId(routeQuery.get('mitre'));
   const go = () => { const n = new URLSearchParams(); if (stSel.value !== 'active') n.set('status', stSel.value); if (sevSel.value) n.set('sev', sevSel.value); if (whoSel.value) n.set('assignee', whoSel.value); const t = alertMitreId(techIn.value); if (t) n.set('mitre', t); location.hash = '#/incidents' + (n.toString() ? '?' + n : ''); };
-  const techIn = el('input', { placeholder: 'ATT&CK technique, e.g. T1110', style: 'width:200px', onkeydown: (e) => { if (e.key === 'Enter') go(); }, onchange: go });
+  const techIn = el('input', { placeholder: 'ATT&CK technique, e.g. T1110 or t15', style: 'width:200px', onkeydown: (e) => { if (e.key === 'Enter') go(); }, onchange: go });
   techIn.value = tech;
   const stSel = el('select', { onchange: go }, ...['active', 'open', 'acknowledged', 'closed', 'all'].map((v) => el('option', { value: v, textContent: v })));
   const sevSel = el('select', { onchange: go }, el('option', { value: '', textContent: 'any severity' }), ...SEV.map((v) => el('option', { value: v, textContent: v })));
@@ -440,7 +440,7 @@ async function pgAlerts() {
   const holder = el('div');
   const list = table([{ h: '', f: (a) => el('input', { type: 'checkbox', onclick: (e) => e.stopPropagation(), onchange: (e) => { if (e.target.checked) picked.add(a.id); else picked.delete(a.id); bulkInfo.textContent = picked.size ? picked.size + ' selected' : 'Select alerts to change several at once'; } }) },
     { h: 'Severity', f: (a) => sevPill(a.severity) }, { h: 'Alert', f: (a) => a.title }, { h: 'Events', f: (a) => a.event_count + (a.merged_count ? ' (' + a.merged_count + ' merged)' : '') }, { h: 'ATT&CK', f: (a) => alertMitreCell(a, pickTech) }, { h: 'Assignee', f: (a) => a.assignee_name || '-' },
-    { h: 'Last seen (UTC)', f: (a) => when(a.last_event_at) }, { h: 'Status', f: (a) => pill(a.status, a.status === 'closed' ? 'off' : a.status === 'open' ? 'bad' : 'ok') }], r.alerts, 'No alerts match. Detection rules run every minute.' + (tech ? ' Only alerts raised after ATT&CK was stored on them can be found by technique.' : ''));
+    { h: 'Last seen (UTC)', f: (a) => when(a.last_event_at) }, { h: 'Status', f: (a) => pill(a.status, a.status === 'closed' ? 'off' : a.status === 'open' ? 'bad' : 'ok') }], r.alerts, 'No alerts match. Detection rules run every minute.' + (tech ? ' Alerts whose events are no longer stored cannot be found by technique.' : ''));
   if (list.querySelectorAll) list.querySelectorAll('tbody tr').forEach((tr, i) => { tr.className = 'row'; tr.onclick = () => openAlert(r.alerts[i].id, holder); });
   return [...head('Alerts', 'Alerts raised by detection rules. Click an alert for its matching events, to assign it, add notes and change its status. Tick several to acknowledge or close them together.'),
     card('', el('div', { style: 'display:flex;gap:10px;align-items:center' }, el('span', { className: 'mute', textContent: 'Show' }), stSel, sevSel, whoSel, techIn, tech ? el('button', { className: 'btn', textContent: 'Clear technique', onclick: () => { techIn.value = ''; go(); } }) : '', el('span', { className: 'mute', style: 'margin-left:auto', textContent: r.count + ' shown' })),

@@ -9,6 +9,8 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const shared = require('../src/gateway/shared');
+const { MemoryEventStore } = require('../src/events/memory-store');
+const { setEventStore } = require('../src/events');
 
 let TENANT = '11111111-1111-4111-8111-111111111111';
 let queries = []; let rows = [];
@@ -26,27 +28,48 @@ describe('GET /v1/alerts, ATT&CK', () => {
   const get = async (qs) => { queries = []; const r = await fetch(base + '/v1/alerts?' + qs); return { status: r.status, json: await r.json() }; };
   const row = (o) => ({ id: '22222222-2222-4222-8222-222222222222', title: 't', severity: 'high', status: 'open', mitre_stored: null, ...o });
 
-  it('adds no technique condition and no extra parameter when mitre is not given', async () => {
+  it('asks SQL for nothing about ATT&CK when mitre is not given: the page size is the caller\'s', async () => {
     rows = [];
-    await get('status=active');
-    assert.strictEqual(queries.length, 1); assert.deepStrictEqual(queries[0].params, [TENANT]); assert.ok(!/jsonb_array_elements/.test(queries[0].sql));
+    await get('status=active&limit=7&offset=3');
+    assert.deepStrictEqual(queries[0].params, [TENANT]); assert.ok(/LIMIT 7 OFFSET 3/.test(queries[0].sql));
   });
-  it('binds the id as one upper-cased parameter, never into the SQL text', async () => {
+  it('with a technique prefix reads the newest 1,000 matching alerts and slices after filtering; nothing from the request goes into the SQL', async () => {
     rows = [];
-    await get('mitre=t1110.003');
-    assert.deepStrictEqual(queries[0].params, [TENANT, 'T1110.003']); assert.ok(!/T1110/.test(queries[0].sql)); assert.ok(/\$2::text/.test(queries[0].sql));
+    await get('mitre=t15*&limit=7&offset=3&severity=high');
+    assert.ok(/LIMIT 1000 OFFSET 0/.test(queries[0].sql)); assert.deepStrictEqual(queries[0].params, [TENANT, 'high']); assert.ok(!/T15/i.test(queries[0].sql));
   });
-  it('the parameter number follows the other filters', async () => {
-    rows = [];
-    await get('status=open&severity=high&mitre=T1110');
-    assert.deepStrictEqual(queries[0].params, [TENANT, 'open', 'high', 'T1110']); assert.ok(/\$4::text/.test(queries[0].sql));
+  it('matches the start of an id, any case, with or without a star, and slices after the filter', async () => {
+    const tech = (...ids) => ({ techniques: ids.map((id) => ({ id, name: id })), tactics: [] });
+    rows = ['T1110', 'T1110.003', 'T1111', 'T1565.001', 'T1548.003', 'T1078'].map((id, i) => row({ title: 'a' + i, mitre_stored: tech(id) }));
+    const titles = async (q) => (await get(q)).json.alerts.map((a) => a.title);
+    assert.deepStrictEqual(await titles('mitre=t15'), ['a3', 'a4']);
+    assert.deepStrictEqual(await titles('mitre=T15*'), ['a3', 'a4']);
+    assert.deepStrictEqual(await titles('mitre=T1110'), ['a0', 'a1']);
+    assert.deepStrictEqual(await titles('mitre=T1110.0'), ['a1']);
+    assert.deepStrictEqual(await titles('mitre=T11'), ['a0', 'a1', 'a2']);
+    assert.deepStrictEqual(await titles('mitre=T11&limit=1&offset=1'), ['a1']);
+    assert.deepStrictEqual(await titles('mitre=T9'), []);
   });
-  it('refuses anything that is not a technique id, before any query', async () => {
-    for (const bad of ['', 'T111', 'T11100', 'T1110.3', "T1110'; DROP TABLE alerts;--", 'T1110%25', 'x', 'T1110.003.001', '%20', 'T1110,T1078']) {
+  it('refuses anything that is not the start of a technique id, before any query', async () => {
+    for (const bad of ['', 'T', '*', 'x', 'T11100', "T1110'; DROP TABLE alerts;--", 'T1110%25', 'T1110.003.001', 'T1110.', '%20', 'T1110,T1078', 'T1*0', '1110']) {
       const r = await get('mitre=' + encodeURIComponent(bad));
       assert.strictEqual(r.status, 400, JSON.stringify(bad)); assert.strictEqual(queries.length, 0, 'no query for ' + JSON.stringify(bad));
     }
     const r = await get('mitre=T1110&mitre=T1078'); assert.strictEqual(r.status, 400); assert.strictEqual(queries.length, 0);
+  });
+  it('an alert with no stored ATT&CK takes it from its sample events (one batched read, other tenants never read), and a failing store gives none, not an error', async () => {
+    const A = '44444444-4444-4444-8444-444444444444', B = '55555555-5555-4555-8555-555555555555';
+    const store = new MemoryEventStore();
+    await store.insertBatch(TENANT, [{ id: A, source_type: 'endpoint-alert', raw: 'x', parsed: { mitre_ids: 'T1548.003', mitre_techniques: 'Sudo', mitre_tactics: 'Privilege Escalation' }, received_at: new Date().toISOString() }]);
+    setEventStore(store); let reads = 0; const orig = store.getByIds.bind(store); store.getByIds = async (t, ids) => { reads += 1; return orig(t, ids); };
+    rows = [row({ title: 'old', mitre_stored: null, sample_ids: [A, 'not-an-id', 9] }), row({ title: 'none', sample_ids: [B] }), row({ title: 'stored', mitre_stored: { techniques: [{ id: 'T1110', name: 'x' }], tactics: [] }, sample_ids: [A] })];
+    let r = await get('status=all');
+    assert.strictEqual(reads, 1); const by = Object.fromEntries(r.json.alerts.map((a) => [a.title, a.mitre.techniques.map((t) => t.id)]));
+    assert.deepStrictEqual(by, { old: ['T1548.003'], none: [], stored: ['T1110'] }, 'stored wins; the stored alert does not use its events');
+    assert.ok(r.json.alerts.every((a) => !('sample_ids' in a) && !('mitre_stored' in a)));
+    store.getByIds = async () => { throw new Error('store down'); };
+    r = await get('status=all'); assert.strictEqual(r.status, 200); assert.deepStrictEqual(r.json.alerts.map((a) => a.mitre.techniques.length), [0, 0, 1]);
+    r = await get('status=all&mitre=T15'); assert.strictEqual(r.status, 200); assert.deepStrictEqual(r.json.alerts, []);
   });
   it('returns the stored ATT&CK through the safe view and never the raw column', async () => {
     rows = [row({ mitre_stored: { techniques: [{ id: 'T1110', name: 'Brute Force' }, { id: 'javascript:alert(1)', name: 'x' }, 5, null], tactics: ['Credential Access', 7] } }),
@@ -60,7 +83,7 @@ describe('GET /v1/alerts, ATT&CK', () => {
   });
   it('selects only the ATT&CK key of details, not the whole column', async () => {
     rows = []; await get('status=all');
-    assert.ok(/details->'mitre' AS mitre_stored/.test(queries[0].sql)); assert.ok(!/SELECT[^;]*\bdetails\b\s*,/.test(queries[0].sql.replace(/details->'mitre'/g, '')));
+    assert.ok(/details->'mitre' AS mitre_stored/.test(queries[0].sql)); assert.ok(!/SELECT[^;]*\bdetails\b\s*,/.test(queries[0].sql.replace(/details->'mitre'/g, '').replace(/details->'sample_event_ids'/g, '')));
   });
 });
 
@@ -90,7 +113,8 @@ describe('the alert list in the portal', () => {
   });
   it('asks the server for the technique in the address, upper-cased, and drops a malformed one before sending', async () => {
     assert.ok(/mitre=T1110\.003/.test((await open('mitre=t1110.003')).calls[0]));
-    for (const bad of ['T11', "T1110'", '<b>', 'T1110,T1078']) assert.ok(!/mitre=/.test((await open('mitre=' + encodeURIComponent(bad))).calls[0]), bad);
+    assert.ok(/mitre=T15(&|$)/.test((await open('mitre=t15*')).calls[0]), 'a lower-case prefix with a star is sent as T15');
+    for (const bad of ['T', 'x', "T1110'", '<b>', 'T1110,T1078', 'T11100']) assert.ok(!/mitre=/.test((await open('mitre=' + encodeURIComponent(bad))).calls[0]), bad);
   });
   it('shows up to three technique ids per row, "+N" for the rest and a dash for none', async () => {
     const p = await open('', [A({ mitre: { techniques: ['T1110', 'T1078', 'T1565.001', 'T1059', 'T1021'].map((id) => ({ id, name: 'n ' + id })), tactics: [] } }), A({})]);
@@ -115,6 +139,6 @@ describe('the alert list in the portal', () => {
   });
   it('explains an empty result for a technique', async () => {
     const p = await open('mitre=T1110', []);
-    assert.ok(walk(p.tree).some((x) => x && typeof x.textContent === 'string' && /after ATT&CK was stored/.test(x.textContent)));
+    assert.ok(walk(p.tree).some((x) => x && typeof x.textContent === 'string' && /no longer stored/.test(x.textContent)));
   });
 });

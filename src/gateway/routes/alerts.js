@@ -5,7 +5,25 @@ const {
   guarded, UUID_RE, SEVERITIES, ALERT_STATUSES, apiError,
 } = require('../shared');
 const { getEventStore } = require('../../events');
-const { mitreOfEvents, mitreView, MITRE_RE } = require('../../endpoints/endpoint-alerts');
+const { mitreOfEvents, mitreView } = require('../../endpoints/endpoint-alerts');
+
+const MITRE_PREFIX_RE = /^T[0-9]{1,4}(\.[0-9]{1,3})?$/;
+const MITRE_SCAN = 1000;
+// ATT&CK per alert for the list: what is stored on the alert (E4f) through the safe view; an alert with none stored takes it from its sample events, read in batches of 500
+// through the event store (the same rule as the alert page). A failed read means "none", never a failed list. The raw columns are not returned.
+async function withMitre(tenantId, rows) {
+  const lacking = rows.filter((r) => { const m = mitreView(r.mitre_stored); return !m.techniques.length && !m.tactics.length; });
+  const ids = [...new Set(lacking.flatMap((r) => (Array.isArray(r.sample_ids) ? r.sample_ids : []).filter((i) => typeof i === 'string' && UUID_RE.test(i))))];
+  const byId = new Map();
+  try {
+    for (let i = 0; i < ids.length; i += 500) for (const e of await getEventStore().getByIds(tenantId, ids.slice(i, i + 500))) byId.set(e.id, e);
+  } catch (error) { console.error('Alert list ATT&CK lookup failed:', error.message); }
+  return rows.map(({ mitre_stored: stored, sample_ids: sample, ...row }) => {
+    let m = mitreView(stored);
+    if (!m.techniques.length && !m.tactics.length) m = mitreView(mitreOfEvents((Array.isArray(sample) ? sample : []).map((i) => byId.get(i)).filter(Boolean)));
+    return { ...row, mitre: m };
+  });
+}
 
 router.get('/v1/alerts/summary', ...guarded('alerts:read'), async (req, res) => {
   try {
@@ -46,32 +64,32 @@ router.get('/v1/alerts', ...guarded('alerts:read'), async (req, res) => {
     if (!UUID_RE.test(assignee)) return apiError(res, 400, 'INVALID_ASSIGNEE', 'assignee must be me, unassigned or a user id');
     params.push(assignee); where.push(`assignee_id = $${params.length}`);
   }
-  // ATT&CK technique (E4g): only alerts whose stored details.mitre lists it; T1110 also finds T1110.003. Alerts raised before E4f carry none stored and are not found.
+  // ATT&CK technique (E4g): a case-insensitive PREFIX of a technique id (t15, T15*, T1110, T1110.0). Decided after the alerts are read, because alerts raised before E4f
+  // carry no stored ATT&CK and take theirs from their sample events (as the alert page does); so a filtered list reads the newest 1,000 matching alerts and slices them.
+  let needle = '';
   if (req.query.mitre !== undefined) {
-    const t = typeof req.query.mitre === 'string' ? req.query.mitre.trim().toUpperCase() : '';
-    if (!MITRE_RE.test(t)) return apiError(res, 400, 'INVALID_MITRE', 'mitre must be an ATT&CK technique id such as T1110 or T1110.003');
-    params.push(t);
-    where.push(`EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(details->'mitre'->'techniques') = 'array' THEN details->'mitre'->'techniques' ELSE '[]'::jsonb END) AS m(v)
-                        WHERE m.v->>'id' = $${params.length}::text OR m.v->>'id' LIKE $${params.length}::text || '.%')`);
+    needle = typeof req.query.mitre === 'string' ? req.query.mitre.trim().replace(/\*+$/, '').toUpperCase() : '';
+    if (!MITRE_PREFIX_RE.test(needle)) return apiError(res, 400, 'INVALID_MITRE', 'mitre must start like an ATT&CK technique id, for example T15, T1110 or T1110.003 (a trailing * is allowed)');
   }
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
   const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+  const sqlLimit = needle ? MITRE_SCAN : limit, sqlOffset = needle ? 0 : offset;
   try {
     const r = await db.withTenant(req.tenant_id, (client) =>
       client.query(
         `SELECT id, rule_id, rule_name, severity, status, title, summary, group_key,
                 event_count, first_event_at, last_event_at, created_at, assignee_id, merged_into_id, merged_count,
-                details->'mitre' AS mitre_stored,
+                details->'mitre' AS mitre_stored, details->'sample_event_ids' AS sample_ids,
                 (SELECT u.username FROM users u WHERE u.id = alerts.assignee_id) AS assignee_name
          FROM alerts WHERE ${where.join(' AND ')}
          ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
                   last_event_at DESC
-         LIMIT ${limit} OFFSET ${offset}`,
+         LIMIT ${sqlLimit} OFFSET ${sqlOffset}`,
         params
       )
     );
-    // The stored ATT&CK of each alert, read back through the same safe view as the alert page (links only for well-formed ids); the raw column is not returned.
-    const alerts = r.rows.map(({ mitre_stored: stored, ...row }) => ({ ...row, mitre: mitreView(stored) }));
+    let alerts = await withMitre(req.tenant_id, r.rows);
+    if (needle) alerts = alerts.filter((x) => x.mitre.techniques.some((t) => t.id.toUpperCase().startsWith(needle))).slice(offset, offset + limit);
     res.status(200).json({ success: true, count: alerts.length, alerts });
   } catch (error) {
     console.error('Alert listing failed:', error.message);
