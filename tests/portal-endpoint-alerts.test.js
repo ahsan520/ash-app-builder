@@ -193,4 +193,15 @@ describe('Endpoints page, Alerts tab', () => {
     const p = await open({}, { ...MANAGER, status: { reachable: false, code: 'TIMEOUT', message: 'no answer' } }); assert.match(p.text(), /Not reachable/); await p.click('Agents');
     assert.ok(!p.calls.some((c) => c.p.includes('/alerts')));
   });
+  it('the breadcrumb follows the open tab, and the pills and times do not wrap', async () => {
+    const crumb = el('div', {}); global.document = { getElementById: (id) => (id === 'crumb' ? crumb : null) };
+    try {
+      const p = await open(); assert.match(texts(crumb), /Endpoints.*Overview/);
+      await p.alertsTab(); assert.match(texts(crumb), /Endpoints.*Alerts/); assert.ok(!/Agents/.test(texts(crumb)));
+      await p.click('Third-party notices'); assert.match(texts(crumb), /Third-party notices/);
+    } finally { delete global.document; }
+    const p = await open(); await p.alertsTab();
+    assert.ok(p.all().some((n) => n.attrs && n.attrs.className === 'pill' && /nowrap/.test(n.attrs.style || '') && /^high/.test(n.attrs.textContent || '')));
+    assert.ok(p.all().some((n) => n.attrs && /nowrap/.test(n.attrs.style || '') && n.attrs.textContent === '2026-10-27 10:00:00'));
+  });
 });

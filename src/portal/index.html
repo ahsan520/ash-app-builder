@@ -1490,7 +1490,7 @@ const EP_SEVCOL = { critical: '#e5484d', high: '#f08a24', medium: '#e6c229', low
 const EP_WINDOWS = [['1h', 'Last hour'], ['24h', 'Last 24 hours'], ['7d', 'Last 7 days'], ['30d', 'Last 30 days']];
 const EP_ALERT_LIMIT = 50;
 const EP_MITRE_URL = /^https:\/\/attack\.mitre\.org\/techniques\/T[0-9]{4}(\/[0-9]{3})?\/$/;
-const epSevPill = (s, n) => el('span', { className: 'pill', style: 'background:' + (EP_SEVCOL[s] || EP_SEVCOL.unknown) + '26;color:' + (EP_SEVCOL[s] || EP_SEVCOL.unknown) + ';font-weight:600', textContent: (s || 'unknown') + (n !== undefined ? '  ' + n : '') });
+const epSevPill = (s, n) => el('span', { className: 'pill', style: 'white-space:nowrap;background:' + (EP_SEVCOL[s] || EP_SEVCOL.unknown) + '26;color:' + (EP_SEVCOL[s] || EP_SEVCOL.unknown) + ';font-weight:600', textContent: (s || 'unknown') + (n !== undefined ? '  ' + n : '') });
 const epMitreLink = (t) => (EP_MITRE_URL.test(t.url || '') ? el('a', { href: t.url, target: '_blank', rel: 'noopener noreferrer', textContent: t.id }) : el('span', { textContent: t.id }));
 const EP_NOTICES = [{ name: 'Wazuh (endpoint agent and manager)', licence: 'GNU General Public License, version 2', source: 'https://github.com/wazuh/wazuh',
   note: 'Copyright Wazuh, Inc. and contributors. Wazuh is a trademark of its owner and is not used here as an ASIX name. Where ASIX gives you a modified build, the source of the changes is available on request.' }];
@@ -1651,7 +1651,7 @@ async function pgEndpoints() {
     };
 
     const cols = [
-      { h: 'Time (UTC)', f: (a) => el('span', { style: 'cursor:pointer;text-decoration:underline', textContent: when(a.time), onclick: () => showOne(a.id) }) },
+      { h: 'Time (UTC)', f: (a) => el('span', { style: 'cursor:pointer;text-decoration:underline;white-space:nowrap', textContent: when(a.time), onclick: () => showOne(a.id) }) },
       { h: 'Severity', f: (a) => epSevPill(a.severity, a.level !== null && a.level !== undefined ? a.level : undefined) },
       { h: 'Rule', f: (a) => (a.rule_id || '-') + ': ' + (a.description || '-') }, { h: 'Machine', f: (a) => a.agent.name || '-' },
       { h: 'ATT&CK', f: (a) => a.mitre.techniques.map((t) => t.id).join(', ') || '-' },
@@ -1699,7 +1699,11 @@ async function pgEndpoints() {
   const TABS = [['overview', 'Overview', overview], ['agents', 'Agents', agentsView], ['alerts', 'Alerts', alertsView], ['install', 'Add a machine', installView], ['notices', 'Third-party notices', notices]];
   function draw() {
     tabs.replaceChildren(...TABS.map(([id, label]) => el('div', { className: 'xtab' + (tab === id ? ' on' : ''), textContent: label, onclick: () => { tab = id; draw(); } })));
-    body.replaceChildren(...(TABS.find((t) => t[0] === tab) || TABS[0])[2]());
+    const cur = TABS.find((t) => t[0] === tab) || TABS[0];
+    // The page's breadcrumb is set once by route(); keep its second part on the open tab (guarded: the page tests run without a document).
+    const crumb = typeof document !== 'undefined' && document.getElementById('crumb');
+    if (crumb) crumb.replaceChildren('Endpoints', ' \u203A ', el('b', { textContent: cur[1] }));
+    body.replaceChildren(...cur[2]());
   }
   draw();
   return [top, intro, tabs, el('div', { style: 'margin-top:12px' }, body)];
