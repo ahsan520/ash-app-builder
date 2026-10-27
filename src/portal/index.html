@@ -1702,7 +1702,7 @@ async function pgIoc() {
 }
 
 // ---- correlation / BIOC rules: list + XSIAM-style builder --------------------------------
-const CATS = ['Initial Access', 'Credential Access', 'Execution', 'Persistence', 'Privilege Escalation', 'Defense Evasion', 'Discovery', 'Lateral Movement', 'Collection', 'Command and Control', 'Exfiltration', 'Impact', 'Other'];
+const CATS = ['Initial Access', 'Credential Access', 'Execution', 'Persistence', 'Privilege Escalation', 'Defense Evasion', 'Discovery', 'Lateral Movement', 'Collection', 'Command and Control', 'Exfiltration', 'Impact', 'Endpoint Security', 'Other'];
 const KIND_LABEL = { correlation: 'Correlation', bioc: 'BIOC' };
 const fld = (label, input, hint) => el('label', { className: 'fld' }, el('span', { textContent: label }), input, hint ? el('small', { className: 'mute', textContent: hint }) : '');
 const selOf = (opts, val) => { const s = el('select', {}, opts.map((o) => el('option', { value: o[0], textContent: o[1] }))); s.value = String(val); return s; };

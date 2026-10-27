@@ -533,7 +533,7 @@ filter message ~= "^\[[^\]]+\] .+? id=\d+ "
    "endpoint-alert": the line is "[Endpoint alert] rule <id> level <n>: <description>" and everything the manager knew about the
    alert comes alongside it as fields (rule_*, mitre_*, agent_*, data_*, syscheck_*), marked asix_via = "wazuh". The rule turns the
    level into a number and a severity, and lifts the few fields most searches want (who, from where, which file) out of the
-   manager's own names. The original fields stay as they are.
+   manager's own names, and builds alert_key ("<rule id> on <machine>"), the one value the E4e detection rules group by. The original fields stay as they are.
    ------------------------------------- */
 
 /* ------------ wazuh_alert --------- */
@@ -550,7 +550,9 @@ filter asix_via = "wazuh" and rule_id ~= "^[0-9]+$"
     user = if(tmp_win_user != null, tmp_win_user, data_srcuser),
     src_ip = arrayindex(regextract(data_srcip, "^([0-9a-fA-F:.]+)$"), 0),
     file_path = syscheck_path,
-    file_event = syscheck_event
+    file_event = syscheck_event,
+    alert_target = coalesce(agent_name, "unknown"),
+    alert_key = concat(rule_id, " on ", alert_target)
 | fields -tmp_*;
 /* ------------ wazuh_alert --------- */
 `;

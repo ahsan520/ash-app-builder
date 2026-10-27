@@ -600,6 +600,7 @@ With `--wazuh-alerts` the broker reads the **alerts** a Wazuh manager raises (`/
 - **On the Brokers page:** Inputs shows **Endpoint alerts**; Paused can pause it on its own (internal name `wazuhalerts`; pausing Windows events leaves it running and the other way round).
 - **Look on the broker:** `journalctl -u vector -n 30`, `ls -l /var/ossec/logs/alerts/alerts.json`, `id vector`.
 - **Turn it off:** re-run the bootstrap without `--wazuh-alerts`.
+- **Raising ASIX alerts from them** is done on the server, not the broker (E4e, 2026-10-26): nothing to change on the broker; see `docs/endpoints.md`, "E4e as built".
 - **Not run on a real broker VM or against a real Wazuh manager yet.**
 
 ## The Wazuh manager on the broker VM (E4b, built 2026-10-24)

@@ -306,6 +306,50 @@ const BUILTIN_RULES = [
       xql: String.raw`xdm.event.type = "process_injection" and not xdm.source.process.executable.path ~= "\\\\(MsMpEng|csrss|wininit|services|svchost|vmtoolsd|CompatTelRunner)\\.exe$"`,
     },
   },
+  // ---- Endpoint security alerts (E4e): the alerts a Wazuh manager raises, stored as source type endpoint-alert ----
+  // The parsing rule wazuh_alert gives each one alert_level (the manager's 0-15), a file_path for file integrity alerts and
+  // alert_key ("<rule id> on <machine>"). Grouping by alert_key gives one ASIX alert per manager rule per machine, so two
+  // different rules on one machine never hide each other, and the same rule on ten machines is ten alerts.
+  {
+    key: 'endpoint-alert-critical', kind: 'bioc', category: 'Endpoint Security', name: 'Endpoint security alert, critical',
+    description: 'The endpoint manager raised an alert at level 12 or above (its critical band) on a machine.',
+    severity: 'critical', mitre: [],
+    definition: {
+      source_type: 'endpoint-alert', group_by: 'field:alert_key', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      suppression: { enabled: true, minutes: 60 },
+      xql: 'alert_level >= 12',
+    },
+  },
+  {
+    key: 'endpoint-alert-high', kind: 'bioc', category: 'Endpoint Security', name: 'Endpoint security alert, high',
+    description: 'The endpoint manager raised an alert at level 8 to 11 (its high band) on a machine.',
+    severity: 'high', mitre: [],
+    definition: {
+      source_type: 'endpoint-alert', group_by: 'field:alert_key', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      suppression: { enabled: true, minutes: 60 },
+      xql: 'alert_level >= 8 and alert_level < 12',
+    },
+  },
+  {
+    key: 'endpoint-alert-repeated', kind: 'bioc', category: 'Endpoint Security', name: 'Endpoint security alert repeating',
+    description: 'One medium level (5 to 7) manager rule fired 10 times or more on one machine within 15 minutes.',
+    severity: 'medium', mitre: [],
+    definition: {
+      source_type: 'endpoint-alert', group_by: 'field:alert_key', threshold: 10, window_minutes: 15, run_every_minutes: 1, mode: 'realtime',
+      suppression: { enabled: true, minutes: 60 },
+      xql: 'alert_level >= 5 and alert_level < 8',
+    },
+  },
+  {
+    key: 'endpoint-fim-sensitive', kind: 'bioc', category: 'Endpoint Security', name: 'Sensitive file changed on an endpoint',
+    description: 'File integrity monitoring saw a change to an account, sudo, SSH key, cron, startup or hosts file (alerts below level 8; higher ones are covered by the level rules).',
+    severity: 'high', mitre: ['T1098', 'T1547'],
+    definition: {
+      source_type: 'endpoint-alert', group_by: 'field:alert_key', threshold: 1, window_minutes: 5, run_every_minutes: 1, mode: 'realtime',
+      suppression: { enabled: true, minutes: 60 },
+      xql: String.raw`alert_level < 8 and file_path ~= "^(/etc/(passwd|shadow|group|gshadow|sudoers|ld\\.so\\.preload|crontab)|/etc/(sudoers\\.d|cron\\.[a-z]+)/.+|/root/\\.ssh/.+|/home/[^/]+/\\.ssh/authorized_keys|/var/spool/cron/.+)$|\\\\Start Menu\\\\Programs\\\\Startup\\\\|\\\\drivers\\\\etc\\\\hosts$"`,
+    },
+  },
 ];
 
 async function ensureBuiltinRules(client, tenantId) {
