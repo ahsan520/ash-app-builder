@@ -9,6 +9,9 @@ const { mitreOfEvents, mitreView } = require('../../endpoints/endpoint-alerts');
 
 const MITRE_PREFIX_RE = /^T[0-9]{1,4}(\.[0-9]{1,3})?$/;
 const MITRE_SCAN = 1000;
+// ATT&CK tactic filter (E4h): letters, spaces and hyphens only; compared case-insensitively, hyphens and runs of spaces counting as one space ("defense-evasion" = "Defense Evasion").
+const TACTIC_RE = /^[A-Za-z][A-Za-z -]{0,39}$/;
+const tacticKey = (v) => String(v).toLowerCase().replace(/[-\s]+/g, ' ').trim();
 // ATT&CK per alert for the list: what is stored on the alert (E4f) through the safe view; an alert with none stored takes it from its sample events, read in batches of 500
 // through the event store (the same rule as the alert page). A failed read means "none", never a failed list. The raw columns are not returned.
 async function withMitre(tenantId, rows) {
@@ -71,9 +74,18 @@ router.get('/v1/alerts', ...guarded('alerts:read'), async (req, res) => {
     needle = typeof req.query.mitre === 'string' ? req.query.mitre.trim().replace(/\*+$/, '').toUpperCase() : '';
     if (!MITRE_PREFIX_RE.test(needle)) return apiError(res, 400, 'INVALID_MITRE', 'mitre must start like an ATT&CK technique id, for example T15, T1110 or T1110.003 (a trailing * is allowed)');
   }
+  // ATT&CK tactic (E4h): a case-insensitive prefix of a tactic name (credential, Credential Access, defense-evasion). Decided after the alerts are read, like the technique,
+  // and combined with it (both must match). Nothing from the request goes into the SQL text.
+  let tacticNeedle = '';
+  if (req.query.tactic !== undefined) {
+    const raw = typeof req.query.tactic === 'string' ? req.query.tactic.trim() : '';
+    if (!TACTIC_RE.test(raw)) return apiError(res, 400, 'INVALID_TACTIC', 'tactic must be the start of an ATT&CK tactic name, for example Credential Access or impact (letters, spaces and hyphens only)');
+    tacticNeedle = tacticKey(raw);
+  }
+  const filtered = Boolean(needle || tacticNeedle);
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
   const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
-  const sqlLimit = needle ? MITRE_SCAN : limit, sqlOffset = needle ? 0 : offset;
+  const sqlLimit = filtered ? MITRE_SCAN : limit, sqlOffset = filtered ? 0 : offset;
   try {
     const r = await db.withTenant(req.tenant_id, (client) =>
       client.query(
@@ -89,7 +101,10 @@ router.get('/v1/alerts', ...guarded('alerts:read'), async (req, res) => {
       )
     );
     let alerts = await withMitre(req.tenant_id, r.rows);
-    if (needle) alerts = alerts.filter((x) => x.mitre.techniques.some((t) => t.id.toUpperCase().startsWith(needle))).slice(offset, offset + limit);
+    if (filtered) {
+      alerts = alerts.filter((x) => (!needle || x.mitre.techniques.some((t) => t.id.toUpperCase().startsWith(needle)))
+        && (!tacticNeedle || x.mitre.tactics.some((t) => tacticKey(t).startsWith(tacticNeedle)))).slice(offset, offset + limit);
+    }
     res.status(200).json({ success: true, count: alerts.length, alerts });
   } catch (error) {
     console.error('Alert listing failed:', error.message);
