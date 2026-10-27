@@ -2520,7 +2520,8 @@ function lockedPage(m) {
 
 // ---- My open alerts tile (Command Center) -------------------------------------------------
 // Alerts assigned to the signed-in user that are still open or acknowledged (GET /v1/my-alerts). Shows nothing for
-// a service account, when the call fails, or when the alerts module is not on.
+// a service account, when the call fails, or when the alerts module is not on. The ATT&CK column (E4i) reuses the alert list's cell; a click on a technique opens the list
+// of my alerts filtered by it.
 function myAlertsTile(m) {
   if (!m || !m.applicable || menuModule('incidents')) return '';
   const link = (label, q) => el('a', { href: '#/incidents?assignee=' + q, textContent: label });
@@ -2530,6 +2531,7 @@ function myAlertsTile(m) {
       el('span', { className: 'mute', textContent: m.open + ' open, ' + m.acknowledged + ' acknowledged' + (m.oldest_open_at ? '; oldest unhandled for ' + ago(m.oldest_open_at) : '') }),
       ...SEV.filter((x) => m.active[x]).map((x) => el('a', { href: '#/incidents?assignee=me&sev=' + x, style: 'text-decoration:none' }, sevPill(x, m.active[x])))),
     table([{ h: 'Severity', f: (a) => sevPill(a.severity) }, { h: 'Alert', f: (a) => el('a', { href: '#/incidents?assignee=me', textContent: a.title }) },
+      { h: 'ATT&CK', f: (a) => alertMitreCell(a, (id) => { const t = alertMitreId(id); if (t) location.hash = '#/incidents?assignee=me&mitre=' + t; }) },
       { h: 'Status', f: (a) => pill(a.status, a.status === 'open' ? 'bad' : 'ok') }, { h: 'Last seen', f: (a) => ago(a.last_event_at) }], m.alerts),
     m.active_total > m.alerts.length ? el('div', { style: 'margin-top:8px' }, link('See all ' + m.active_total + ' of my alerts', 'me')) : ''));
 }

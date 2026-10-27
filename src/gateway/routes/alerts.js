@@ -6,28 +6,13 @@ const {
 } = require('../shared');
 const { getEventStore } = require('../../events');
 const { mitreOfEvents, mitreView } = require('../../endpoints/endpoint-alerts');
+const { withMitre } = require('../../alerts/with-mitre');
 
 const MITRE_PREFIX_RE = /^T[0-9]{1,4}(\.[0-9]{1,3})?$/;
 const MITRE_SCAN = 1000;
 // ATT&CK tactic filter (E4h): letters, spaces and hyphens only; compared case-insensitively, hyphens and runs of spaces counting as one space ("defense-evasion" = "Defense Evasion").
 const TACTIC_RE = /^[A-Za-z][A-Za-z -]{0,39}$/;
 const tacticKey = (v) => String(v).toLowerCase().replace(/[-\s]+/g, ' ').trim();
-// ATT&CK per alert for the list: what is stored on the alert (E4f) through the safe view; an alert with none stored takes it from its sample events, read in batches of 500
-// through the event store (the same rule as the alert page). A failed read means "none", never a failed list. The raw columns are not returned.
-async function withMitre(tenantId, rows) {
-  const lacking = rows.filter((r) => { const m = mitreView(r.mitre_stored); return !m.techniques.length && !m.tactics.length; });
-  const ids = [...new Set(lacking.flatMap((r) => (Array.isArray(r.sample_ids) ? r.sample_ids : []).filter((i) => typeof i === 'string' && UUID_RE.test(i))))];
-  const byId = new Map();
-  try {
-    for (let i = 0; i < ids.length; i += 500) for (const e of await getEventStore().getByIds(tenantId, ids.slice(i, i + 500))) byId.set(e.id, e);
-  } catch (error) { console.error('Alert list ATT&CK lookup failed:', error.message); }
-  return rows.map(({ mitre_stored: stored, sample_ids: sample, ...row }) => {
-    let m = mitreView(stored);
-    if (!m.techniques.length && !m.tactics.length) m = mitreView(mitreOfEvents((Array.isArray(sample) ? sample : []).map((i) => byId.get(i)).filter(Boolean)));
-    return { ...row, mitre: m };
-  });
-}
-
 router.get('/v1/alerts/summary', ...guarded('alerts:read'), async (req, res) => {
   try {
     const r = await db.withTenant(req.tenant_id, (client) =>
