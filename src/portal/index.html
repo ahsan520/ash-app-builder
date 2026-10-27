@@ -1509,7 +1509,7 @@ async function pgEndpoints() {
   if (up) { try { sum = (await api('/v1/endpoints/agents/summary')).summary; } catch (e) { sumErr = e.message; } }
   let tab = 'overview';
   const q = { search: '', status: '', sort: '+name', offset: 0 };
-  const af = { window: '24h', severity: '', q: '', agent: '', mitre: '', offset: 0 };
+  const af = { window: '24h', severity: '', q: '', agent: '', mitre: '', rule: '', exclude: [], offset: 0 };
   const tabs = el('div', {}), body = el('div', {});
 
   const overview = () => [
@@ -1625,8 +1625,17 @@ async function pgEndpoints() {
       const p = new URLSearchParams({ window: af.window });
       if (withSeverity && af.severity) p.set('severity', af.severity);
       for (const k of ['q', 'agent', 'mitre']) if (af[k].trim()) p.set(k, af[k].trim());
+      if (af.rule) p.set('rule', af.rule);
+      if (af.exclude.length) p.set('exclude_rule', af.exclude.join(','));
       return p;
     };
+    const active = el('div', { style: 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px' });
+    const redo = () => { af.offset = 0; detail.replaceChildren(); drawActive(); loadCards(); loadList(); };
+    const drawActive = () => active.replaceChildren(
+      af.rule ? el('span', { className: 'pill off', style: 'cursor:pointer', title: 'Remove this filter', textContent: 'Only rule ' + af.rule + '  \u00D7', onclick: () => { af.rule = ''; redo(); } }) : '',
+      ...af.exclude.map((r) => el('span', { className: 'pill off', style: 'cursor:pointer', title: 'Show this rule again', textContent: 'Hiding rule ' + r + '  \u00D7', onclick: () => { af.exclude = af.exclude.filter((x) => x !== r); redo(); } })));
+    const ruleOnly = (id) => { af.rule = id; af.exclude = af.exclude.filter((x) => x !== id); redo(); };
+    const hideRule = (id) => { if (!af.exclude.includes(id) && af.exclude.length < 20) af.exclude.push(id); if (af.rule === id) af.rule = ''; redo(); };
     const pick = (k, v) => { af[k] = v; af.offset = 0; if (k === 'agent') agent.value = v; if (k === 'mitre') mitre.value = v; if (k === 'severity') sev.value = v; detail.replaceChildren(); loadList(); };
     const chip = (label, k, v, n) => el('span', { className: 'pill off', style: 'cursor:pointer', title: 'Show only this', textContent: label + (n !== undefined ? '  ' + n : ''), onclick: () => pick(k, v) });
     const section = (title, items) => el('div', { style: 'margin-top:10px' }, el('span', { className: 'mute', style: 'margin-right:8px', textContent: title }), items.length ? items : el('span', { className: 'mute', textContent: 'none' }));
@@ -1668,7 +1677,8 @@ async function pgEndpoints() {
           section('Machines', t.agents.slice(0, 6).map((x) => chip(x.name, 'agent', x.name, x.count))),
           section('ATT&CK techniques', t.techniques.slice(0, 8).map((x) => chip(x.id + (x.name ? ' ' + x.name : ''), 'mitre', x.id, x.count))),
           section('Tactics', t.tactics.slice(0, 8).map((x) => el('span', { className: 'pill off', textContent: x.name + '  ' + x.count }))),
-          section('Rules', t.rules.slice(0, 5).map((x) => el('span', { className: 'pill off', textContent: x.rule_id + ' ' + (x.description || '') + '  ' + x.count }))),
+          section('Rules', t.rules.slice(0, 8).flatMap((x) => [el('span', { className: 'pill off', style: 'cursor:pointer', title: 'Show only rule ' + x.rule_id, textContent: x.rule_id + ' ' + (x.description || '') + '  ' + x.count, onclick: () => ruleOnly(x.rule_id) }),
+            el('span', { className: 'pill off', style: 'cursor:pointer;margin-right:6px', title: 'Hide rule ' + x.rule_id, textContent: 'hide', onclick: () => hideRule(x.rule_id) })])),
           el('div', { className: 'mute', style: 'margin-top:8px;font-size:12px', textContent: 'Severity counts are exact. The machines, techniques, tactics and rules are counted over the newest ' + r.sampled.events + ' alerts' + (r.sampled.truncated ? ' (there are more)' : '') + '.' })));
       } catch (e) { cards.replaceChildren(el('div', { className: 'err', textContent: e.message })); }
     };
@@ -1687,8 +1697,8 @@ async function pgEndpoints() {
     const apply = () => { af.window = win.value; af.severity = sev.value; af.q = text.value; af.agent = agent.value; af.mitre = mitre.value; af.offset = 0; detail.replaceChildren(); loadCards(); loadList(); };
     text.onkeydown = agent.onkeydown = mitre.onkeydown = (ev) => { if (ev.key === 'Enter') apply(); };
     win.onchange = apply; sev.onchange = apply;
-    loadCards(); loadList();
-    return [el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px' }, win, sev, text, agent, mitre, el('button', { className: 'btn pri', textContent: 'Search', onclick: apply })), cards, card('', out), detail];
+    drawActive(); loadCards(); loadList();
+    return [el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px' }, win, sev, text, agent, mitre, el('button', { className: 'btn pri', textContent: 'Search', onclick: apply })), active, cards, card('', out), detail];
   };
 
   const notices = () => [card('Third-party notices',

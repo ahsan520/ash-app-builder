@@ -16,7 +16,8 @@ const SAMPLE = 1000;                                            // the newest al
 const MAX_TEXT = 200;
 const RULE_ID_RE = /^[0-9]{1,10}$/;
 const MITRE_RE = /^T[0-9]{4}(\.[0-9]{3})?$/;
-const QUERY_KEYS = ['window', 'severity', 'agent', 'rule', 'mitre', 'q', 'limit', 'offset'];
+const MAX_EXCLUDE = 20;
+const QUERY_KEYS = ['window', 'severity', 'agent', 'rule', 'exclude_rule', 'mitre', 'q', 'limit', 'offset'];
 
 const one = (v) => (Array.isArray(v) ? (v.length === 1 ? v[0] : undefined) : v);
 function intIn(v, lo, hi, what) {
@@ -30,12 +31,17 @@ const plainText = (s) => typeof s === 'string' && s.length >= 1 && s.length <= M
 function parseQuery(query, { now = Date.now() } = {}) {
   const q = query || {};
   for (const k of Object.keys(q)) if (!QUERY_KEYS.includes(k)) return { error: `unknown parameter "${k}"` };
-  const out = { window: DEFAULT_WINDOW, severity: null, agent: null, rule: null, mitre: null, q: null, limit: DEFAULT_LIMIT, offset: 0 };
+  const out = { window: DEFAULT_WINDOW, severity: null, agent: null, rule: null, exclude: [], mitre: null, q: null, limit: DEFAULT_LIMIT, offset: 0 };
   const w = one(q.window);
   if (q.window !== undefined) { if (typeof w !== 'string' || !Object.prototype.hasOwnProperty.call(WINDOWS, w)) return { error: `window must be one of ${Object.keys(WINDOWS).join(', ')}` }; out.window = w; }
   if (q.severity !== undefined && q.severity !== '') { const s = one(q.severity); if (!SEVERITIES.includes(s)) return { error: `severity must be one of ${SEVERITIES.join(', ')}` }; out.severity = s; }
   if (q.agent !== undefined && q.agent !== '') { const a = one(q.agent); if (!plainText(a)) return { error: `agent must be text of 1 to ${MAX_TEXT} characters on one line` }; out.agent = a; }
   if (q.rule !== undefined && q.rule !== '') { const r = one(q.rule); if (typeof r !== 'string' || !RULE_ID_RE.test(r)) return { error: 'rule must be a rule id (digits)' }; out.rule = r; }
+  if (q.exclude_rule !== undefined && q.exclude_rule !== '') {
+    const x = one(q.exclude_rule); const ids = typeof x === 'string' ? [...new Set(x.split(','))] : null;
+    if (!ids || ids.length > MAX_EXCLUDE || !ids.every((r) => RULE_ID_RE.test(r))) return { error: `exclude_rule must be up to ${MAX_EXCLUDE} rule ids (digits) separated by commas` };
+    out.exclude = ids;
+  }
   if (q.mitre !== undefined && q.mitre !== '') { const m = one(q.mitre); if (typeof m !== 'string' || !MITRE_RE.test(m)) return { error: 'mitre must be a technique id such as T1110 or T1110.003' }; out.mitre = m; }
   if (q.q !== undefined && q.q !== '') { const t = one(q.q); if (!plainText(t)) return { error: `q must be text of 1 to ${MAX_TEXT} characters on one line` }; out.q = t; }
   if (q.limit !== undefined) { const r = intIn(q.limit, 1, MAX_LIMIT, 'limit'); if (r.error) return r; out.limit = r.value; }
@@ -50,6 +56,7 @@ function conditions(f, { withSeverity }) {
   if (withSeverity && f.severity) c.push({ t: 'and', args: [{ t: 'num', field: '@alert_level', op: '>=', value: BANDS[f.severity][0] }, { t: 'num', field: '@alert_level', op: '<=', value: BANDS[f.severity][1] }] });
   if (f.agent) c.push({ t: 'eq', field: '@agent_name', value: f.agent });
   if (f.rule) c.push({ t: 'eq', field: '@rule_id', value: f.rule });
+  if (f.exclude && f.exclude.length) c.push({ t: 'in', field: '@rule_id', values: f.exclude, neg: true });   // hide these rules
   if (f.mitre) c.push({ t: 'contains', field: '@mitre_ids', value: f.mitre, neg: false });   // T1110 also finds T1110.003: the id is a fixed width, so no other id contains it
   if (f.q) c.push({ t: 'or', args: ['@rule_description', '@agent_name', '@user', '@file_path', '@src_ip'].map((field) => ({ t: 'contains', field, value: f.q, neg: false })) });
   return c;
@@ -143,5 +150,5 @@ function severityCounts(rows) {
   return out;
 }
 
-module.exports = { SOURCE_TYPE, SEVERITIES, BANDS, WINDOWS, DEFAULT_WINDOW, MAX_LIMIT, DEFAULT_LIMIT, MAX_OFFSET, SAMPLE, QUERY_KEYS, MITRE_RE,
+module.exports = { SOURCE_TYPE, SEVERITIES, BANDS, WINDOWS, DEFAULT_WINDOW, MAX_LIMIT, DEFAULT_LIMIT, MAX_OFFSET, MAX_EXCLUDE, SAMPLE, QUERY_KEYS, MITRE_RE,
   parseQuery, listPlan, severityPlan, samplePlan, shape, mitreOf, mitreUrl, topLists, severityCounts };

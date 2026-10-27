@@ -51,6 +51,12 @@ describe('parseQuery', () => {
     const r = ok({ severity: '', agent: '', q: '', rule: '', mitre: '' }); assert.deepStrictEqual([r.severity, r.agent, r.q, r.rule, r.mitre], [null, null, null, null, null]);
     bad({ severity: ['high', 'low'] }); bad({ window: ['1h', '7d'] }); bad({ limit: ['5', '6'] });
   });
+  it('exclude_rule is up to 20 rule ids, deduplicated; anything else is refused', () => {
+    assert.deepStrictEqual(ok({ exclude_rule: '510,2902,510' }).exclude, ['510', '2902']); assert.deepStrictEqual(ok({}).exclude, []); assert.deepStrictEqual(ok({ exclude_rule: '' }).exclude, []);
+    assert.strictEqual(ok({ exclude_rule: Array.from({ length: 20 }, (_, i) => i + 1).join(',') }).exclude.length, 20);
+    bad({ exclude_rule: Array.from({ length: 21 }, (_, i) => i + 1).join(',') }, /exclude_rule/);
+    for (const v of ['1,,2', ',1', '1,', 'a', '1;2', '1 ,2', "1' OR 1=1", ['1', '2'], '9'.repeat(11)]) bad({ exclude_rule: v }, /exclude_rule/);
+  });
   it('limit is 1 to 100 and offset 0 to 900, whole numbers only', () => {
     assert.strictEqual(ok({ limit: '100' }).limit, 100); assert.strictEqual(ok({ limit: '1' }).limit, 1); assert.strictEqual(ok({ offset: '900' }).offset, 900); assert.strictEqual(ok({ offset: '0' }).offset, 0);
     for (const v of ['0', '101', '-1', '1.5', 'abc', '', '1e2', ' 5']) bad({ limit: v }, /limit/);
@@ -65,7 +71,7 @@ describe('parseQuery', () => {
 describe('the query plans', () => {
   const full = () => alerts.parseQuery({ window: '7d', severity: 'high', agent: "web1' OR '1'='1", rule: '5763', mitre: 'T1110', q: '100%_ \\ "quoted"', limit: '20', offset: '40' }, { now: NOW });
   it('every plan the module can build passes the event store\'s own plan validation, with and without every filter', () => {
-    const combos = [{}, { severity: 'critical' }, { agent: 'a' }, { rule: '1' }, { mitre: 'T1110.003' }, { q: 'x' }, full()];
+    const combos = [{}, { severity: 'critical' }, { agent: 'a' }, { rule: '1' }, { exclude_rule: '1,2' }, { mitre: 'T1110.003' }, { q: 'x' }, full()];
     for (const c of combos) {
       const f = c.from ? c : alerts.parseQuery(c, { now: NOW });
       for (const mk of [alerts.listPlan, alerts.severityPlan, alerts.samplePlan]) assert.doesNotThrow(() => validatePlan(mk(f)), JSON.stringify(c));
@@ -242,6 +248,15 @@ describe('routes', () => {
   });
   it('filters combine (all must match)', async () => {
     assert.deepStrictEqual(rules(await list('?agent=db1&severity=high&mitre=T1110')), ['1004']); assert.deepStrictEqual(rules(await list('?agent=web1&severity=low')), []);
+  });
+  it('exclude_rule hides those rules from the list and the cards, and combines with the other filters', async () => {
+    assert.deepStrictEqual(rules(await list('?exclude_rule=1001,1002')), ['1003', '1004', '1005', '1006', '1007', '1008']);
+    assert.deepStrictEqual(rules(await list('?exclude_rule=1003&severity=high')), ['1004']); assert.deepStrictEqual(rules(await list('?exclude_rule=9999')).length, 8);
+    assert.deepStrictEqual(rules(await list('?rule=1004&exclude_rule=1004')), []);
+    const s = (await get('/v1/endpoints/alerts/summary?exclude_rule=1001,1004')).body;
+    assert.strictEqual(s.severity.total, 6); assert.deepStrictEqual([s.severity.critical, s.severity.high], [1, 1]); assert.ok(!s.top.rules.some((r) => ['1001', '1004'].includes(r.rule_id)));
+    assert.ok(!s.top.techniques.some((t) => t.id === 'T1110' || t.id === 'T1110.003'));
+    assert.strictEqual((await get('/v1/endpoints/alerts?exclude_rule=1,,2')).status, 400);
   });
   it('pages with limit and offset, says when there is more, and does not repeat or skip an alert', async () => {
     const p1 = await list('?limit=3'), p2 = await list('?limit=3&offset=3'), p3 = await list('?limit=3&offset=6');

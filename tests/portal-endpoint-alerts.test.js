@@ -204,4 +204,23 @@ describe('Endpoints page, Alerts tab', () => {
     assert.ok(p.all().some((n) => n.attrs && n.attrs.className === 'pill' && /nowrap/.test(n.attrs.style || '') && /^high/.test(n.attrs.textContent || '')));
     assert.ok(p.all().some((n) => n.attrs && /nowrap/.test(n.attrs.style || '') && n.attrs.textContent === '2026-10-27 10:00:00'));
   });
+  it('rule chips: clicking a rule shows only that rule, "hide" hides it; both appear as removable filters and go to the list and the cards', async () => {
+    const p = await open(); await p.alertsTab();
+    await p.clickStarting('5763 sshd: brute force');
+    assert.strictEqual(qs(p.listCalls().at(-1).p).rule, '5763'); assert.strictEqual(qs(p.sumCalls().at(-1).p).rule, '5763'); assert.match(p.text(), /Only rule 5763/);
+    await p.clickStarting('Only rule 5763');
+    assert.ok(!('rule' in qs(p.listCalls().at(-1).p))); assert.ok(!/Only rule/.test(p.text()));
+    await p.clickTitle('Hide rule 5763');
+    assert.strictEqual(qs(p.listCalls().at(-1).p).exclude_rule, '5763'); assert.strictEqual(qs(p.sumCalls().at(-1).p).exclude_rule, '5763'); assert.strictEqual(qs(p.listCalls().at(-1).p).offset, '0'); assert.match(p.text(), /Hiding rule 5763/);
+    await p.clickStarting('Hiding rule 5763');
+    assert.ok(!('exclude_rule' in qs(p.listCalls().at(-1).p))); assert.ok(!/Hiding rule/.test(p.text()));
+  });
+  it('hiding a rule that is shown "only" drops the "only" filter, and showing one "only" un-hides it', async () => {
+    const p = await open(); await p.alertsTab();
+    await p.clickStarting('5763 sshd: brute force'); await p.clickTitle('Hide rule 5763');
+    let l = qs(p.listCalls().at(-1).p); assert.ok(!('rule' in l)); assert.strictEqual(l.exclude_rule, '5763');
+    await p.clickStarting('5763 sshd: brute force');
+    l = qs(p.listCalls().at(-1).p); assert.strictEqual(l.rule, '5763'); assert.ok(!('exclude_rule' in l));
+  });
 });
+
