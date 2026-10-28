@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const net = require('net');
 const nodemailer = require('nodemailer');
 const { guardedLookup, resolveAllowed, checkUrl } = require('./net-guard');
+const { mitreView } = require('../endpoints/endpoint-alerts');
 
 const iso = (v) => (v ? new Date(v).toISOString() : null);
 const one = (s, n = 200) => String(s ?? '').replace(/[\r\n\t]+/g, ' ').slice(0, n);
@@ -15,14 +16,25 @@ const one = (s, n = 200) => String(s ?? '').replace(/[\r\n\t]+/g, ' ').slice(0, 
 const isResolved = (m) => m.kind === 'recovered';
 const tag = (m) => (isResolved(m) ? 'RESOLVED' : String(m.severity).toUpperCase());
 
-function buildMessage(alert, { tenantName, baseUrl, isTest } = {}) {
+// ATT&CK of an alert (E4j): the techniques and tactics the dispatcher worked out (stored on the alert, else from its sample events), through the same safe view as the alert page
+// (wrong shapes ignored, a link only for a well-formed id). null when there is nothing, so a message without ATT&CK looks exactly as before.
+const NOTIFY_TECHNIQUES = 5;
+function mitreOfMessage(mitre) {
+  const v = mitreView(mitre);
+  const techniques = v.techniques.slice(0, NOTIFY_TECHNIQUES).map((t) => ({ id: t.id, name: t.name, url: t.url }));
+  return techniques.length || v.tactics.length ? { techniques, tactics: v.tactics, more: Math.max(0, v.techniques.length - techniques.length) } : null;
+}
+// One line for chat and email text: "T1110 Brute Force, T1078 (+2 more); Credential Access".
+const mitreLine = (m) => (m.mitre ? [m.mitre.techniques.map((t) => one(t.id, 20) + (t.name ? ' ' + one(t.name, 80) : '')).join(', ') + (m.mitre.more ? ` (+${m.mitre.more} more)` : ''), m.mitre.tactics.map((t) => one(t, 100)).join(', ')].filter(Boolean).join('; ') : '');
+
+function buildMessage(alert, { tenantName, baseUrl, isTest, mitre } = {}) {
   const base = baseUrl && !String(baseUrl).startsWith('__') ? String(baseUrl).replace(/\/$/, '') : null;
   let details = alert.details || {};
   if (JSON.stringify(details).length > 4000) details = { truncated: true };
   return {
     id: alert.id, title: one(alert.title, 300), severity: alert.severity, rule: one(alert.rule_name, 255), summary: one(alert.summary, 1500),
     status: alert.status, eventCount: alert.event_count, firstEventAt: iso(alert.first_event_at), lastEventAt: iso(alert.last_event_at),
-    createdAt: iso(alert.created_at), details, tenant: tenantName || '', url: base ? `${base}/portal/#/incidents` : null, isTest: !!isTest,
+    createdAt: iso(alert.created_at), details, tenant: tenantName || '', url: base ? `${base}/portal/#/incidents` : null, isTest: !!isTest, mitre: mitreOfMessage(mitre),
   };
 }
 const testMessage = (opts) => buildMessage({ id: crypto.randomUUID(), title: 'ASIX test notification', severity: 'low', rule_name: 'Notification test',
@@ -66,6 +78,7 @@ function slackPayload(m) {
         { type: 'mrkdwn', text: `*Severity*\n${m.severity}` }, { type: 'mrkdwn', text: `*Rule*\n${mrkdwn(m.rule)}` },
         { type: 'mrkdwn', text: `*Events*\n${m.eventCount}` }, { type: 'mrkdwn', text: `*Status*\n${m.status}` }] },
       ...(m.summary ? [{ type: 'section', text: { type: 'mrkdwn', text: mrkdwn(m.summary).slice(0, 2900) } }] : []),
+      ...(m.mitre ? [{ type: 'section', text: { type: 'mrkdwn', text: `*ATT&CK*\n${mrkdwn(mitreLine(m))}`.slice(0, 2900) } }] : []),
       ...(m.url ? [{ type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: 'Open in ASIX' }, url: m.url }] }] : []),
     ],
   };
@@ -81,7 +94,7 @@ function webhookPayload(cfg, m, action = 'trigger') {
       body: [
         { type: 'TextBlock', size: 'Large', weight: 'Bolder', wrap: true, text: `[${tag(m)}] ${m.title}` },
         { type: 'FactSet', facts: [{ title: 'Severity', value: m.severity }, { title: 'Rule', value: m.rule }, { title: 'Events', value: String(m.eventCount) },
-          { title: 'Status', value: m.status }, ...(m.tenant ? [{ title: 'Tenant', value: m.tenant }] : [])] },
+          { title: 'Status', value: m.status }, ...(m.tenant ? [{ title: 'Tenant', value: m.tenant }] : []), ...(m.mitre ? [{ title: 'ATT&CK', value: mitreLine(m) }] : [])] },
         ...(m.summary ? [{ type: 'TextBlock', wrap: true, text: m.summary }] : []),
       ],
       actions: m.url ? [{ type: 'Action.OpenUrl', title: 'Open in ASIX', url: m.url }] : [],
@@ -91,14 +104,14 @@ function webhookPayload(cfg, m, action = 'trigger') {
     const p = { routing_key: cfg.routing_key, event_action: action, dedup_key: `asix-${m.id}` };
     if (action === 'trigger') {
       p.payload = { summary: `[${m.severity.toUpperCase()}] ${m.title}`.slice(0, 1024), source: m.tenant ? `ASIX (${m.tenant})` : 'ASIX', severity: PD_SEV[m.severity] || 'info',
-        component: m.rule, custom_details: { summary: m.summary, event_count: m.eventCount, first_event_at: m.firstEventAt, last_event_at: m.lastEventAt, details: m.details } };
+        component: m.rule, custom_details: { summary: m.summary, event_count: m.eventCount, first_event_at: m.firstEventAt, last_event_at: m.lastEventAt, details: m.details, ...(m.mitre ? { mitre: m.mitre } : {}) } };
       if (m.url) p.links = [{ href: m.url, text: 'Open in ASIX' }];
     }
     return p;
   }
   return { event: isResolved(m) ? 'alert.resolved' : 'alert.created', sent_at: new Date().toISOString(), test: m.isTest || undefined, tenant: { name: m.tenant },
     alert: { id: m.id, title: m.title, severity: m.severity, status: m.status, rule_name: m.rule, summary: m.summary, event_count: m.eventCount,
-      first_event_at: m.firstEventAt, last_event_at: m.lastEventAt, url: m.url, details: m.details } };
+      first_event_at: m.firstEventAt, last_event_at: m.lastEventAt, url: m.url, details: m.details, ...(m.mitre ? { mitre: m.mitre } : {}) } };
 }
 async function sendWebhook(cfg, m, deps) {
   const send = (payload) => {
@@ -118,7 +131,7 @@ async function sendWebhook(cfg, m, deps) {
 const h = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const SEV_COLOR = { critical: '#d1242f', high: '#e16f24', medium: '#bf8700', low: '#0969da' };
 function emailContent(m) {
-  const rows = [['Severity', m.severity], ['Rule', m.rule], ['Events', m.eventCount], ['Status', m.status], ['First event (UTC)', m.firstEventAt], ['Last event (UTC)', m.lastEventAt], ['Tenant', m.tenant]].filter((r) => r[1] !== '' && r[1] != null);
+  const rows = [['Severity', m.severity], ['Rule', m.rule], ['Events', m.eventCount], ['Status', m.status], ['First event (UTC)', m.firstEventAt], ['Last event (UTC)', m.lastEventAt], ['Tenant', m.tenant], ['ATT&CK', mitreLine(m)]].filter((r) => r[1] !== '' && r[1] != null);
   const text = [`[${tag(m)}] ${m.title}`, '', m.summary, '', ...rows.map(([k, v]) => `${k}: ${v}`), ...(m.url ? ['', `Open in ASIX: ${m.url}`] : [])].join('\n');
   const html = `<div style="font-family:system-ui,Arial,sans-serif;max-width:640px"><div style="border-left:6px solid ${SEV_COLOR[m.severity] || '#555'};padding:6px 14px"><h2 style="margin:0 0 4px">${h(m.title)}</h2><div style="color:#555">${h(m.summary)}</div></div>`
     + `<table style="border-collapse:collapse;margin-top:12px">${rows.map(([k, v]) => `<tr><td style="padding:3px 14px 3px 0;color:#666">${h(k)}</td><td>${h(v)}</td></tr>`).join('')}</table>`

@@ -9,6 +9,7 @@ const db = require('../db');
 const box = require('./secret-box');
 const { buildMessage, sendToChannel } = require('./senders');
 const recovered = require('./recovered');
+const { withMitre } = require('../alerts/with-mitre');
 
 const LOCK_KEY = 7412003;
 const MAX_ATTEMPTS = 5;
@@ -60,7 +61,10 @@ async function deliverOne(tenantId, d, deps) {
   try {
     const { ch, al, tenantName } = await load(tenantId, d);
     if (!ch || !al || !ch.enabled) return finish(tenantId, d.id, "UPDATE notification_deliveries SET status = 'skipped', last_error = $2 WHERE id = $1", [ch ? 'channel disabled' : 'channel or alert removed']);
-    const message = buildMessage(al, { tenantName, baseUrl: process.env.ASIX_PUBLIC_URL });
+    // ATT&CK of the alert (E4j): stored on it, else from its sample events. Best effort: a failure sends the message without it.
+    let mitre = null;
+    try { const d = al.details || {}; mitre = (await withMitre(tenantId, [{ mitre_stored: d.mitre, sample_ids: d.sample_event_ids }]))[0].mitre; } catch (e) { console.error('[notify] ATT&CK lookup failed:', e.message); }
+    const message = buildMessage(al, { tenantName, baseUrl: process.env.ASIX_PUBLIC_URL, mitre });
     await (deps.send || sendToChannel)(ch.type, box.decrypt(ch.config_enc), message, deps.sendDeps);
     return finish(tenantId, d.id, "UPDATE notification_deliveries SET status = 'sent', sent_at = localtimestamp, last_error = NULL WHERE id = $1", []);
   } catch (err) {
