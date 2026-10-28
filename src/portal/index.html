@@ -1741,7 +1741,7 @@ async function pgEndpoints() {
           cfg ? '' : section('Tactics', t.tactics.slice(0, 8).map((x) => el('span', { className: 'pill off', textContent: x.name + '  ' + x.count }))),
           section('Rules', t.rules.slice(0, 8).flatMap((x) => [el('span', { className: 'pill off', style: 'cursor:pointer', title: 'Show only rule ' + x.rule_id, textContent: x.rule_id + ' ' + (x.description || '') + '  ' + x.count, onclick: () => ruleOnly(x.rule_id) }),
             el('span', { className: 'pill off', style: 'cursor:pointer;margin-right:6px', title: 'Hide rule ' + x.rule_id, textContent: 'hide', onclick: () => hideRule(x.rule_id) })])),
-          el('div', { className: 'mute', style: 'margin-top:8px;font-size:12px', textContent: 'Severity counts are exact. The ' + (fim ? 'changes, files, machines, techniques, tactics and rules' : cfg ? 'results, policies, machines and rules' : 'machines, techniques, tactics and rules') + ' are counted over the newest ' + r.sampled.events + ' alerts' + (r.sampled.truncated ? ' (there are more)' : '') + (fim ? ' file change alerts' : cfg ? ' configuration check alerts' : '') + '.' })));
+          el('div', { className: 'mute', style: 'margin-top:8px;font-size:12px', textContent: 'Severity counts are exact. The ' + (fim ? 'changes, files, machines, techniques, tactics and rules' : cfg ? 'results, policies, machines and rules' : 'machines, techniques, tactics and rules') + ' are counted over the newest ' + r.sampled.events + (fim ? ' file change' : cfg ? ' configuration check' : '') + ' alerts' + (r.sampled.truncated ? ' (there are more)' : '') + '.' })));
       } catch (e) { cards.replaceChildren(el('div', { className: 'err', textContent: e.message })); }
     };
     const loadList = async () => {
