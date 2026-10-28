@@ -18,6 +18,7 @@
 //   * text sorts by bytes (PostgreSQL by the database collation)
 
 const { EventStoreError } = require('../events/event-store');
+const { hasWildcard, globToLike } = require('./xql-plan');
 
 const MAX_NUMERIC_SEGMENTS = 3;
 const NUM_SEG = /^-?\d+$/;
@@ -119,7 +120,14 @@ function toClickHouse(plan, tenant, table) {
   let select = null, group = null, aggs = null, order = null;
 
   for (const s of plan.stages) {
-    if (s.op === 'dataset') where.push(`source_type IN (${s.names.map((n) => E.str(n)).join(', ')})`);
+    if (s.op === 'dataset') {
+      const exact = s.names.filter((n) => !hasWildcard(n)), globs = s.names.filter(hasWildcard), parts = [];
+      if (!globs.some((n) => /^\*+$/.test(n))) {
+        if (exact.length) parts.push(`source_type IN (${exact.map((n) => E.str(n)).join(', ')})`);
+        for (const g of globs) parts.push(`like(toString(source_type), ${E.str(globToLike(g))})`);
+        where.push(parts.length === 1 ? parts[0] : `(${parts.join(' OR ')})`);
+      }
+    }
     else if (s.op === 'filter') where.push(`(${E.expr(s.expr)})`);
     else if (s.op === 'fields') select = s.items.map((i) => ({ name: i.alias, expr: E.textField(i.field) }));
     else if (s.op === 'comp') {

@@ -2304,7 +2304,7 @@ const XTEMPLATES = [
   { name: 'Search raw text', q: 'dataset = syslog\n| filter _raw contains "error"\n| limit 100' },
 ];
 const XHELP = [
-  ['dataset', 'Pick the data to query by source type.', ['dataset = syslog', 'dataset in (syslog, mac)']],
+  ['dataset', 'Pick the data to query by source type. * matches any run of characters; quote names with a dash.', ['dataset = syslog', 'dataset in (syslog, mac)', 'dataset = *', 'dataset = endpoint*', 'dataset = "endpoint-alert"']],
   ['filter', 'Keep events that match. Operators: = != > < >= <= ~= (regex), contains, not contains, in, not in. Combine with and / or / not and parentheses.', ['| filter host = "web01" and _raw contains "failed"', '| filter app_name in ("sshd", "sudo") or severity <= 3']],
   ['fields', 'Choose and rename the columns returned.', ['| fields _time, host, app_name as app, message']],
   ['sort', 'Order the results.', ['| sort desc _time', '| sort asc host']],
@@ -2405,7 +2405,7 @@ async function pgSearch() {
   function schemaView() {
     const f = XS.fields; if (!f) return el('div', { className: 'card mute', textContent: 'Loading schema...' });
     return el('div', {}, card('Datasets (last 7 days)', table([{ h: 'Dataset', f: (d) => d.name }, { h: 'Events', f: (d) => d.events.toLocaleString() }, { h: 'Last received (UTC)', f: (d) => when(d.last_seen) },
-      { h: '', f: (d) => el('button', { className: 'btn', textContent: 'Query', onclick: () => { setQ('dataset = ' + d.name + '\n| limit 100'); XS.tab = 'results'; draw(); } }) }], f.datasets, 'No events yet.')),
+      { h: '', f: (d) => el('button', { className: 'btn', textContent: 'Query', onclick: () => { setQ('dataset = ' + (/^[A-Za-z_][A-Za-z0-9_.]*$/.test(d.name) ? d.name : JSON.stringify(String(d.name))) + '\n| limit 100'); XS.tab = 'results'; draw(); } }) }], f.datasets, 'No events yet.')),
       card('Fields (sampled from the latest ' + (f.sampled_events || 0).toLocaleString() + ' events)', el('div', { className: 'mute', style: 'margin-bottom:8px', textContent: 'Built-in: _time, _raw, _id, source_type, collector_id' }), table([{ h: 'Field', cls: 'mono', f: (x) => x.name }, { h: 'Seen in events', f: (x) => x.events.toLocaleString() }, { h: '', f: (x) => el('button', { className: 'btn', textContent: 'Add to fields', onclick: () => { append('| fields ' + x.name); XS.tab = 'results'; draw(); } }) }], f.fields, 'No parsed fields yet.')));
   }
   function draw() {

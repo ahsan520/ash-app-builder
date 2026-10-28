@@ -4,7 +4,7 @@
 // follows it: missing values are null, eq is null when the field is missing (so `not host = "a"` drops
 // events without a host), nulls sort last, and the text of _time looks like 2026-10-13 10:00:01.123.
 
-const { summarize, COLUMN_NAMES } = require('./xql-plan');
+const { summarize, COLUMN_NAMES, datasetMatches } = require('./xql-plan');
 const { clampSubject } = require('../security/regex-safety');
 
 const NUM_RE = /^-?[0-9]+(\.[0-9]+)?$/;
@@ -108,7 +108,7 @@ function runPlan(plan, events) {
   let evs = events.filter((e) => {
     const t = Date.parse(eventTime(e));
     if ((from !== null && t < from) || (to !== null && t > to)) return false;
-    for (const d of S.datasets) if (!d.names.includes(e.source_type)) return false;
+    for (const d of S.datasets) if (!datasetMatches(d.names, e.source_type)) return false;
     for (const f of S.filters) if (evalExpr(f, e, cache) !== true) return false;
     return true;
   });

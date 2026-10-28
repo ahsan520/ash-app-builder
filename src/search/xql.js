@@ -42,6 +42,11 @@ function tokenize(src) {
       const m = /^-?[0-9]+(\.[0-9]+)?/.exec(src.slice(i));
       out.push({ t: 'num', v: Number(m[0]), pos }); i += m[0].length; continue;
     }
+    if (/[A-Za-z_*]/.test(c)) {
+      // a name with a * in it (endpoint*, win*-event, *) is a wildcard name; only a dataset stage accepts one (see the dataset stage)
+      const g = /^[A-Za-z0-9_.*-]+/.exec(src.slice(i));
+      if (g && g[0].includes('*')) { out.push({ t: 'glob', v: g[0], pos }); i += g[0].length; continue; }
+    }
     if (/[A-Za-z_]/.test(c)) {
       const m = /^[A-Za-z_][A-Za-z0-9_.]*/.exec(src.slice(i));
       out.push({ t: 'id', v: m[0], l: m[0].toLowerCase(), pos }); i += m[0].length; continue;
@@ -145,10 +150,10 @@ function parse(query, { from = null, to = null, limit } = {}) {
     if (kw === 'dataset') {
       if (idx !== 0) c.fail('dataset must be the first stage');
       c.next();
-      if (c.isOp('=')) { c.next(); const n = c.cur; if (!n || (n.t !== 'id' && n.t !== 'str')) c.fail('expected a dataset name'); c.next(); out.push({ op: 'dataset', names: [String(n.v)], list: false }); }
+      if (c.isOp('=')) { c.next(); const n = c.cur; if (!n || (n.t !== 'id' && n.t !== 'str' && n.t !== 'glob')) c.fail('expected a dataset name'); c.next(); out.push({ op: 'dataset', names: [String(n.v)], list: false }); }
       else if (c.isKw('in')) {
         c.next(); c.expectOp('('); const names = [];
-        do { const n = c.cur; if (!n || (n.t !== 'id' && n.t !== 'str')) c.fail('expected a dataset name'); c.next(); names.push(String(n.v)); } while (c.isOp(',') && c.next());
+        do { const n = c.cur; if (!n || (n.t !== 'id' && n.t !== 'str' && n.t !== 'glob')) c.fail('expected a dataset name'); c.next(); names.push(String(n.v)); } while (c.isOp(',') && c.next());
         c.expectOp(')'); out.push({ op: 'dataset', names, list: true });
       } else c.fail('expected = or in');
     } else if (kw === 'filter') {

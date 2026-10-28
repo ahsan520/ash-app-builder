@@ -3,7 +3,7 @@
 // bound as a parameter ($n) or was checked against a strict identifier pattern when the plan was parsed or
 // validated; nothing is concatenated into the SQL. The SQL is the same text the old one-pass compiler made.
 
-const { MAX_LIMIT } = require('./xql-plan');
+const { MAX_LIMIT, hasWildcard, globToLike } = require('./xql-plan');
 
 const TS = 'COALESCE(event_time, received_at)';
 const COLUMNS = { _raw: 'raw', raw: 'raw', source_type: 'source_type', dataset: 'source_type', collector_id: 'collector_id', _id: 'id::text', _insert_time: 'received_at', _time: TS };
@@ -47,8 +47,13 @@ class Emitter {
 }
 
 function datasetSql(E, s) {
-  if (!s.list) return `source_type = ${E.bind(String(s.names[0]))}`;
-  return `source_type IN (${s.names.map((n) => E.bind(String(n))).join(', ')})`;
+  const exact = s.names.filter((n) => !hasWildcard(n)), globs = s.names.filter(hasWildcard);
+  if (globs.some((n) => /^\*+$/.test(n))) return 'TRUE';   // dataset = *  : every source type
+  const parts = [];
+  if (exact.length === 1 && !s.list) parts.push(`source_type = ${E.bind(String(exact[0]))}`);
+  else if (exact.length) parts.push(`source_type IN (${exact.map((n) => E.bind(String(n))).join(', ')})`);
+  for (const g of globs) parts.push(`source_type LIKE ${E.bind(globToLike(g))}`);
+  return parts.length === 1 ? parts[0] : `(${parts.join(' OR ')})`;
 }
 
 // plan -> { sql, values, mode, columns, limit }. The first parameter is the tenant.

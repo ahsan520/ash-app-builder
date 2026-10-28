@@ -151,6 +151,14 @@ function summarize(plan) {
   return out;
 }
 
-module.exports = { PARSED_PATH_RE, IDENT_RE,
+// Dataset names may hold * (any run of characters, including none): dataset = *, dataset = endpoint*, dataset in (syslog, win*). Every engine asks these helpers, so the
+// three agree. A name without * is an exact match; the match is case-sensitive like an exact name.
+const hasWildcard = (name) => String(name).includes('*');
+// SQL LIKE pattern (backslash escapes, as in PostgreSQL and ClickHouse): the name's own % _ and \ are literal, each * becomes %.
+const globToLike = (name) => String(name).replace(/[\\%_]/g, '\\$&').replace(/\*/g, '%');
+const globToRegExp = (name) => new RegExp('^' + String(name).replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$', 's');
+const datasetMatches = (names, sourceType) => names.some((n) => (hasWildcard(n) ? globToRegExp(n).test(String(sourceType)) : n === sourceType));
+
+module.exports = { hasWildcard, globToLike, globToRegExp, datasetMatches, PARSED_PATH_RE, IDENT_RE,
   IDENT_RE, AGGS, MAX_LIMIT, DEFAULT_LIMIT, COLUMN_NAMES, PlanError, validatePlan, summarize,
 };
