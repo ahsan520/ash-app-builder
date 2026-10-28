@@ -76,7 +76,7 @@ const fim = (p, list = p.listCalls()) => list.filter((c) => qs(c.p).kind === 'fi
 describe('Endpoints page, File integrity tab', () => {
   it('there is a File integrity tab after Alerts; nothing is loaded for it until it is opened, and the Alerts tab never asks for file integrity', async () => {
     const p = await open(fimAnswers()); const labels = p.all().filter((n) => typeof n === 'object' && n.attrs && n.attrs.className && String(n.attrs.className).startsWith('xtab')).map((n) => n.attrs.textContent);
-    assert.deepStrictEqual(labels, ['Overview', 'Agents', 'Alerts', 'File integrity', 'Add a machine', 'Third-party notices']);
+    assert.deepStrictEqual(labels, ['Overview', 'Agents', 'Alerts', 'File integrity', 'Configuration checks', 'Add a machine', 'Third-party notices']);
     assert.ok(!p.calls.some((c) => c.p.includes('/alerts')), 'no alert call before a tab is opened');
     await p.alertsTab(); assert.ok(p.calls.filter((c) => c.p.includes('/alerts')).every((c) => !c.p.includes('kind=')), 'the Alerts tab sends no kind');
   });

@@ -1,5 +1,5 @@
 'use strict';
-// Endpoint alerts as the Endpoints section shows them (docs/endpoints.md, task E6b). The alerts themselves are ordinary events of source type
+// Endpoint alerts as the Endpoints section shows them (docs/endpoints.md, tasks E6b, E6c and E6d). The alerts themselves are ordinary events of source type
 // `endpoint-alert` (E4d: a broker reads the manager's alert file; the `wazuh_alert` parsing rule adds alert_level, alert_severity, user, src_ip, file_path ...).
 // This module is the read side only and holds no I/O: it turns a request's query string into an XQL query plan (src/search/xql-plan.js, no SQL, run by whichever
 // event store the install uses), and turns the stored events back into the small shapes the portal draws, with the MITRE ATT&CK details split out per alert.
@@ -17,9 +17,11 @@ const MAX_TEXT = 200;
 const RULE_ID_RE = /^[0-9]{1,10}$/;
 const MITRE_RE = /^T[0-9]{4}(\.[0-9]{3})?$/;
 const MAX_EXCLUDE = 20;
-const KINDS = ['file_integrity'];                                // E6c: `kind=file_integrity` keeps only the alerts that report a file change (the manager's file integrity monitoring)
+const KINDS = ['file_integrity', 'configuration'];               // E6c: `kind=file_integrity` keeps only the alerts that report a file change (the manager's file integrity monitoring); E6d: `kind=configuration` keeps only the configuration check (SCA) alerts
 const FILE_EVENTS = ['added', 'modified', 'deleted'];            // what the manager reports for a monitored file
-const QUERY_KEYS = ['window', 'severity', 'agent', 'rule', 'exclude_rule', 'mitre', 'q', 'kind', 'file_event', 'limit', 'offset'];
+// E6d: what the manager says about one configuration check. The query token is what a person types; the stored value is the manager's own text.
+const CHECK_RESULTS = { passed: 'passed', failed: 'failed', not_applicable: 'not applicable' };
+const QUERY_KEYS = ['window', 'severity', 'agent', 'rule', 'exclude_rule', 'mitre', 'q', 'kind', 'file_event', 'check_result', 'policy', 'limit', 'offset'];
 
 const one = (v) => (Array.isArray(v) ? (v.length === 1 ? v[0] : undefined) : v);
 function intIn(v, lo, hi, what) {
@@ -33,7 +35,7 @@ const plainText = (s) => typeof s === 'string' && s.length >= 1 && s.length <= M
 function parseQuery(query, { now = Date.now() } = {}) {
   const q = query || {};
   for (const k of Object.keys(q)) if (!QUERY_KEYS.includes(k)) return { error: `unknown parameter "${k}"` };
-  const out = { window: DEFAULT_WINDOW, severity: null, agent: null, rule: null, exclude: [], mitre: null, q: null, kind: null, file_event: null, limit: DEFAULT_LIMIT, offset: 0 };
+  const out = { window: DEFAULT_WINDOW, severity: null, agent: null, rule: null, exclude: [], mitre: null, q: null, kind: null, file_event: null, check_result: null, policy: null, limit: DEFAULT_LIMIT, offset: 0 };
   const w = one(q.window);
   if (q.window !== undefined) { if (typeof w !== 'string' || !Object.prototype.hasOwnProperty.call(WINDOWS, w)) return { error: `window must be one of ${Object.keys(WINDOWS).join(', ')}` }; out.window = w; }
   if (q.severity !== undefined && q.severity !== '') { const s = one(q.severity); if (!SEVERITIES.includes(s)) return { error: `severity must be one of ${SEVERITIES.join(', ')}` }; out.severity = s; }
@@ -48,6 +50,8 @@ function parseQuery(query, { now = Date.now() } = {}) {
   if (q.q !== undefined && q.q !== '') { const t = one(q.q); if (!plainText(t)) return { error: `q must be text of 1 to ${MAX_TEXT} characters on one line` }; out.q = t; }
   if (q.kind !== undefined && q.kind !== '') { const k = one(q.kind); if (!KINDS.includes(k)) return { error: `kind must be ${KINDS.join(' or ')}` }; out.kind = k; }
   if (q.file_event !== undefined && q.file_event !== '') { const v = one(q.file_event); if (!FILE_EVENTS.includes(v)) return { error: `file_event must be one of ${FILE_EVENTS.join(', ')}` }; out.file_event = v; }
+  if (q.check_result !== undefined && q.check_result !== '') { const v = one(q.check_result); if (typeof v !== 'string' || !Object.prototype.hasOwnProperty.call(CHECK_RESULTS, v)) return { error: `check_result must be one of ${Object.keys(CHECK_RESULTS).join(', ')}` }; out.check_result = v; }
+  if (q.policy !== undefined && q.policy !== '') { const v = one(q.policy); if (!plainText(v)) return { error: `policy must be text of 1 to ${MAX_TEXT} characters on one line` }; out.policy = v; }
   if (q.limit !== undefined) { const r = intIn(q.limit, 1, MAX_LIMIT, 'limit'); if (r.error) return r; out.limit = r.value; }
   if (q.offset !== undefined) { const r = intIn(q.offset, 0, MAX_OFFSET, 'offset'); if (r.error) return r; out.offset = r.value; }
   out.from = new Date(now - WINDOWS[out.window]).toISOString();
@@ -63,8 +67,11 @@ function conditions(f, { withSeverity }) {
   if (f.exclude && f.exclude.length) c.push({ t: 'in', field: '@rule_id', values: f.exclude, neg: true });   // hide these rules
   if (f.kind === 'file_integrity') c.push({ t: 'isnull', field: '@file_path', neg: true });   // only alerts that name a file (the parsing rule copies syscheck_path into file_path)
   if (f.file_event) c.push({ t: 'eq', field: '@file_event', value: f.file_event });
+  if (f.kind === 'configuration') c.push({ t: 'isnull', field: '@data_sca_policy', neg: true });   // E6d: only alerts of a configuration check policy (the broker flattens data.sca.policy into data_sca_policy)
+  if (f.check_result) c.push({ t: 'eq', field: '@data_sca_check_result', value: CHECK_RESULTS[f.check_result] });
+  if (f.policy) c.push({ t: 'eq', field: '@data_sca_policy', value: f.policy });
   if (f.mitre) c.push({ t: 'contains', field: '@mitre_ids', value: f.mitre, neg: false });   // T1110 also finds T1110.003: the id is a fixed width, so no other id contains it
-  if (f.q) c.push({ t: 'or', args: ['@rule_description', '@agent_name', '@user', '@file_path', '@src_ip'].map((field) => ({ t: 'contains', field, value: f.q, neg: false })) });
+  if (f.q) c.push({ t: 'or', args: ['@rule_description', '@agent_name', '@user', '@file_path', '@src_ip'].concat(f.kind === 'configuration' ? ['@data_sca_check_title', '@data_sca_policy'] : []).map((field) => ({ t: 'contains', field, value: f.q, neg: false })) });
   return c;
 }
 function stages(f, opts) {
@@ -105,6 +112,20 @@ function mitreOf(parsed) {
   };
 }
 
+// E6d: the configuration check (SCA) details of an alert, or null when the alert is not one. The manager sends either one check that changed result
+// (data.sca.type "check": check id, title, result, previous result) or a scan summary (type "summary": passed, failed, invalid, total checks, score). The broker flattens
+// data.sca.* into data_sca_*; every value is text there, so numbers are read back with num(). Only the fields the list needs are named here: the rest are in `configuration` of one alert.
+function configOf(p) {
+  const policy = text(p.data_sca_policy, 200);
+  if (policy === null) return null;
+  const result = text(p.data_sca_check_result, 50), prev = text(p.data_sca_check_previous_result, 50);
+  return {
+    policy, policy_id: text(p.data_sca_policy_id, 100), type: text(p.data_sca_type, 20),
+    check_id: text(p.data_sca_check_id, 50), check_title: oneLine(text(p.data_sca_check_title, 500)), result, previous_result: prev,
+    score: num(p.data_sca_score), passed: num(p.data_sca_passed), failed: num(p.data_sca_failed), invalid: num(p.data_sca_invalid), total: num(p.data_sca_total_checks),
+  };
+}
+
 // An envelope -> what the list shows. `detail` adds the long text and every extra field the broker sent.
 function shape(e, { detail = false } = {}) {
   const p = e.parsed || {}, level = num(p.alert_level !== undefined ? p.alert_level : p.rule_level);
@@ -115,15 +136,17 @@ function shape(e, { detail = false } = {}) {
     agent: { id: text(p.agent_id, 20), name: text(p.agent_name, 200), ip: text(p.agent_ip, 64) },
     groups: list(p.rule_groups).slice(0, 30), mitre: mitreOf(p),
     file_path: text(p.file_path, 500), file_event: text(p.file_event, 50), user: text(p.user, 200), src_ip: text(p.src_ip, 64),
+    config: configOf(p),
   };
   if (detail) {
     out.manager = text(p.manager_name, 200); out.decoder = text(p.decoder_name, 200); out.location = text(p.location, 500); out.alert_ref = text(p.alert_id, 100);
     out.full_log = text(p.full_log, 2000);
     // Everything the broker flattened from the alert's data and file integrity objects (data_<path>, syscheck_<path>). The wazuh marker field and the grouping keys are not shown.
-    out.data = {}; out.file_integrity = {};
+    out.data = {}; out.file_integrity = {}; out.configuration = {};
     for (const [k, v] of Object.entries(p)) {
       if (v === null || v === undefined || typeof v === 'object') continue;
-      if (k.startsWith('data_')) out.data[k.slice(5)] = text(v, 500);
+      if (k.startsWith('data_sca_')) out.configuration[k.slice(9)] = text(v, 1000);   // E6d: the check's own text (title, rationale, remediation, compliance ...), kept out of the general details
+      else if (k.startsWith('data_')) out.data[k.slice(5)] = text(v, 500);
       else if (k.startsWith('syscheck_')) out.file_integrity[k.slice(9)] = text(v, 500);
     }
   }
@@ -132,7 +155,7 @@ function shape(e, { detail = false } = {}) {
 
 // Top lists from a sample of events (already shaped or raw envelopes). Counts are of the sample, which the caller says out loud.
 function topLists(events, n = 10) {
-  const rules = new Map(), agents = new Map(), tech = new Map(), tactics = new Map(), files = new Map(), fileEvents = new Map();
+  const rules = new Map(), agents = new Map(), tech = new Map(), tactics = new Map(), files = new Map(), fileEvents = new Map(), policies = new Map(), results = new Map();
   const bump = (m, key, init) => { const r = m.get(key); if (r) r.count += 1; else m.set(key, { ...init, count: 1 }); };
   for (const e of events) {
     const a = shape(e);
@@ -142,9 +165,11 @@ function topLists(events, n = 10) {
     for (const t of a.mitre.tactics) bump(tactics, t, { name: t });
     if (a.file_path) bump(files, a.file_path, { path: a.file_path });                  // E6c: the files that changed most, and what happened to them
     if (a.file_path && a.file_event) bump(fileEvents, a.file_event, { name: a.file_event });
+    if (a.config) bump(policies, a.config.policy, { name: a.config.policy });                       // E6d: the policies that raised most, and the results of single checks (a summary has no check result)
+    if (a.config && a.config.result) bump(results, a.config.result, { name: a.config.result });
   }
   const top = (m) => [...m.values()].sort((x, y) => y.count - x.count || ((x.id || x.rule_id || x.name || x.path) < (y.id || y.rule_id || y.name || y.path) ? -1 : 1)).slice(0, n);
-  return { rules: top(rules), agents: top(agents), techniques: top(tech), tactics: top(tactics), files: top(files), file_events: top(fileEvents) };
+  return { rules: top(rules), agents: top(agents), techniques: top(tech), tactics: top(tactics), files: top(files), file_events: top(fileEvents), policies: top(policies), check_results: top(results) };
 }
 
 // comp rows -> { critical, high, medium, low, unknown, total }. A row with no severity (an alert the parsing rule did not reach) counts as unknown.
@@ -199,5 +224,5 @@ async function mitreForGroups(store, tenantId, rows) {
 }
 
 module.exports = {
-  KINDS, FILE_EVENTS, mitreOfEvents, mitreView, mitreForGroups, MAX_ALERT_TECHNIQUES, MAX_ALERT_TACTICS, SOURCE_TYPE, SEVERITIES, BANDS, WINDOWS, DEFAULT_WINDOW, MAX_LIMIT, DEFAULT_LIMIT, MAX_OFFSET, MAX_EXCLUDE, SAMPLE, QUERY_KEYS, MITRE_RE,
+  KINDS, FILE_EVENTS, CHECK_RESULTS, mitreOfEvents, mitreView, mitreForGroups, MAX_ALERT_TECHNIQUES, MAX_ALERT_TACTICS, SOURCE_TYPE, SEVERITIES, BANDS, WINDOWS, DEFAULT_WINDOW, MAX_LIMIT, DEFAULT_LIMIT, MAX_OFFSET, MAX_EXCLUDE, SAMPLE, QUERY_KEYS, MITRE_RE,
   parseQuery, listPlan, severityPlan, samplePlan, shape, mitreOf, mitreUrl, topLists, severityCounts };

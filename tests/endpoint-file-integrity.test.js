@@ -25,7 +25,7 @@ describe('parseQuery and plans', () => {
     assert.strictEqual(ok({ kind: 'file_integrity' }).kind, 'file_integrity'); assert.strictEqual(ok({ kind: '' }).kind, null);
     for (const v of ['added', 'modified', 'deleted']) assert.strictEqual(ok({ file_event: v }).file_event, v);
     bad({ kind: 'alerts' }, /kind must be/); bad({ kind: ['file_integrity', 'x'] }); bad({ kind: 'FILE_INTEGRITY' });
-    bad({ file_event: 'renamed' }, /file_event must be one of/); bad({ file_event: 'x' }); assert.deepStrictEqual(alerts.FILE_EVENTS, ['added', 'modified', 'deleted']); assert.deepStrictEqual(alerts.KINDS, ['file_integrity']); bad({ file_event: ['added', 'deleted'] }); bad({ file_event: "added' or 1=1" });
+    bad({ file_event: 'renamed' }, /file_event must be one of/); bad({ file_event: 'x' }); assert.deepStrictEqual(alerts.FILE_EVENTS, ['added', 'modified', 'deleted']); assert.deepStrictEqual(alerts.KINDS, ['file_integrity', 'configuration']); bad({ file_event: ['added', 'deleted'] }); bad({ file_event: "added' or 1=1" });
   });
   it('kind adds a "file path is present" condition and file_event an equality on the parsed field; both plans validate, and a plain request adds neither', () => {
     const f = ok({ kind: 'file_integrity', file_event: 'deleted' });
