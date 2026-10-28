@@ -333,12 +333,12 @@ const BUILTIN_RULES = [
   },
   {
     key: 'endpoint-alert-repeated', kind: 'bioc', category: 'Endpoint Security', name: 'Endpoint security alert repeating',
-    description: 'One medium level (5 to 7) manager rule fired 10 times or more on one machine within 15 minutes.',
+    description: 'One medium level (5 to 7) manager rule fired 10 times or more on one machine within 15 minutes. Configuration check alerts (one per failed check after a scan) are left out: the Configuration checks tab shows them.',
     severity: 'medium', mitre: [],
     definition: {
       source_type: 'endpoint-alert', group_by: 'field:alert_key', threshold: 10, window_minutes: 15, run_every_minutes: 1, mode: 'realtime',
       suppression: { enabled: true, minutes: 60 },
-      xql: 'alert_level >= 5 and alert_level < 8',
+      xql: 'alert_level >= 5 and alert_level < 8 and data_sca_policy = null',   // E4k: a scan raises one alert per failed check, which is not an attack repeating
     },
   },
   {
@@ -353,6 +353,13 @@ const BUILTIN_RULES = [
   },
 ];
 
+// Built-in rules whose shipped query changed after installs had already stored the old one. ensureBuiltinRules inserts once and
+// never overwrites, so a changed rule would stay old on every existing tenant. For each entry the stored rule is replaced ONLY
+// while its query is still exactly the old shipped text (nobody edited it); an edited rule is left alone.
+const BUILTIN_RULE_UPGRADES = [
+  { key: 'endpoint-alert-repeated', oldXql: 'alert_level >= 5 and alert_level < 8' },   // E4k: now also leaves out configuration check alerts
+];
+
 async function ensureBuiltinRules(client, tenantId) {
   for (const r of BUILTIN_RULES) {
     await client.query(
@@ -361,6 +368,16 @@ async function ensureBuiltinRules(client, tenantId) {
        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
        ON CONFLICT (tenant_id, builtin_key) DO NOTHING`,
       [tenantId, r.name, r.description, r.severity, r.key, r.mitre, JSON.stringify(r.definition), r.kind, r.category]
+    );
+  }
+  for (const u of BUILTIN_RULE_UPGRADES) {
+    const r = BUILTIN_RULES.find((b) => b.key === u.key);
+    if (!r) continue;
+    await client.query(
+      `UPDATE detection_rules
+          SET definition = jsonb_set(definition, '{xql}', to_jsonb($4::text)), description = $5
+        WHERE tenant_id = $1 AND builtin_key = $2 AND definition->>'xql' = $3`,
+      [tenantId, u.key, u.oldXql, r.definition.xql, r.description]
     );
   }
 }

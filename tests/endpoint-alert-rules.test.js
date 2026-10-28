@@ -68,8 +68,17 @@ describe('the built-in endpoint rules', () => {
   });
   it('every tenant gets them: ensureBuiltinRules inserts each key once and a repeat changes nothing (ON CONFLICT DO NOTHING)', async () => {
     const calls = []; await ensureBuiltinRules({ query: async (sql, args) => { calls.push({ sql, args }); } }, TENANT);
-    const keys = calls.map((c) => c.args[4]); for (const k of Object.keys(RULES)) assert.strictEqual(keys.filter((x) => x === k).length, 1, k);
-    assert.ok(calls.every((c) => /ON CONFLICT \(tenant_id, builtin_key\) DO NOTHING/.test(c.sql)));
+    const inserts = calls.filter((c) => /^\s*INSERT/.test(c.sql));
+    const keys = inserts.map((c) => c.args[4]); for (const k of Object.keys(RULES)) assert.strictEqual(keys.filter((x) => x === k).length, 1, k);
+    assert.ok(inserts.every((c) => /ON CONFLICT \(tenant_id, builtin_key\) DO NOTHING/.test(c.sql)));
+  });
+  it('E4k: a stored rule is replaced only while its query is still exactly the old shipped text', async () => {
+    const calls = []; await ensureBuiltinRules({ query: async (sql, args) => { calls.push({ sql, args }); } }, TENANT);
+    const ups = calls.filter((c) => /^\s*UPDATE/.test(c.sql));
+    assert.strictEqual(ups.length, 1);
+    assert.ok(/definition->>'xql' = \$3/.test(ups[0].sql) && /tenant_id = \$1 AND builtin_key = \$2/.test(ups[0].sql));
+    assert.deepStrictEqual(ups[0].args.slice(0, 4), [TENANT, 'endpoint-alert-repeated', 'alert_level >= 5 and alert_level < 8', RULES['endpoint-alert-repeated'].definition.xql]);
+    assert.ok(RULES['endpoint-alert-repeated'].definition.xql.includes('data_sca_policy'));
   });
 });
 
@@ -94,6 +103,20 @@ describe('the rules run over alerts the way the rule runner runs them', () => {
     const old = Array.from({ length: 10 }, (_, i) => alertEvent({ level: 6, ruleId: '60122', agent: 'WIN-OLD', minsAgo: 14 + i }));   // only the first falls inside 15 minutes
     const wrongLevel = Array.from({ length: 10 }, () => alertEvent({ level: 9, ruleId: '60122', agent: 'WIN-HI' }));
     assert.deepStrictEqual(await run('endpoint-alert-repeated', [...ten, ...nine, ...old, ...wrongLevel]), { '60122 on WIN-DC01': 10 });
+  });
+  it('E4k repeated: configuration check alerts (a failed check each, after a scan) never count, other alerts of the same rule still do', async () => {
+    const sca = (agent, i, ruleId = '19007') => alertEvent({ level: 7, ruleId, agent, minsAgo: i % 10, fields: { data_sca_policy: 'CIS Ubuntu', data_sca_check_result: 'failed' } });
+    const scaOnly = Array.from({ length: 40 }, (_, i) => sca('asix1', i));
+    const plain = Array.from({ length: 10 }, (_, i) => alertEvent({ level: 7, ruleId: '60122', agent: 'win1', minsAgo: i }));
+    const mixedSca = Array.from({ length: 12 }, (_, i) => sca('web2', i, '60122'));
+    const mixedPlain = Array.from({ length: 9 }, (_, i) => alertEvent({ level: 7, ruleId: '60122', agent: 'web2', minsAgo: i }));
+    assert.deepStrictEqual(await run('endpoint-alert-repeated', [...scaOnly, ...plain, ...mixedSca, ...mixedPlain]), { '60122 on win1': 10 });
+    assert.deepStrictEqual(await run('endpoint-alert-repeated', [...mixedSca, ...mixedPlain, alertEvent({ level: 7, ruleId: '60122', agent: 'web2', minsAgo: 1 })]), { '60122 on web2': 10 });
+  });
+  it('E4k: the other endpoint rules are not changed by the configuration check condition', async () => {
+    const hi = alertEvent({ level: 9, ruleId: '19009', agent: 'asix1', fields: { data_sca_policy: 'p' } });
+    assert.deepStrictEqual(await run('endpoint-alert-high', [hi]), { '19009 on asix1': 1 });
+    for (const k of ['endpoint-alert-critical', 'endpoint-alert-high', 'endpoint-fim-sensitive']) assert.ok(!RULES[k].definition.xql.includes('data_sca_policy'), k);
   });
   it('sensitive file: Linux and Windows paths below level 8; not other paths; not level 8 and up (the level rules own those)', async () => {
     const f = (path, level = 7, agent = 'web1') => alertEvent({ level, ruleId: '550', agent, fields: { syscheck_path: path, syscheck_event: 'modified' } });
