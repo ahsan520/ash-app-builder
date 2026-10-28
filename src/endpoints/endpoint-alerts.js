@@ -17,7 +17,9 @@ const MAX_TEXT = 200;
 const RULE_ID_RE = /^[0-9]{1,10}$/;
 const MITRE_RE = /^T[0-9]{4}(\.[0-9]{3})?$/;
 const MAX_EXCLUDE = 20;
-const QUERY_KEYS = ['window', 'severity', 'agent', 'rule', 'exclude_rule', 'mitre', 'q', 'limit', 'offset'];
+const KINDS = ['file_integrity'];                                // E6c: `kind=file_integrity` keeps only the alerts that report a file change (the manager's file integrity monitoring)
+const FILE_EVENTS = ['added', 'modified', 'deleted'];            // what the manager reports for a monitored file
+const QUERY_KEYS = ['window', 'severity', 'agent', 'rule', 'exclude_rule', 'mitre', 'q', 'kind', 'file_event', 'limit', 'offset'];
 
 const one = (v) => (Array.isArray(v) ? (v.length === 1 ? v[0] : undefined) : v);
 function intIn(v, lo, hi, what) {
@@ -31,7 +33,7 @@ const plainText = (s) => typeof s === 'string' && s.length >= 1 && s.length <= M
 function parseQuery(query, { now = Date.now() } = {}) {
   const q = query || {};
   for (const k of Object.keys(q)) if (!QUERY_KEYS.includes(k)) return { error: `unknown parameter "${k}"` };
-  const out = { window: DEFAULT_WINDOW, severity: null, agent: null, rule: null, exclude: [], mitre: null, q: null, limit: DEFAULT_LIMIT, offset: 0 };
+  const out = { window: DEFAULT_WINDOW, severity: null, agent: null, rule: null, exclude: [], mitre: null, q: null, kind: null, file_event: null, limit: DEFAULT_LIMIT, offset: 0 };
   const w = one(q.window);
   if (q.window !== undefined) { if (typeof w !== 'string' || !Object.prototype.hasOwnProperty.call(WINDOWS, w)) return { error: `window must be one of ${Object.keys(WINDOWS).join(', ')}` }; out.window = w; }
   if (q.severity !== undefined && q.severity !== '') { const s = one(q.severity); if (!SEVERITIES.includes(s)) return { error: `severity must be one of ${SEVERITIES.join(', ')}` }; out.severity = s; }
@@ -44,6 +46,8 @@ function parseQuery(query, { now = Date.now() } = {}) {
   }
   if (q.mitre !== undefined && q.mitre !== '') { const m = one(q.mitre); if (typeof m !== 'string' || !MITRE_RE.test(m)) return { error: 'mitre must be a technique id such as T1110 or T1110.003' }; out.mitre = m; }
   if (q.q !== undefined && q.q !== '') { const t = one(q.q); if (!plainText(t)) return { error: `q must be text of 1 to ${MAX_TEXT} characters on one line` }; out.q = t; }
+  if (q.kind !== undefined && q.kind !== '') { const k = one(q.kind); if (!KINDS.includes(k)) return { error: `kind must be ${KINDS.join(' or ')}` }; out.kind = k; }
+  if (q.file_event !== undefined && q.file_event !== '') { const v = one(q.file_event); if (!FILE_EVENTS.includes(v)) return { error: `file_event must be one of ${FILE_EVENTS.join(', ')}` }; out.file_event = v; }
   if (q.limit !== undefined) { const r = intIn(q.limit, 1, MAX_LIMIT, 'limit'); if (r.error) return r; out.limit = r.value; }
   if (q.offset !== undefined) { const r = intIn(q.offset, 0, MAX_OFFSET, 'offset'); if (r.error) return r; out.offset = r.value; }
   out.from = new Date(now - WINDOWS[out.window]).toISOString();
@@ -57,6 +61,8 @@ function conditions(f, { withSeverity }) {
   if (f.agent) c.push({ t: 'eq', field: '@agent_name', value: f.agent });
   if (f.rule) c.push({ t: 'eq', field: '@rule_id', value: f.rule });
   if (f.exclude && f.exclude.length) c.push({ t: 'in', field: '@rule_id', values: f.exclude, neg: true });   // hide these rules
+  if (f.kind === 'file_integrity') c.push({ t: 'isnull', field: '@file_path', neg: true });   // only alerts that name a file (the parsing rule copies syscheck_path into file_path)
+  if (f.file_event) c.push({ t: 'eq', field: '@file_event', value: f.file_event });
   if (f.mitre) c.push({ t: 'contains', field: '@mitre_ids', value: f.mitre, neg: false });   // T1110 also finds T1110.003: the id is a fixed width, so no other id contains it
   if (f.q) c.push({ t: 'or', args: ['@rule_description', '@agent_name', '@user', '@file_path', '@src_ip'].map((field) => ({ t: 'contains', field, value: f.q, neg: false })) });
   return c;
@@ -126,7 +132,7 @@ function shape(e, { detail = false } = {}) {
 
 // Top lists from a sample of events (already shaped or raw envelopes). Counts are of the sample, which the caller says out loud.
 function topLists(events, n = 10) {
-  const rules = new Map(), agents = new Map(), tech = new Map(), tactics = new Map();
+  const rules = new Map(), agents = new Map(), tech = new Map(), tactics = new Map(), files = new Map(), fileEvents = new Map();
   const bump = (m, key, init) => { const r = m.get(key); if (r) r.count += 1; else m.set(key, { ...init, count: 1 }); };
   for (const e of events) {
     const a = shape(e);
@@ -134,9 +140,11 @@ function topLists(events, n = 10) {
     if (a.agent.name) bump(agents, a.agent.name, { name: a.agent.name });
     for (const t of a.mitre.techniques) bump(tech, t.id, { id: t.id, name: t.name, url: t.url });
     for (const t of a.mitre.tactics) bump(tactics, t, { name: t });
+    if (a.file_path) bump(files, a.file_path, { path: a.file_path });                  // E6c: the files that changed most, and what happened to them
+    if (a.file_path && a.file_event) bump(fileEvents, a.file_event, { name: a.file_event });
   }
-  const top = (m) => [...m.values()].sort((x, y) => y.count - x.count || ((x.id || x.rule_id || x.name) < (y.id || y.rule_id || y.name) ? -1 : 1)).slice(0, n);
-  return { rules: top(rules), agents: top(agents), techniques: top(tech), tactics: top(tactics) };
+  const top = (m) => [...m.values()].sort((x, y) => y.count - x.count || ((x.id || x.rule_id || x.name || x.path) < (y.id || y.rule_id || y.name || y.path) ? -1 : 1)).slice(0, n);
+  return { rules: top(rules), agents: top(agents), techniques: top(tech), tactics: top(tactics), files: top(files), file_events: top(fileEvents) };
 }
 
 // comp rows -> { critical, high, medium, low, unknown, total }. A row with no severity (an alert the parsing rule did not reach) counts as unknown.
@@ -191,5 +199,5 @@ async function mitreForGroups(store, tenantId, rows) {
 }
 
 module.exports = {
-  mitreOfEvents, mitreView, mitreForGroups, MAX_ALERT_TECHNIQUES, MAX_ALERT_TACTICS, SOURCE_TYPE, SEVERITIES, BANDS, WINDOWS, DEFAULT_WINDOW, MAX_LIMIT, DEFAULT_LIMIT, MAX_OFFSET, MAX_EXCLUDE, SAMPLE, QUERY_KEYS, MITRE_RE,
+  KINDS, FILE_EVENTS, mitreOfEvents, mitreView, mitreForGroups, MAX_ALERT_TECHNIQUES, MAX_ALERT_TACTICS, SOURCE_TYPE, SEVERITIES, BANDS, WINDOWS, DEFAULT_WINDOW, MAX_LIMIT, DEFAULT_LIMIT, MAX_OFFSET, MAX_EXCLUDE, SAMPLE, QUERY_KEYS, MITRE_RE,
   parseQuery, listPlan, severityPlan, samplePlan, shape, mitreOf, mitreUrl, topLists, severityCounts };

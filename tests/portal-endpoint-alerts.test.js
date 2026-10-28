@@ -139,7 +139,7 @@ describe('Endpoints page, Alerts tab', () => {
     await p.click('2026-10-27 10:00:00');   // the first row's time
     assert.strictEqual(p.calls.at(-1).p, '/v1/endpoints/alerts/' + A1); const t = p.text();
     assert.match(t, /rule level 10/); assert.match(t, /mgr-lab/); assert.match(t, /sshd/); assert.match(t, /\/var\/log\/auth\.log/); assert.match(t, /MITRE ATT&CK/); assert.match(t, /Brute Force/); assert.match(t, /Credential Access/);
-    assert.match(t, /Failed password for invalid user admin/); assert.match(t, /Details from the event/); assert.match(t, /srcip/); assert.ok(!/File integrity/.test(t), 'an empty section is not drawn');
+    assert.match(t, /Failed password for invalid user admin/); assert.match(t, /Details from the event/); assert.match(t, /srcip/); assert.ok(!p.all().some((n) => n.tag === 'h3' && n.textContent === 'File integrity'), 'an empty section is not drawn');   // the tab of that name (E6c) is not a section
     const links = p.all().filter((n) => n.tag === 'a'); assert.deepStrictEqual(links.map((n) => [n.attrs.href, n.attrs.target, n.attrs.rel, n.attrs.textContent]), [['https://attack.mitre.org/techniques/T1110/', '_blank', 'noopener noreferrer', 'T1110']]);
   });
   it('a technique link is made only for a real ATT&CK technique address; anything else is plain text', async () => {

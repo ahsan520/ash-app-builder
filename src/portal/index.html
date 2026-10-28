@@ -1517,6 +1517,7 @@ const EP_SEV = ['critical', 'high', 'medium', 'low'];
 const EP_SEVCOL = { critical: '#e5484d', high: '#f08a24', medium: '#e6c229', low: '#6b7fa3', unknown: '#6b7fa3' };
 const EP_WINDOWS = [['1h', 'Last hour'], ['24h', 'Last 24 hours'], ['7d', 'Last 7 days'], ['30d', 'Last 30 days']];
 const EP_ALERT_LIMIT = 50;
+const EP_FILE_EVENTS = ['added', 'modified', 'deleted'];
 const EP_MITRE_URL = /^https:\/\/attack\.mitre\.org\/techniques\/T[0-9]{4}(\/[0-9]{3})?\/$/;
 const epSevPill = (s, n) => el('span', { className: 'pill', style: 'white-space:nowrap;background:' + (EP_SEVCOL[s] || EP_SEVCOL.unknown) + '26;color:' + (EP_SEVCOL[s] || EP_SEVCOL.unknown) + ';font-weight:600', textContent: (s || 'unknown') + (n !== undefined ? '  ' + n : '') });
 const epMitreLink = (t) => (EP_MITRE_URL.test(t.url || '') ? el('a', { href: t.url, target: '_blank', rel: 'noopener noreferrer', textContent: t.id }) : el('span', { textContent: t.id }));
@@ -1537,7 +1538,8 @@ async function pgEndpoints() {
   if (up) { try { sum = (await api('/v1/endpoints/agents/summary')).summary; } catch (e) { sumErr = e.message; } }
   let tab = 'overview';
   const q = { search: '', status: '', sort: '+name', offset: 0 };
-  const af = { window: '24h', severity: '', q: '', agent: '', mitre: '', rule: '', exclude: [], offset: 0 };
+  const af = { window: '24h', severity: '', q: '', agent: '', mitre: '', rule: '', exclude: [], file_event: '', offset: 0 };
+  const ff = { window: '24h', severity: '', q: '', agent: '', mitre: '', rule: '', exclude: [], file_event: '', offset: 0 };   // the File integrity tab keeps its own filters
   const tabs = el('div', {}), body = el('div', {});
 
   const overview = () => [
@@ -1638,33 +1640,38 @@ async function pgEndpoints() {
       howto), out];
   };
 
+  // E6c: the same view with fim = true is the File integrity tab: the alerts that report a file change (kind=file_integrity), by file and by what happened to it.
   // Alerts: the endpoint alerts stored from the manager (source type endpoint-alert), read through GET /v1/endpoints/alerts, /alerts/summary and /alerts/:id (permission search:events:read,
   // the one that reads event contents). Cards on top (severity counts, then the top machines, rules and ATT&CK techniques of the newest alerts), a filtered list, and one alert open under
   // it with its MITRE ATT&CK techniques and tactics, the log line and the details. Read only; every value is shown as text.
-  const alertsView = () => {
+  const alertsView = (fim) => {
+    const S = fim ? ff : af;
     const cards = el('div', {}), out = el('div', {}), detail = el('div', {});
     const win = el('select', {}, ...EP_WINDOWS.map(([v, t]) => el('option', { value: v, textContent: t })));
     const sev = el('select', {}, el('option', { value: '', textContent: 'Any severity' }), ...EP_SEV.map((v) => el('option', { value: v, textContent: v })));
-    const text = el('input', { placeholder: 'Search description, user, address or file', value: af.q, style: 'min-width:260px' });
-    const agent = el('input', { placeholder: 'Machine name', value: af.agent, style: 'width:160px' });
-    const mitre = el('input', { placeholder: 'ATT&CK id, e.g. T1110', value: af.mitre, style: 'width:170px' });
-    win.value = af.window; sev.value = af.severity;
+    const text = el('input', { placeholder: fim ? 'Search file path, machine, user or description' : 'Search description, user, address or file', value: S.q, style: 'min-width:260px' });
+    const agent = el('input', { placeholder: 'Machine name', value: S.agent, style: 'width:160px' });
+    const mitre = el('input', { placeholder: 'ATT&CK id, e.g. T1110', value: S.mitre, style: 'width:170px' });
+    const fev = el('select', {}, el('option', { value: '', textContent: 'Any change' }), ...EP_FILE_EVENTS.map((v) => el('option', { value: v, textContent: v })));
+    win.value = S.window; sev.value = S.severity; fev.value = S.file_event;
     const base = (withSeverity) => {
-      const p = new URLSearchParams({ window: af.window });
-      if (withSeverity && af.severity) p.set('severity', af.severity);
-      for (const k of ['q', 'agent', 'mitre']) if (af[k].trim()) p.set(k, af[k].trim());
-      if (af.rule) p.set('rule', af.rule);
-      if (af.exclude.length) p.set('exclude_rule', af.exclude.join(','));
+      const p = new URLSearchParams({ window: S.window });
+      if (withSeverity && S.severity) p.set('severity', S.severity);
+      for (const k of ['q', 'agent', 'mitre']) if (S[k].trim()) p.set(k, S[k].trim());
+      if (fim) p.set('kind', 'file_integrity');
+      if (fim && S.file_event) p.set('file_event', S.file_event);
+      if (S.rule) p.set('rule', S.rule);
+      if (S.exclude.length) p.set('exclude_rule', S.exclude.join(','));
       return p;
     };
     const active = el('div', { style: 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px' });
-    const redo = () => { af.offset = 0; detail.replaceChildren(); drawActive(); loadCards(); loadList(); };
+    const redo = () => { S.offset = 0; detail.replaceChildren(); drawActive(); loadCards(); loadList(); };
     const drawActive = () => active.replaceChildren(
-      af.rule ? el('span', { className: 'pill off', style: 'cursor:pointer', title: 'Remove this filter', textContent: 'Only rule ' + af.rule + '  \u00D7', onclick: () => { af.rule = ''; redo(); } }) : '',
-      ...af.exclude.map((r) => el('span', { className: 'pill off', style: 'cursor:pointer', title: 'Show this rule again', textContent: 'Hiding rule ' + r + '  \u00D7', onclick: () => { af.exclude = af.exclude.filter((x) => x !== r); redo(); } })));
-    const ruleOnly = (id) => { af.rule = id; af.exclude = af.exclude.filter((x) => x !== id); redo(); };
-    const hideRule = (id) => { if (!af.exclude.includes(id) && af.exclude.length < 20) af.exclude.push(id); if (af.rule === id) af.rule = ''; redo(); };
-    const pick = (k, v) => { af[k] = v; af.offset = 0; if (k === 'agent') agent.value = v; if (k === 'mitre') mitre.value = v; if (k === 'severity') sev.value = v; detail.replaceChildren(); loadList(); };
+      S.rule ? el('span', { className: 'pill off', style: 'cursor:pointer', title: 'Remove this filter', textContent: 'Only rule ' + S.rule + '  \u00D7', onclick: () => { S.rule = ''; redo(); } }) : '',
+      ...S.exclude.map((r) => el('span', { className: 'pill off', style: 'cursor:pointer', title: 'Show this rule again', textContent: 'Hiding rule ' + r + '  \u00D7', onclick: () => { S.exclude = S.exclude.filter((x) => x !== r); redo(); } })));
+    const ruleOnly = (id) => { S.rule = id; S.exclude = S.exclude.filter((x) => x !== id); redo(); };
+    const hideRule = (id) => { if (!S.exclude.includes(id) && S.exclude.length < 20) S.exclude.push(id); if (S.rule === id) S.rule = ''; redo(); };
+    const pick = (k, v) => { S[k] = v; S.offset = 0; if (k === 'agent') agent.value = v; if (k === 'mitre') mitre.value = v; if (k === 'severity') sev.value = v; if (k === 'file_event') fev.value = v; if (k === 'q') text.value = v; detail.replaceChildren(); loadList(); };
     const chip = (label, k, v, n) => el('span', { className: 'pill off', style: 'cursor:pointer', title: 'Show only this', textContent: label + (n !== undefined ? '  ' + n : ''), onclick: () => pick(k, v) });
     const section = (title, items) => el('div', { style: 'margin-top:10px' }, el('span', { className: 'mute', style: 'margin-right:8px', textContent: title }), items.length ? items : el('span', { className: 'mute', textContent: 'none' }));
 
@@ -1687,7 +1694,12 @@ async function pgEndpoints() {
       } catch (e) { detail.replaceChildren(el('div', { className: 'err', textContent: e.message })); }
     };
 
-    const cols = [
+    const cols = fim ? [
+      { h: 'Time (UTC)', f: (a) => el('span', { style: 'cursor:pointer;text-decoration:underline;white-space:nowrap', textContent: when(a.time), onclick: () => showOne(a.id) }) },
+      { h: 'Change', f: (a) => a.file_event || '-' }, { h: 'File', f: (a) => a.file_path || '-' }, { h: 'Machine', f: (a) => a.agent.name || '-' },
+      { h: 'Severity', f: (a) => epSevPill(a.severity, a.level !== null && a.level !== undefined ? a.level : undefined) },
+      { h: 'Rule', f: (a) => (a.rule_id || '-') + ': ' + (a.description || '-') }, { h: 'ATT&CK', f: (a) => a.mitre.techniques.map((t) => t.id).join(', ') || '-' },
+    ] : [
       { h: 'Time (UTC)', f: (a) => el('span', { style: 'cursor:pointer;text-decoration:underline;white-space:nowrap', textContent: when(a.time), onclick: () => showOne(a.id) }) },
       { h: 'Severity', f: (a) => epSevPill(a.severity, a.level !== null && a.level !== undefined ? a.level : undefined) },
       { h: 'Rule', f: (a) => (a.rule_id || '-') + ': ' + (a.description || '-') }, { h: 'Machine', f: (a) => a.agent.name || '-' },
@@ -1698,35 +1710,37 @@ async function pgEndpoints() {
       cards.replaceChildren(el('div', { className: 'mute', textContent: 'Loading...' }));
       try {
         const r = await api('/v1/endpoints/alerts/summary?' + base(false).toString()), s = r.severity, t = r.top;
-        cards.replaceChildren(card('Alerts, ' + (EP_WINDOWS.find((w) => w[0] === r.window) || [0, r.window])[1].toLowerCase(),
+        cards.replaceChildren(card((fim ? 'File changes, ' : 'Alerts, ') + (EP_WINDOWS.find((w) => w[0] === r.window) || [0, r.window])[1].toLowerCase(),
           el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, el('span', { className: 'stat', textContent: String(s.total) }),
             ...EP_SEV.map((k) => el('span', { style: 'cursor:pointer', title: 'Show only ' + k, onclick: () => pick('severity', k) }, epSevPill(k, s[k]))),
             s.unknown ? el('span', { className: 'mute', textContent: s.unknown + ' without a severity' }) : ''),
+          fim ? section('Changes', (t.file_events || []).map((x) => chip(x.name, 'file_event', x.name, x.count))) : '',
+          fim ? section('Files', (t.files || []).slice(0, 8).map((x) => chip(x.path, 'q', x.path, x.count))) : '',
           section('Machines', t.agents.slice(0, 6).map((x) => chip(x.name, 'agent', x.name, x.count))),
           section('ATT&CK techniques', t.techniques.slice(0, 8).map((x) => chip(x.id + (x.name ? ' ' + x.name : ''), 'mitre', x.id, x.count))),
           section('Tactics', t.tactics.slice(0, 8).map((x) => el('span', { className: 'pill off', textContent: x.name + '  ' + x.count }))),
           section('Rules', t.rules.slice(0, 8).flatMap((x) => [el('span', { className: 'pill off', style: 'cursor:pointer', title: 'Show only rule ' + x.rule_id, textContent: x.rule_id + ' ' + (x.description || '') + '  ' + x.count, onclick: () => ruleOnly(x.rule_id) }),
             el('span', { className: 'pill off', style: 'cursor:pointer;margin-right:6px', title: 'Hide rule ' + x.rule_id, textContent: 'hide', onclick: () => hideRule(x.rule_id) })])),
-          el('div', { className: 'mute', style: 'margin-top:8px;font-size:12px', textContent: 'Severity counts are exact. The machines, techniques, tactics and rules are counted over the newest ' + r.sampled.events + ' alerts' + (r.sampled.truncated ? ' (there are more)' : '') + '.' })));
+          el('div', { className: 'mute', style: 'margin-top:8px;font-size:12px', textContent: 'Severity counts are exact. The ' + (fim ? 'changes, files, machines, techniques, tactics and rules' : 'machines, techniques, tactics and rules') + ' are counted over the newest ' + r.sampled.events + ' alerts' + (r.sampled.truncated ? ' (there are more)' : '') + (fim ? ' file change alerts' : '') + '.' })));
       } catch (e) { cards.replaceChildren(el('div', { className: 'err', textContent: e.message })); }
     };
     const loadList = async () => {
       out.replaceChildren(el('div', { className: 'mute', textContent: 'Loading...' }));
-      const p = base(true); p.set('limit', String(EP_ALERT_LIMIT)); p.set('offset', String(af.offset));
+      const p = base(true); p.set('limit', String(EP_ALERT_LIMIT)); p.set('offset', String(S.offset));
       try {
         const r = await api('/v1/endpoints/alerts?' + p.toString());
-        const prev = el('button', { className: 'btn', textContent: 'Previous', onclick: () => { af.offset = Math.max(0, af.offset - EP_ALERT_LIMIT); loadList(); } });
-        const next = el('button', { className: 'btn', textContent: 'Next', onclick: () => { af.offset += EP_ALERT_LIMIT; loadList(); } });
-        prev.disabled = af.offset === 0; next.disabled = !r.more;
-        out.replaceChildren(table(cols, r.alerts, 'No alerts match. Alerts appear here once a broker set up for endpoint alerts has sent some, and the manager has raised them.'),
-          el('div', { className: 'mute', style: 'margin-top:8px;display:flex;gap:8px;align-items:center' }, prev, next, r.count ? (af.offset + 1) + ' to ' + (af.offset + r.count) + (r.more ? ' (more)' : '') : '0'));
+        const prev = el('button', { className: 'btn', textContent: 'Previous', onclick: () => { S.offset = Math.max(0, S.offset - EP_ALERT_LIMIT); loadList(); } });
+        const next = el('button', { className: 'btn', textContent: 'Next', onclick: () => { S.offset += EP_ALERT_LIMIT; loadList(); } });
+        prev.disabled = S.offset === 0; next.disabled = !r.more;
+        out.replaceChildren(table(cols, r.alerts, fim ? 'No file changes match. They appear here once the manager monitors files on a machine and a broker set up for endpoint alerts has sent its alerts.' : 'No alerts match. Alerts appear here once a broker set up for endpoint alerts has sent some, and the manager has raised them.'),
+          el('div', { className: 'mute', style: 'margin-top:8px;display:flex;gap:8px;align-items:center' }, prev, next, r.count ? (S.offset + 1) + ' to ' + (S.offset + r.count) + (r.more ? ' (more)' : '') : '0'));
       } catch (e) { out.replaceChildren(el('div', { className: 'err', textContent: e.message })); }
     };
-    const apply = () => { af.window = win.value; af.severity = sev.value; af.q = text.value; af.agent = agent.value; af.mitre = mitre.value; af.offset = 0; detail.replaceChildren(); loadCards(); loadList(); };
+    const apply = () => { S.window = win.value; S.severity = sev.value; S.q = text.value; S.agent = agent.value; S.mitre = mitre.value; S.file_event = fev.value; S.offset = 0; detail.replaceChildren(); loadCards(); loadList(); };
     text.onkeydown = agent.onkeydown = mitre.onkeydown = (ev) => { if (ev.key === 'Enter') apply(); };
-    win.onchange = apply; sev.onchange = apply;
+    win.onchange = apply; sev.onchange = apply; fev.onchange = apply;
     drawActive(); loadCards(); loadList();
-    return [el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px' }, win, sev, text, agent, mitre, el('button', { className: 'btn pri', textContent: 'Search', onclick: apply })), active, cards, card('', out), detail];
+    return [el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px' }, win, sev, ...(fim ? [fev] : []), text, agent, mitre, el('button', { className: 'btn pri', textContent: 'Search', onclick: apply })), active, cards, card('', out), detail];
   };
 
   const notices = () => [card('Third-party notices',
@@ -1734,7 +1748,7 @@ async function pgEndpoints() {
     table([{ h: 'Component', f: (n) => n.name }, { h: 'Version in use', f: () => st.version || '-' }, { h: 'Licence', f: (n) => n.licence },
       { h: 'Source', f: (n) => el('a', { href: n.source, target: '_blank', rel: 'noopener noreferrer', textContent: n.source }) }, { h: 'Notice', f: (n) => n.note }], EP_NOTICES))];
 
-  const TABS = [['overview', 'Overview', overview], ['agents', 'Agents', agentsView], ['alerts', 'Alerts', alertsView], ['install', 'Add a machine', installView], ['notices', 'Third-party notices', notices]];
+  const TABS = [['overview', 'Overview', overview], ['agents', 'Agents', agentsView], ['alerts', 'Alerts', alertsView], ['fim', 'File integrity', () => alertsView(true)], ['install', 'Add a machine', installView], ['notices', 'Third-party notices', notices]];
   function draw() {
     tabs.replaceChildren(...TABS.map(([id, label]) => el('div', { className: 'xtab' + (tab === id ? ' on' : ''), textContent: label, onclick: () => { tab = id; draw(); } })));
     const cur = TABS.find((t) => t[0] === tab) || TABS[0];
