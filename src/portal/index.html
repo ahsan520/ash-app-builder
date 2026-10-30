@@ -1072,6 +1072,39 @@ async function pgStorage() {
 }
 
 // ---- Data safety --------------------------------------------------------------------------------
+let safetyMsg = '';
+const SAFETY_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+// The Backup control card: "Back up now", the schedule (UTC time + weekdays) and how many days of backups to keep. Reads r.control from GET /v1/storage/safety; writes
+// PUT /v1/storage/backup/settings and POST /v1/storage/backup/run. The backup runner on the cluster does the work (src/backup/runner.js).
+function backupControlCard(r) {
+  const c = r.control, act = async (fn) => { try { await fn(); } catch (e) { alert(e.message); } route(); };
+  const busy = !!c.running || !!c.run_requested_at;
+  const now = el('button', { className: 'btn pri', textContent: c.running ? 'Backup running...' : c.run_requested_at ? 'Starting...' : 'Back up now', disabled: busy,
+    onclick: () => act(async () => { await api('/v1/storage/backup/run', { method: 'POST' }); safetyMsg = 'Backup requested. It starts within a few seconds; this page shows it in the history below (reload to refresh).'; }) });
+  const on = el('input', { type: 'checkbox', checked: c.enabled });
+  const time = el('input', { type: 'time', value: c.time_utc, required: true, style: 'width:110px' });
+  const dayBoxes = SAFETY_DAYS.map((d, i) => ({ i, box: el('input', { type: 'checkbox', checked: c.days.includes(i) }) }));
+  const keep = el('input', { type: 'number', min: 1, max: 365, value: c.retain_days, style: 'width:80px' });
+  const save = el('button', { className: 'btn', textContent: 'Save schedule', onclick: () => {
+    const days = dayBoxes.filter((x) => x.box.checked).map((x) => x.i);
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time.value)) return alert('Pick a time of day.');
+    if (!days.length) return alert('Pick at least one day.');
+    const n = Number(keep.value); if (!Number.isInteger(n) || n < 1 || n > 365) return alert('Keep backups for a whole number of days from 1 to 365.');
+    act(async () => { await api('/v1/storage/backup/settings', { method: 'PUT', body: { enabled: on.checked, time_utc: time.value, days, retain_days: n } }); safetyMsg = 'Backup schedule saved.'; });
+  } });
+  const nextTxt = !c.enabled ? 'Scheduled backups are switched off.' : c.next_run ? 'Next scheduled backup: ' + when(c.next_run) + ' UTC (' + new Date(c.next_run).toLocaleString() + ' on this computer).' : '';
+  return card('Backup control',
+    safetyMsg ? el('div', { style: 'margin-bottom:10px' }, el('span', { className: 'pill ok', textContent: safetyMsg })) : '',
+    el('div', { style: 'display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px' }, now,
+      c.running ? pill('running since ' + when(c.running.started_at) + ' UTC (' + c.running.trigger + ')', 'off') : '', el('span', { className: 'mute', textContent: nextTxt })),
+    el('div', { style: 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px' },
+      el('label', {}, on, ' Run on a schedule'), el('span', { textContent: 'at' }), time, el('span', { textContent: 'UTC, on' }),
+      ...dayBoxes.map((x, k) => el('label', { style: 'margin-right:2px' }, x.box, ' ' + SAFETY_DAYS[k]))),
+    el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px' }, 'Keep backups for', keep, 'days', save),
+    el('div', { className: 'mute', textContent: 'Before every backup (scheduled or manual), backups older than ' + c.retain_days + ' day' + (c.retain_days === 1 ? '' : 's') + ' are deleted from this VM, then the new one runs. '
+      + 'The newest complete backup is never deleted, even if it is older, so a failed run cannot leave you with none. The ClickHouse event files are not cut by age (they are a copy of your events, not daily snapshots); see docs/backup-control.md. '
+      + 'A backup missed while the VM was off runs once when it is back.' }));
+}
 const SAFETY_VERDICT = { ok: ['Protected', 'ok'], attention: ['Needs attention', 'off'], critical: ['At risk', 'bad'] };
 async function pgSafety() {
   const r = await api('/v1/storage/safety');
@@ -1080,9 +1113,11 @@ async function pgSafety() {
   const warnCard = (w) => card('', el('div', { style: 'display:flex;gap:10px;align-items:center;flex-wrap:wrap' }, warnPill(w.severity), el('b', { textContent: w.title })),
     el('div', { style: 'margin:8px 0', textContent: w.detail }), w.fix ? el('div', { className: 'ok pill', style: 'white-space:normal', textContent: 'What to do: ' + w.fix }) : '');
   const vol = r.volumes;
+  const controlCard = backupControlCard(r); safetyMsg = '';
   return [...head('Data safety', 'Will your data survive a deleted pod, an upgrade, a deleted volume, or a lost disk? This page reads the real backup history and volume settings from the cluster.'),
     card('', el('div', { style: 'display:flex;gap:12px;align-items:center;flex-wrap:wrap' }, pill(vLabel, vCls),
-      el('span', { className: 'mute', textContent: 'Backups run ' + r.schedule + ', ' + r.keep + ' kept, stored in ' + r.backup_dir }))),
+      el('span', { className: 'mute', textContent: 'Backups run ' + r.schedule + '; backups older than ' + r.retain_days + ' day' + (r.retain_days === 1 ? '' : 's') + ' are deleted before each run; stored in ' + r.backup_dir }))),
+    controlCard,
     el('h3', { style: 'margin-top:4px', textContent: r.warnings.length ? 'What needs attention (' + r.warnings.length + ')' : 'Checks' }),
     r.warnings.length ? el('div', {}, r.warnings.map(warnCard)) : card('', el('span', { className: 'ok pill', textContent: 'Nothing to report.' })),
     el('div', { className: 'grid' },

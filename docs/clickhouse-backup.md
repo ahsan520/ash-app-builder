@@ -8,7 +8,8 @@ Files: `src/backup/clickhouse-backup.js` (new), `src/backup/backup.js` and `src/
 `k8s/32-backup.yaml` (ClickHouse variables), `k8s/12-schema-init.yaml` (`backup_runs.kind`), `src/storage/safety.js` (the Data safety page),
 `scripts/restore-backup.sh` (`ch-list`, `ch-verify`, `ch-restore`).
 
-## What it does each night (02:17, the existing CronJob `asix-backup`)
+## What it does on each backup run (by default every night at 02:17 UTC, started by the backup runner; see `docs/backup-control.md`)
+Since 2026-10-30 the schedule, "Back up now" and the days PostgreSQL backups are kept are set in the portal (Data safety, Backup control). The CronJob `asix-backup` is suspended and is only the template for `create job --from=cronjob/asix-backup`. The retention in days applies to the PostgreSQL sets only: these day files are a copy of the events themselves, so they are not deleted by age (days that left ClickHouse still go after `BACKUP_KEEP` days).
 1. PostgreSQL first, exactly as before. Then ClickHouse. One failing does not stop the other; the job exits 1 if either failed.
 2. ClickHouse is backed up **when its secret exists** (`clickhouse-secret`, made by `./sync-and-deploy.sh --with-clickhouse`). An install that never
    deployed ClickHouse is unchanged. `BACKUP_CLICKHOUSE` in `k8s/32-backup.yaml`: `auto` (default), `1` (always, fail if unreachable), `0` (never).

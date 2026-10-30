@@ -88,4 +88,31 @@ router.post('/v1/storage/retention/run', ...guarded('storage:write'), async (req
 });
 
 
+// ---- Backup control (Data safety page): schedule, retention, "Back up now" ----------------------------------------------------
+// The settings and the request live in one database row (src/backup/control.js); the backup runner (src/backup/runner.js) reads it and starts the job,
+// so nothing here needs permission on the cluster.
+const backupControl = require('../../backup/control');
+const backupSchedule = require('../../backup/schedule');
+
+// Body: any of { enabled: bool, time_utc: "HH:MM" (UTC), days: [0..6] (0 = Sunday), retain_days: 1..365 }. Changing the schedule starts counting from now:
+// a time earlier today does not fire at once.
+router.put('/v1/storage/backup/settings', ...guarded('storage:write'), async (req, res) => {
+  const c = backupSchedule.check(req.body);
+  if (c.error) return apiError(res, 400, 'INVALID_BODY', c.error);
+  if (!Object.keys(c.value).length) return apiError(res, 400, 'INVALID_BODY', 'Send at least one of enabled, time_utc, days, retain_days');
+  try { res.status(200).json({ success: true, settings: await backupControl.save(db, c.value, req.user_id || null) }); }
+  catch (e) { console.error('Backup settings update failed:', e.message); apiError(res, 500, 'BACKUP_SETTINGS_ERROR', 'Failed to save the backup settings'); }
+});
+
+// "Back up now": records the request; the runner starts the job within seconds. One at a time: refused while one is waiting or running.
+router.post('/v1/storage/backup/run', ...guarded('storage:write'), async (req, res) => {
+  try {
+    const r = await backupControl.request(db, req.user_id || null);
+    if (r.busy === 'running') return apiError(res, 409, 'BACKUP_RUNNING', 'A backup is running now; wait for it to finish');
+    if (r.busy) return apiError(res, 409, 'BACKUP_ALREADY_REQUESTED', 'A backup has already been requested and is about to start');
+    res.status(202).json({ success: true, requested_at: r.requested_at });
+  } catch (e) { console.error('Backup request failed:', e.message); apiError(res, 500, 'BACKUP_REQUEST_ERROR', 'Failed to request a backup'); }
+});
+
+
 module.exports = router;

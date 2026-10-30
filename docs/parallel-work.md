@@ -197,6 +197,7 @@ Update the Status column in the same change that does the work, so the next sess
 7. A new permission string (for example `modules:read`) must also be added to the `portal-admin`
    role in `scripts/deploy/bootstrap-portal.sh`, in both the INSERT and the UPDATE lists, and that
    script re-run, or the portal page will show a 403.
+| Backup control: **Back up now**, schedule (UTC time + weekdays) and keep-N-days retention (old sets deleted before each run, newest complete set always kept) on the Data safety page | done 2026-10-30 (new files `src/backup/schedule.js`, `control.js`, `runner.js`, `docs/backup-control.md`; changed `backup.js`, `routes/storage.js`, `storage/safety.js`, portal, `k8s/12-schema-init.yaml` (table `backup_settings`), `k8s/32-backup.yaml` (CronJob suspended, new Deployment `asix-backup-runner`), CI list; real PostgreSQL 16 with the schema applied twice and a real `pg_dump`: `tests/backup-control-db.test.js`; unit tests in `npm test`; **not run on the k3s box, not seen in a browser**) | see left |
 
 ## What to build next
 **Phase 2 is done.** Phase 3 (enterprise data plane, see `docs/product-plan.md`) has started: the ClickHouse server is in `k8s/` (optional, unused until `ASIX_EVENT_STORE=clickhouse`). Next, in this order:
@@ -303,6 +304,7 @@ fixed ids collides with rows a crashed earlier run left behind (`tests/fixtures/
 run for that reason); and piping a test run into `head` kills it before its cleanup runs.
 
 ## Known gaps to check
+- Backup control (2026-10-30): the first deploy starts one catch-up backup by itself (no scheduled run was ever recorded). Check on the k3s box: `k3s kubectl -n asix-platform get deploy asix-backup-runner`, its log, the Backup control card, one **Back up now**, and that the CronJob shows `SUSPEND True`. The old `create job --from=cronjob/asix-backup` still works.
 - License limits: the Home cap of 90 days is now enforced when retention is saved, so on an install that already stores a longer value (or keep-forever) the next save of the retention rules is refused until it is lowered; the stored value is left alone and shown as "over the limit". Check the k3s box's retention settings before deploying, or install a license that raises `retention_days_max`. Checked on the k3s box 2026-10-17: saving 365 days is refused with 403 `LICENSE_LIMIT`, 20 days saves, and the Modules page shows "tenants 1 (1 in use)" and the 90-day cap. `limits.test.js` and `portal-menu.test.js` have not run on GitHub.
 - `scripts/restore-backup.sh` arrived without its executable bit in a zip ("Permission denied" on the k3s box, 2026-10-17). Run `git update-index --chmod=+x scripts/restore-backup.sh` (and the other `scripts/*.sh`), or call it as `bash scripts/restore-backup.sh`.
 - Run on the k3s box 2026-10-17 and passing: the copy, the manual backup job, `ch-verify`, `ch-restore --as`, the switch to `ASIX_EVENT_STORE=clickhouse`, and a restart of `clickhouse-0` with events in it. Still untried: ClickHouse under real load, and the first nightly backup after the switch.

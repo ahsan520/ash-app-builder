@@ -1,20 +1,24 @@
-# Nightly encrypted backup of the ASIX database, the Keycloak database and the database roles.
+# Encrypted backup of the ASIX database, the Keycloak database, the database roles and (when deployed) the ClickHouse events.
 #
-#  * runs the same image as the API (src/backup/backup.js), as the non-root "node" user
-#  * writes AES-256-GCM encrypted files to /var/backups/asix/scheduled on the VM
-#    (deploy.sh creates the folder and the passphrase secret asix-backup-secret)
+#  * WHEN it runs is no longer decided here: the backup runner (Deployment asix-backup-runner, below) reads the schedule and the portal's "Back up now" requests
+#    from the database (Settings > Storage & retention > Data safety > Backup control) and starts the job. It needs no permission on the cluster.
+#  * the job is unchanged: it runs the same image as the API (src/backup/backup.js), as the non-root "node" user, and writes AES-256-GCM encrypted files to
+#    /var/backups/asix/scheduled on the VM (deploy.sh creates the folder and the passphrase secret asix-backup-secret)
+#  * before every run it deletes backups older than the retention days set in the portal (default 2), never the newest complete one
 #  * every 7 days it also restores the new backup into a scratch database and compares it
-#  * results appear in Settings > Storage & retention > Data safety
+#  * the CronJob below is kept SUSPENDED: it is the template for `create job --from=cronjob/asix-backup` (used by scripts/restore-backup.sh and by hand), nothing else
 #
-# Run one now:   k3s kubectl -n asix-platform create job --from=cronjob/asix-backup backup-now-$(date +%s)
-# Restore:       sudo scripts/restore-backup.sh   (see docs/data-safety.md)
+# Run one now:   press "Back up now" in the portal, or on the VM:  k3s kubectl -n asix-platform create job --from=cronjob/asix-backup backup-now-$(date +%s)
+# Runner log:    k3s kubectl -n asix-platform logs deploy/asix-backup-runner --tail=50
+# Restore:       sudo scripts/restore-backup.sh   (see docs/backup-control.md and docs/clickhouse-backup.md)
 apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: asix-backup
   namespace: asix-platform
 spec:
-  schedule: "17 2 * * *"
+  suspend: true                         # the runner starts the backups now (see above); this object is only the job template
+  schedule: "17 2 * * *"                # not used while suspended
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 3600
   successfulJobsHistoryLimit: 3
@@ -70,3 +74,68 @@ spec:
               hostPath: { path: /var/backups/asix/scheduled, type: Directory }
             - name: scratch
               emptyDir: { sizeLimit: 20Gi }
+---
+# The backup runner: reads the backup schedule and "Back up now" requests from the database every 15 seconds and starts the backup job
+# (`node src/backup/backup.js`, as a child process) when one is owed. One replica, one job at a time. Restarting it is safe: a job it was running
+# is closed as interrupted, and a scheduled time that was missed runs once when it is back.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: asix-backup-runner
+  namespace: asix-platform
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: asix-backup-runner
+  template:
+    metadata:
+      labels:
+        app: asix-backup-runner
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: runner
+          image: asix-api:local
+          imagePullPolicy: IfNotPresent
+          command: ["node", "src/backup/runner.js"]
+          env:
+            - { name: PGHOST, value: "postgresql.asix-platform.svc.cluster.local" }
+            - { name: PGPORT, value: "5432" }
+            - { name: PGUSER, value: "asix_admin" }
+            - name: PGPASSWORD
+              valueFrom: { secretKeyRef: { name: postgresql-secret, key: POSTGRES_PASSWORD } }
+            - { name: DB_HOST, value: "postgresql.asix-platform.svc.cluster.local" }
+            - { name: DB_NAME, value: "asix_platform" }
+            - { name: DB_USER, value: "asix_admin" }
+            - name: DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgresql-secret, key: POSTGRES_PASSWORD } }
+            - name: BACKUP_PASSPHRASE
+              valueFrom: { secretKeyRef: { name: asix-backup-secret, key: BACKUP_PASSPHRASE } }
+            - { name: BACKUP_DIR, value: "/backups" }
+            - { name: BACKUP_TMP, value: "/scratch" }
+            - { name: BACKUP_DATABASES, value: "asix_platform,keycloak" }
+            - { name: BACKUP_KEEP, value: "14" }
+            - { name: BACKUP_VERIFY_EVERY_DAYS, value: "7" }
+            # ClickHouse (k8s/11-clickhouse.yaml): when its secret exists the same job also backs up the events held there
+            # (src/backup/clickhouse-backup.js). BACKUP_CLICKHOUSE: auto (default) | 1 (always) | 0 (never).
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: { secretKeyRef: { name: clickhouse-secret, key: CLICKHOUSE_PASSWORD, optional: true } }
+            - { name: ASIX_CLICKHOUSE_URL, value: "http://asix:$(CLICKHOUSE_PASSWORD)@clickhouse:8123/asix" }
+            - { name: BACKUP_CLICKHOUSE, value: "auto" }
+          resources:
+            requests: { cpu: "100m", memory: "192Mi" }
+            limits: { cpu: "1", memory: "768Mi" }
+          volumeMounts:
+            - { name: backups, mountPath: /backups }
+            - { name: scratch, mountPath: /scratch }
+      volumes:
+        - name: backups
+          hostPath: { path: /var/backups/asix/scheduled, type: Directory }
+        - name: scratch
+          emptyDir: { sizeLimit: 20Gi }

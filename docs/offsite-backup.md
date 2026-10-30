@@ -3,6 +3,8 @@
 The nightly backup (`asix-backup`, 02:17) writes encrypted files to `/var/backups/asix/scheduled` on the k3s VM. Those protect against a deleted pod, a bad upgrade or a
 mistake, but not against losing the VM or its disk. `scripts/offsite-backup.sh` copies them to another machine every night and tells the Data safety page whether it worked.
 
+Since 2026-10-30 this VM keeps backups only for the days set in the portal (Data safety, Backup control; default 2, see `docs/backup-control.md`), so the other machine is where older copies live: it never deletes unless `--keep-days` is on.
+
 ## What you need
 1. Another machine you control (a second VM, a NAS, a PC that is always on) with `rsync` and an SSH server, and a folder for the copies.
 2. An SSH key for root on the k3s VM that the other machine accepts:
