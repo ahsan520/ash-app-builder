@@ -95,6 +95,8 @@ spec:
             # Endpoint agents (src/endpoints/agent-watch.js): "0" = off. 5 to 10080 = raise an alert (rule "Endpoint agent disconnected") when the endpoint manager has
             # reported an agent Disconnected for at least this many minutes, and close it when the agent is back. A sleeping laptop looks the same, so pick a value longer
             # than normal absences. Needs a registered endpoint manager (docs/endpoints.md, E4c); an unreachable manager changes nothing.
+            # This is the SERVER setting: a tenant can set its own limit (and leave machines out) on the Endpoints page, Agents tab, which wins for that tenant
+            # (0 = off for it); "Follow the server setting" there makes this value apply again (docs/endpoints.md, E4m).
             - name: ASIX_AGENT_WATCH_MIN
               value: "0"
             # "Resolved" messages (src/notifications/recovered.js): "true" sends one short message to the channels that were sent an alert

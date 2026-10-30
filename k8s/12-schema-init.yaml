@@ -565,6 +565,23 @@ data:
         WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
     GRANT SELECT, INSERT, UPDATE, DELETE ON parse_alert_settings TO asix_admin;
 
+    -- "Endpoint agent disconnected" alert chosen from the Endpoints page (src/endpoints/agent-alert.js, docs/endpoints.md task E4m). One row per tenant; NO ROW = follow the
+    -- server setting ASIX_AGENT_WATCH_MIN and watch every agent. minutes NULL = follow the server setting, 0 = off for this tenant, 5 to 10080 = the limit. skip_agents = agent
+    -- ids that never raise this alert (machines meant to sleep).
+    CREATE TABLE IF NOT EXISTS agent_watch_settings (
+        tenant_id UUID PRIMARY KEY REFERENCES tenants(id),
+        minutes INTEGER CHECK (minutes IS NULL OR minutes = 0 OR minutes BETWEEN 5 AND 10080),
+        skip_agents TEXT[] NOT NULL DEFAULT '{}' CHECK (cardinality(skip_agents) <= 200),
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_by TEXT
+    );
+    ALTER TABLE agent_watch_settings ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS agent_watch_settings_tenant_isolation ON agent_watch_settings;
+    CREATE POLICY agent_watch_settings_tenant_isolation ON agent_watch_settings FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+    GRANT SELECT, INSERT, UPDATE, DELETE ON agent_watch_settings TO asix_admin;
+
     -- The Windows event filter policy (src/endpoints/win-filter-store.js, docs/endpoints.md task E2). One row per tenant; NO ROW = no policy = every event is kept.
     -- revision goes up by one on every save (a save can say which revision it was based on). Saving pushes nothing anywhere.
     CREATE TABLE IF NOT EXISTS win_filter_policy (

@@ -3,7 +3,8 @@
 // The case it came from (2026-10-30): a Windows 11 machine slept after 10 minutes of power saving, the manager showed its agent as Pending and then
 // Disconnected, and nothing in ASIX said so. Collectors and brokers already have this (src/collectors/watchdog.js); endpoint agents did not.
 //
-// Off until chosen: ASIX_AGENT_WATCH_MIN on the API (k8s/30-asix-api.yaml), 0 or unset = off, otherwise 5 to 10080 minutes. An agent counts as down when the
+// Off until chosen: ASIX_AGENT_WATCH_MIN on the API (k8s/30-asix-api.yaml), 0 or unset = off, otherwise 5 to 10080 minutes. E4m: a tenant can choose its own limit
+// (and machines that are never watched) on the Endpoints page; that wins over the environment for the tenant (src/endpoints/agent-alert.js). An agent counts as down when the
 // manager reports it Disconnected AND its last keep-alive is at least that old. Choose a value longer than a sleeping laptop is away if sleeping is normal.
 // Agents the manager calls Pending (just enrolled, or between handshakes) or Never connected raise nothing.
 //
@@ -24,6 +25,7 @@
 
 const db = require('../db');
 const wazuhApi = require('./wazuh-api');
+const agentAlert = require('./agent-alert');
 const managerStore = require('./wazuh-manager-store');
 const { severity } = require('../collectors/watchdog');
 
@@ -50,7 +52,8 @@ function ageMin(lastKeepAlive, now) {
 // disconnected: shaped agents the manager lists as Disconnected (wazuh-api.js shapeAgent); active: open or acknowledged alerts { id, group_key };
 // latest: newest alert per group key { group_key, status, closed_by, last_keep_alive }; lookups: for open alerts whose agent is not in `disconnected`,
 // { [agent id]: shaped agent | null } (null = the manager has no such agent).
-function plan({ disconnected = [], active = [], latest = [], lookups = {}, registered = true }, cfg, { now = Date.now(), raiseAllowed = true } = {}) {
+// skip: agent ids the tenant chose not to watch (E4m): they raise nothing and an open alert of one is closed.
+function plan({ disconnected = [], active = [], latest = [], lookups = {}, registered = true }, cfg, { now = Date.now(), raiseAllowed = true, skip = [] } = {}) {
   const raise = [], close = [];
   if (!cfg.minutes) {
     for (const a of active) close.push({ alert_id: a.id, reason: 'The endpoint agent disconnected alert is turned off.' });
@@ -60,6 +63,7 @@ function plan({ disconnected = [], active = [], latest = [], lookups = {}, regis
     for (const a of active) close.push({ alert_id: a.id, reason: 'No endpoint manager is registered for this tenant any more.' });
     return { raise, close };
   }
+  const skipped = new Set(skip.map(String));
   const down = new Map();
   for (const a of disconnected) if (a && a.id) down.set(a.id, a);
   const activeKeys = new Set(active.map((a) => a.group_key));
@@ -70,6 +74,7 @@ function plan({ disconnected = [], active = [], latest = [], lookups = {}, regis
     for (const a of down.values()) {
       const minutes = ageMin(a.last_keep_alive, now);
       if (minutes === null || minutes < cfg.minutes) continue;
+      if (skipped.has(String(a.id))) continue;
       const key = keyOf(a.id);
       if (activeKeys.has(key)) continue;
       const prev = newest.get(key);
@@ -84,6 +89,7 @@ function plan({ disconnected = [], active = [], latest = [], lookups = {}, regis
   }
   for (const a of active) {
     const id = idOf(a.group_key);
+    if (id && skipped.has(id)) { close.push({ alert_id: a.id, reason: 'This machine was set not to raise this alert (Endpoints, Agents).' }); continue; }
     if (id && down.has(id)) continue;                                  // still down
     if (!id || !Object.prototype.hasOwnProperty.call(lookups, id)) continue;   // not looked up: no evidence, keep it
     const now_ = lookups[id];
@@ -122,7 +128,21 @@ async function readDisconnected(m, api) {
   return out;
 }
 
-async function runTenant(tenantId, { now = Date.now(), raiseAllowed = true, sev = severity(), cfg = config(), api = wazuhApi, store = managerStore } = {}) {
+// The tenant's own settings (E4m), or none. A database without the table (schema job not run) means none: the server setting decides, as before.
+let warnedMissing = false;
+async function readSettings(tenantId) {
+  try { return await db.withTenant(tenantId, (client) => agentAlert.readRow(client, tenantId)); }
+  catch (e) {
+    if (!agentAlert.isMissingTable(e)) throw e;
+    if (!warnedMissing) { warnedMissing = true; console.warn('[agent-watch] table agent_watch_settings is missing (the schema job has not run): using the server setting'); }
+    return null;
+  }
+}
+
+// cfg = the SERVER setting ({ minutes }); the tenant's saved setting, if any, wins over it.
+async function runTenant(tenantId, { now = Date.now(), raiseAllowed = true, sev = severity(), cfg: serverCfg = config(), api = wazuhApi, store = managerStore } = {}) {
+  const eff = agentAlert.resolve(await readSettings(tenantId), serverCfg);
+  const cfg = { minutes: eff.minutes };
   // 1. what ASIX holds: the alerts of this rule, and whether a manager is registered (a database without the table has none to read)
   const held = await db.withTenant(tenantId, async (client) => {
     const active = (await client.query(
@@ -160,7 +180,7 @@ async function runTenant(tenantId, { now = Date.now(), raiseAllowed = true, sev 
   }
 
   // 3. decide and write
-  const p = plan({ disconnected, active: held.active, latest: held.latest, lookups, registered: !!held.row }, cfg, { now, raiseAllowed });
+  const p = plan({ disconnected, active: held.active, latest: held.latest, lookups, registered: !!held.row }, cfg, { now, raiseAllowed, skip: eff.skip });
   if (!p.raise.length && !p.close.length) return { raised: 0, closed: 0 };
   return db.withTenant(tenantId, async (client) => {
     for (const r of p.raise) {

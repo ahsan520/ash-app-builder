@@ -1524,6 +1524,36 @@ const epSevPill = (s, n) => el('span', { className: 'pill', style: 'white-space:
 const epMitreLink = (t) => (EP_MITRE_URL.test(t.url || '') ? el('a', { href: t.url, target: '_blank', rel: 'noopener noreferrer', textContent: t.id }) : el('span', { textContent: t.id }));
 const EP_NOTICES = [{ name: 'Wazuh (endpoint agent and manager)', licence: 'GNU General Public License, version 2', source: 'https://github.com/wazuh/wazuh',
   note: 'Copyright Wazuh, Inc. and contributors. Wazuh is a trademark of its owner and is not used here as an ASIX name. Where ASIX gives you a modified build, the source of the changes is available on request.' }];
+// The "Endpoint agent disconnected" alert (GET and PUT /v1/endpoints/agent-alert, E4m). A saved limit wins over the server's ASIX_AGENT_WATCH_MIN for this tenant;
+// "Follow the server setting" goes back to it. 0 = off. Machines listed as not watched never raise it. `apply(settings)` redraws the open tab with the answer.
+function agentAlertCard(a, apply) {
+  const title = 'Alert when an agent stays disconnected';
+  if (!a) return card(title, el('div', { className: 'mute', textContent: 'The alert setting could not be read.' }));
+  if (!a.available) return card(title, pill('Not ready', 'off'), el('span', { className: 'mute', style: 'margin-left:8px', textContent: 'The database has no agent_watch_settings table yet. A normal deploy runs the schema job that creates it; until then the server setting (ASIX_AGENT_WATCH_MIN) decides.' }));
+  const lim = el('input', { type: 'number', min: a.limits.minutes[0], max: a.limits.minutes[1], value: String(a.minutes), style: 'width:110px' });
+  const send = async (body) => { try { const r = await api('/v1/endpoints/agent-alert', { method: 'PUT', body }); apply(r.settings); } catch (e) { alert(e.message); } };
+  const state = a.enabled ? pill('On: after ' + a.minutes + ' min', 'ok') : pill('Off', 'off');
+  const from = a.source === 'tenant' ? 'Set here.' : 'From the server setting' + (a.server.enabled ? '' : ' (off)') + '.';
+  const skipped = a.skip_agents || [];
+  return card(title,
+    el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, state, el('span', { className: 'mute', style: 'font-size:13px', textContent: from })),
+    el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px' },
+      el('span', { textContent: 'Alert when an agent has been disconnected for' }), lim, el('span', { textContent: 'minutes' }),
+      el('button', { className: 'btn pri', textContent: 'Save', onclick: () => send({ minutes: lim.value.trim() }) }),
+      a.enabled ? el('button', { className: 'btn', textContent: 'Turn off', title: 'Set the limit to 0 for this tenant', onclick: () => send({ minutes: 0 }) }) : '',
+      a.source === 'tenant' ? el('button', { className: 'btn', textContent: 'Follow the server setting', onclick: () => send({ follow_server: true }) }) : ''),
+    el('div', { className: 'mute', style: 'margin-top:8px;font-size:12px', textContent: 'One alert per agent while the manager reports it Disconnected for at least this long; it closes by itself when the agent is back. A sleeping laptop looks the same, so pick a limit longer than normal absences. 0 turns it off. The server setting is ' + (a.server.enabled ? a.server.minutes + ' minutes' : 'off') + '.' }),
+    el('div', { style: 'margin-top:10px' },
+      el('div', { textContent: skipped.length ? 'Machines not watched (' + skipped.length + '):' : 'No machine is left out. Open an agent below to leave one out.' }),
+      ...skipped.map((id) => el('span', { className: 'pill', style: 'margin:4px 6px 0 0;display:inline-block' }, 'agent ' + id + ' ',
+        el('button', { className: 'btn', textContent: 'Watch again', onclick: () => send({ skip_agent: id, skip: false }) })))));
+}
+// One agent's "do not alert for this machine" switch, shown in the agent's detail card.
+function agentSkipButton(a, id, apply) {
+  const off = (a.skip_agents || []).includes(String(id));
+  const send = async () => { try { const r = await api('/v1/endpoints/agent-alert', { method: 'PUT', body: { skip_agent: String(id), skip: !off } }); apply(r.settings); } catch (e) { alert(e.message); } };
+  return el('button', { className: 'btn', textContent: off ? 'Alert when disconnected again' : 'Never alert when this machine is disconnected', onclick: send });
+}
 async function pgEndpoints() {
   const m = (await api('/v1/endpoints/manager')).manager;
   const top = el('div', { style: 'display:flex;align-items:baseline;gap:12px;flex-wrap:wrap' }, el('h2', { textContent: 'Endpoints' }),
@@ -1537,6 +1567,9 @@ async function pgEndpoints() {
   const st = m.status || {}, up = !!st.reachable;
   let sum = null, sumErr = '';
   if (up) { try { sum = (await api('/v1/endpoints/agents/summary')).summary; } catch (e) { sumErr = e.message; } }
+  let aa = null;   // the disconnected-agent alert setting (E4m); a failed read never hides the page
+  if (up) { try { aa = (await api('/v1/endpoints/agent-alert')).settings; } catch (e) { aa = null; } }
+  const setAA = (x) => { aa = x; draw(); };
   let tab = 'overview';
   const q = { search: '', status: '', sort: '+name', offset: 0 };
   const af = { window: '24h', severity: '', q: '', agent: '', mitre: '', rule: '', exclude: [], file_event: '', check_result: '', policy: '', offset: 0 };
@@ -1568,7 +1601,8 @@ async function pgEndpoints() {
       try {
         const a = (await api('/v1/endpoints/agents/' + encodeURIComponent(id))).agent, o = a.os || {};
         detail.replaceChildren(card('Agent ' + a.id, kv({ Name: a.name, Status: (EP_STATUS[a.status] || [a.status])[0], Address: a.ip, 'Registered from': a.register_ip, Version: a.version, Groups: (a.groups || []).join(', '),
-          OS: [o.name, o.version, o.arch].filter(Boolean).join(' '), Platform: o.platform, 'Last seen (UTC)': when(a.last_keep_alive), 'Registered (UTC)': when(a.date_added), Node: a.node, Manager: a.manager })));
+          OS: [o.name, o.version, o.arch].filter(Boolean).join(' '), Platform: o.platform, 'Last seen (UTC)': when(a.last_keep_alive), 'Registered (UTC)': when(a.date_added), Node: a.node, Manager: a.manager }),
+          aa && aa.available ? el('div', { style: 'margin-top:10px' }, agentSkipButton(aa, a.id, (x) => { aa = x; draw(); showOne(id); })) : ''));
       } catch (e) { detail.replaceChildren(el('div', { className: 'err', textContent: e.message })); }
     };
     const cols = [
@@ -1596,7 +1630,7 @@ async function pgEndpoints() {
     search.onkeydown = (ev) => { if (ev.key === 'Enter') apply(); };
     status.onchange = apply; sort.onchange = apply;
     load();
-    return [el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px' }, search, status, sort, el('button', { className: 'btn pri', textContent: 'Search', onclick: apply })), card('', out), detail];
+    return [agentAlertCard(aa, setAA), el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin:12px 0' }, search, status, sort, el('button', { className: 'btn pri', textContent: 'Search', onclick: apply })), card('', out), detail];
   };
 
   // Add a machine: the script comes from GET /v1/endpoints/installer/linux or /windows, made for this manager and group. The enrolment password is not known to ASIX; if the person types it
