@@ -102,6 +102,7 @@ async function runOnce(opts = {}) {
     const sigWatch = require('./signature-watch');
     const pauseWatch = require('./pause-watch');
     const parseWatch = require('../ingestion/parse-watch');
+    const agentWatch = require('../endpoints/agent-watch');
     for (const t of (await lock.query("SELECT id FROM tenants WHERE status = 'active'")).rows) {
       try { const r = await runTenant(t.id, opts); total.tenants += 1; total.raised += r.raised; total.closed += r.closed; }
       catch (e) { total.errors += 1; console.error(`[watchdog] tenant ${t.id} failed: ${e.message}`); }
@@ -120,6 +121,9 @@ async function runOnce(opts = {}) {
       // Events stored unparsed faster than allowed (off until ASIX_PARSE_ALERT_MIN_EVENTS is set). Separate, so a failing event store never stops the alerts above.
       try { const r = await parseWatch.runTenant(t.id, opts); total.raised += r.raised; total.closed += r.closed; }
       catch (e) { total.errors += 1; console.error(`[watchdog] unparsed-events check for tenant ${t.id} failed: ${e.message}`); }
+      // Endpoint agents the manager reports Disconnected for too long (off until ASIX_AGENT_WATCH_MIN is set). Separate, so an unreachable manager never stops the alerts above.
+      try { const r = await agentWatch.runTenant(t.id, opts); total.raised += r.raised; total.closed += r.closed; }
+      catch (e) { total.errors += 1; console.error(`[watchdog] endpoint agent check for tenant ${t.id} failed: ${e.message}`); }
     }
     return total;
   } finally {

@@ -92,6 +92,11 @@ spec:
               value: "0"
             - name: ASIX_PARSE_ALERT_WINDOW_MIN
               value: "15"
+            # Endpoint agents (src/endpoints/agent-watch.js): "0" = off. 5 to 10080 = raise an alert (rule "Endpoint agent disconnected") when the endpoint manager has
+            # reported an agent Disconnected for at least this many minutes, and close it when the agent is back. A sleeping laptop looks the same, so pick a value longer
+            # than normal absences. Needs a registered endpoint manager (docs/endpoints.md, E4c); an unreachable manager changes nothing.
+            - name: ASIX_AGENT_WATCH_MIN
+              value: "0"
             # "Resolved" messages (src/notifications/recovered.js): "true" sends one short message to the channels that were sent an alert
             # when ASIX itself closes that alert because the problem went away (PagerDuty channels get a resolve). Alerts an analyst closes
             # by hand send nothing unless ASIX_NOTIFY_RECOVERED_MANUAL below is "true". "false" = off (the previous behaviour). This is the default for every channel; a channel can override
