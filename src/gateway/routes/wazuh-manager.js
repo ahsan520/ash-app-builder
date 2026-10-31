@@ -20,9 +20,9 @@ async function load(req, res) {
   catch (e) {
     if (store.isMissingTable(e)) { apiError(res, 503, 'WAZUH_NOT_READY', 'The database has no wazuh_managers table yet: run the schema job (a normal deploy does)'); return { sent: true }; }
     console.error('Wazuh manager lookup failed:', e.message);
-    apiError(res, 500, 'WAZUH_ERROR', 'Failed to look up the Wazuh manager'); return { sent: true };
+    apiError(res, 500, 'WAZUH_ERROR', 'Failed to look up the endpoint manager'); return { sent: true };
   }
-  if (!row) { apiError(res, 404, 'WAZUH_NO_MANAGER', 'No central Wazuh manager is registered for this tenant'); return { sent: true }; }
+  if (!row) { apiError(res, 404, 'WAZUH_NO_MANAGER', 'No central endpoint manager is registered for this tenant'); return { sent: true }; }
   try { return { m: store.credentials(row) }; }
   catch (e) {
     if (e && e.code === 'NO_KEY') apiError(res, 503, 'WAZUH_NO_KEY', 'NOTIFY_ENCRYPTION_KEY is not configured, so the stored manager password cannot be opened');
@@ -36,7 +36,7 @@ const handle = (fn) => async (req, res) => {
   catch (e) {
     if (e instanceof api.WazuhApiError) return apiProblem(res, e);
     console.error('Wazuh manager call failed:', e.message);
-    apiError(res, 500, 'WAZUH_ERROR', 'The call to the Wazuh manager failed');
+    apiError(res, 500, 'WAZUH_ERROR', 'The call to the endpoint manager failed');
   }
 };
 
@@ -47,7 +47,7 @@ router.get('/v1/endpoints/manager', ...guarded('capacity:read'), async (req, res
   catch (e) {
     if (store.isMissingTable(e)) return res.status(200).json({ success: true, manager: store.view(null, false) });
     console.error('Wazuh manager lookup failed:', e.message);
-    return apiError(res, 500, 'WAZUH_ERROR', 'Failed to look up the Wazuh manager');
+    return apiError(res, 500, 'WAZUH_ERROR', 'Failed to look up the endpoint manager');
   }
   const manager = store.view(row);
   if (!row) return res.status(200).json({ success: true, manager });
@@ -57,7 +57,7 @@ router.get('/v1/endpoints/manager', ...guarded('capacity:read'), async (req, res
   try { manager.status = { reachable: true, ...(await api.managerInfo(m)) }; }
   catch (e) {
     if (!(e instanceof api.WazuhApiError)) console.error('Wazuh manager call failed:', e.message);
-    manager.status = { reachable: false, code: e instanceof api.WazuhApiError ? e.code : 'ERROR', message: e instanceof api.WazuhApiError ? e.message : 'The call to the Wazuh manager failed' };
+    manager.status = { reachable: false, code: e instanceof api.WazuhApiError ? e.code : 'ERROR', message: e instanceof api.WazuhApiError ? e.message : 'The call to the endpoint manager failed' };
   }
   res.status(200).json({ success: true, manager });
 });
