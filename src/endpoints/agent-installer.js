@@ -5,6 +5,7 @@
 // group name or an address can never carry shell syntax into the script.
 const fs = require('fs');
 const path = require('path');
+const notices = require('./notices');
 
 const TEMPLATE = fs.readFileSync(path.join(__dirname, 'templates', 'agent-install-linux.sh'), 'utf8');
 const TEMPLATE_WINDOWS = fs.readFileSync(path.join(__dirname, 'templates', 'agent-install-windows.ps1'), 'utf8');
@@ -39,8 +40,8 @@ function agentVersion(managerVersion) {
 function fill(template, { host, group, managerVersion }, filename) {
   const h = checkHost(host), g = checkGroup(group), v = agentVersion(managerVersion);
   if (!VERSION_RE.test(v.version)) throw new InstallerError('BAD_VERSION', 'Bad agent version');
-  const script = template.split('@MANAGER@').join(h).split('@GROUP@').join(g).split('@VERSION@').join(v.version);
-  if (/@(MANAGER|GROUP|VERSION)@/.test(script)) throw new InstallerError('TEMPLATE', 'The installer template still has an unfilled field');
+  const script = template.split('@NOTICES@').join(notices.text()).split('@MANAGER@').join(h).split('@GROUP@').join(g).split('@VERSION@').join(v.version);
+  if (/@(MANAGER|GROUP|VERSION|NOTICES)@/.test(script)) throw new InstallerError('TEMPLATE', 'The installer template still has an unfilled field');
   return { script, manager: h, group: g, agent_version: v.version, from_manager: v.fromManager, filename };
 }
 function render(opts) { return fill(TEMPLATE, opts, 'asix-endpoint-install.sh'); }
