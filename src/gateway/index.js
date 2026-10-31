@@ -79,6 +79,19 @@ app.use(require('./routes/agent-alert'));
 app.use(require('./routes/endpoint-alerts'));
 app.use(require('./routes/endpoint-checks'));
 
+// Readiness (k8s/30-asix-api.yaml). Mounted AFTER every router on purpose: a request only gets here if each router above passed it on, so a pod whose route chain is
+// broken (found 2026-10-31: a router that never answered hung every request after it, while /v1/health/status, mounted early, still looked fine) is never marked Ready,
+// the rolling update stops, and the old pods keep serving. It also checks the database, like /v1/health/status.
+app.get('/v1/health/ready', async (req, res) => {
+  try {
+    const ok = await db.healthCheck();
+    res.status(ok ? 200 : 503).json({ success: ok, status: ok ? 'ok' : 'degraded', service: 'asix-api', check: 'ready' });
+  } catch (error) {
+    console.error('Ready check failed:', error.message);
+    res.status(503).json({ success: false, status: 'degraded', service: 'asix-api', check: 'ready' });
+  }
+});
+
 app.get('/', (req, res) => {
   res.json({
     service: 'asix-api',

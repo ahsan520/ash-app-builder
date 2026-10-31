@@ -54,6 +54,7 @@ Module: audit
 
 Module: health / platform (self-managing skeleton in Phase 2, framework in Phase 1)
 - GET /v1/health/status — basic platform health (auth service, gateway, DB connection)
+- GET /v1/health/ready — readiness (database), mounted after every router so it only answers when the whole request chain passes requests along; used by the startup and readiness probes (k8s/30-asix-api.yaml). `/` is the liveness probe
 
 ## Internal Control Plane APIs (not public UI-facing; still auth/tenant/policy protected)
 Internal APIs use same gateway/auth but are restricted to service accounts / control-plane role:

@@ -5,6 +5,14 @@ metadata:
   namespace: asix-platform
 spec:
   replicas: 2
+  # A new build replaces the pods one at a time and only after the new pod is Ready; the old pods are never removed first. A build that never becomes Ready
+  # leaves the old ones serving and the rollout fails after the deadline (deploy.sh then stops with the old code still running).
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  progressDeadlineSeconds: 300
   selector:
     matchLabels:
       app: asix-api
@@ -133,18 +141,31 @@ spec:
             limits:
               cpu: "500m"
               memory: "512Mi"
+          # Probes (hardened 2026-10-31, see docs/parallel-work.md "H1"). The old 1 s timeouts were the Kubernetes default: a pod that was only slow for a moment was killed.
+          # startupProbe: up to 3 minutes to start before the other two begin (schema, event store, first connections). readinessProbe: /v1/health/ready is mounted after every
+          # router, so a pod whose request chain is broken never becomes Ready and the rolling update stops with the old pods still serving. livenessProbe: / also goes through
+          # every router; 6 misses 20 s apart (2 minutes of silence) before a restart.
+          startupProbe:
+            httpGet:
+              path: /v1/health/ready
+              port: 3000
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 36
           readinessProbe:
             httpGet:
-              path: /v1/health/status
+              path: /v1/health/ready
               port: 3000
-            initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /
               port: 3000
-            initialDelaySeconds: 10
             periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
 ---
 apiVersion: v1
 kind: Service
