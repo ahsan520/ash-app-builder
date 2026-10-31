@@ -87,6 +87,15 @@ async function main() {
     p = await call('PUT', U, { limit: 70 }); await run(A);
     assert.deepStrictEqual(await raised(A), ['CIS test policy on web1', 'CIS test policy on web2', 'CIS test policy on web4'], 'on again: the 10 raises');
 
+    // 7b. E4p preview on the real store: the newest summary per policy and machine counts, an older low one does not, tenants are separate
+    await store.insertBatch(A, [{ source_type: 'endpoint-alert', raw: 'old scan', received_at: ago(100), parsed: { sca_score: 20, sca_key: 'CIS test policy on web1' } }]);
+    let pv = await call('GET', U + '/preview?limit=70'); assert.strictEqual(pv.status, 200);
+    assert.deepStrictEqual([pv.json.preview.summaries, pv.json.preview.under, pv.json.preview.list.map((x) => x.score)], [4, 3, [10, 45, 60]], 'web1 counts as 45, not the older 20');
+    assert.strictEqual((await call('GET', U + '/preview?limit=50')).json.preview.under, 2);
+    TENANT = B; pv = await call('GET', U + '/preview?limit=70'); assert.deepStrictEqual([pv.json.preview.summaries, pv.json.preview.under], [1, 1]); TENANT = A;
+    for (const q of ['', '?limit=0', '?limit=101', '?limit=x', '?limit=5&limit=6']) assert.strictEqual((await call('GET', U + '/preview' + q)).status, 400, q);
+    assert.strictEqual((await ruleRow(A)).definition.xql, sa.queryFor(70), 'a preview changes nothing');
+
     // 8. ensureBuiltinRules: an untouched E4n description is replaced; an edited one is not; the query and the limit are never written by it
     await db.query(`UPDATE detection_rules SET description = $3 WHERE tenant_id = $1 AND builtin_key = $2`, [A, sa.RULE_KEY, sa.E4N_DESCRIPTION]);
     await db.query(`UPDATE detection_rules SET description = 'my own words' WHERE tenant_id = $1 AND builtin_key = $2`, [B, sa.RULE_KEY]);

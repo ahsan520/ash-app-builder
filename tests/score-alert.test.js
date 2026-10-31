@@ -104,7 +104,7 @@ describe('routes', () => {
   const U = '/v1/endpoints/score-alert';
 
   it('uses the Detections permissions: detections:rules:read to read, detections:rules:write to change (no role change)', () => {
-    assert.deepStrictEqual([...new Set(perms)].sort(), ['detections:rules:read', 'detections:rules:write']);
+    assert.deepStrictEqual([...new Set(perms)].sort(), ['detections:rules:read', 'detections:rules:write', 'search:events:read']);
     const r = fs.readFileSync(path.join(__dirname, '..', 'src', 'gateway', 'routes', 'score-alert.js'), 'utf8');
     assert.match(r, /router\.get\('\/v1\/endpoints\/score-alert', \.\.\.guarded\('detections:rules:read'\)/); assert.match(r, /router\.put\('\/v1\/endpoints\/score-alert', \.\.\.guarded\('detections:rules:write'\)/);
   });
@@ -153,6 +153,30 @@ describe('routes', () => {
   it('a database failure is a 500 with no detail leaked', async () => {
     reset(sa.queryFor(50), true, 'broken');
     for (const [m, b] of [['GET'], ['PUT', { limit: 30 }], ['PUT', { off: true }]]) { const r = await call(m, U, b); assert.strictEqual(r.status, 500); assert.strictEqual(r.json.error.code, 'SCORE_ALERT_ERROR'); assert.ok(!/connection reset/.test(JSON.stringify(r.json))); }
+  });
+});
+
+describe('preview (E4p)', () => {
+  const row = (key, score, minAgo) => ({ _time: new Date(Date.parse('2026-10-31T12:00:00Z') - minAgo * 60000), parsed: { sca_key: key, sca_score: score } });
+  it('counts only the NEWEST summary per policy and machine, under the limit, lowest first', () => {
+    const r = sa.preview([row('p on a', 80, 1), row('p on a', 20, 500), row('p on b', 45, 2), row('p on c', '30', 3), row('p on d', 50, 4)], 50);
+    assert.deepStrictEqual([r.summaries, r.under], [4, 2]); assert.deepStrictEqual(r.list.map((x) => x.key), ['p on c', 'p on b']); assert.strictEqual(r.list[0].time, '2026-10-31T11:57:00.000Z');
+  });
+  it('the limit is strict (50 is not under 50) and rows without a number or a key are skipped', () => {
+    const r = sa.preview([row('x', 50, 1), { parsed: { sca_key: 'y' } }, { parsed: { sca_score: 5 } }, { parsed: { sca_key: 'z', sca_score: 'abc' } }, {}, null], 50);
+    assert.deepStrictEqual([r.summaries, r.under], [1, 0]);
+  });
+  it('the list is capped but the count is not; truncated is passed on', () => {
+    const rows = Array.from({ length: 40 }, (_, i) => row('k' + i, i, i));
+    const r = sa.preview(rows, 100, true); assert.deepStrictEqual([r.under, r.list.length, r.truncated, r.read], [40, 25, true, 40]);
+  });
+  it('the plan reads endpoint-alert events that have a score, newest first, over 7 days', () => {
+    const pl = sa.previewPlan(Date.parse('2026-10-31T00:00:00Z'));
+    assert.strictEqual(pl.from, '2026-10-24T00:00:00.000Z'); assert.deepStrictEqual(pl.stages[0].names, ['endpoint-alert']); assert.deepStrictEqual(pl.stages[1].expr, { t: 'isnull', field: '@sca_score', neg: true }); assert.strictEqual(pl.mode, 'raw');
+  });
+  it('the route uses search:events:read and is a GET', () => {
+    const r = fs.readFileSync(path.join(__dirname, '..', 'src', 'gateway', 'routes', 'score-alert.js'), 'utf8');
+    assert.match(r, /router\.get\('\/v1\/endpoints\/score-alert\/preview', \.\.\.guarded\('search:events:read'\)/);
   });
 });
 

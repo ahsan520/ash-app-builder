@@ -1605,11 +1605,22 @@ function scoreAlertCard(s, apply) {
   }
   const lim = el('input', { type: 'number', min: s.limits[0], max: s.limits[1], value: String(s.limit), style: 'width:90px' });
   const state = s.enabled ? pill('On: score under ' + s.limit + '%', 'ok') : pill('Off', 'off');
+  const out = el('div', { style: 'margin-top:8px;font-size:13px' });
+  const showPreview = async () => {
+    out.replaceChildren(el('span', { className: 'mute', textContent: 'Reading...' }));
+    try {
+      const r = (await api('/v1/endpoints/score-alert/preview?limit=' + encodeURIComponent(lim.value.trim()))).preview;
+      out.replaceChildren(el('div', { textContent: r.under + ' of ' + r.summaries + ' policy and machine pairs scored under ' + r.limit + '% on their latest scan summary of the last ' + r.days + ' days' + (r.truncated ? ' (only the newest ' + r.read + ' summaries were read)' : '') + '.' }),
+        ...r.list.map((x) => el('div', { className: 'mute', textContent: x.score + '%  ' + x.key })));
+    } catch (e) { out.replaceChildren(el('div', { className: 'err', textContent: e.message })); }
+  };
   return card(title,
     el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, state),
     el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px' },
       el('span', { textContent: 'Alert when a scan finishes with a score under' }), lim, el('span', { textContent: '%' }),
-      el('button', { className: 'btn pri', textContent: s.enabled ? 'Save' : 'Save and turn on', onclick: () => send({ limit: lim.value.trim() }) }), off),
+      el('button', { className: 'btn pri', textContent: s.enabled ? 'Save' : 'Save and turn on', onclick: () => send({ limit: lim.value.trim() }) }), off,
+      el('button', { className: 'btn', textContent: 'Preview', title: 'How many machines this limit would catch, from their latest scan summary', onclick: showPreview })),
+    out,
     el('div', { className: 'mute', style: 'margin-top:8px;font-size:12px', textContent: 'One alert per policy and machine, at most one a day (the built-in rule "Endpoint configuration check score low", severity ' + (s.severity || 'medium') + '; its severity and suppression are on the Detections page). It applies within about a minute and looks at the scan summaries of the last hour (the rule\'s window). Lowering the limit or turning it off does not close alerts already raised. Shipped limit: ' + s.default_limit + '%.' }));
 }
 // ---- Configuration checks of one machine (E6f) ----

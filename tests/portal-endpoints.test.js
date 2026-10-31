@@ -65,7 +65,7 @@ describe('Endpoints page', () => {
     const writers = [[['agentAlertCard', 'agentSkipButton'], "api('/v1/endpoints/agent-alert'"], [['scoreAlertCard'], "api('/v1/endpoints/score-alert'"]];
     const fns = writers.flatMap(([names, route]) => names.map((n) => { const i = source.indexOf('function ' + n + '('); assert.ok(i >= 0, n); return { f: source.slice(i, source.indexOf('\n}\n', i) + 3), route }; }));
     const rest = fns.reduce((s, x) => s.replace(x.f, ''), source);
-    for (const { f, route } of fns) { assert.ok(/method: 'PUT'/.test(f)); assert.ok((f.match(/method:/g) || []).length === (f.match(/method: 'PUT'/g) || []).length); assert.ok((f.match(/api\('([^']*)'/g) || []).every((x) => x === route)); assert.ok(!/innerHTML|insertAdjacentHTML|outerHTML|document\.write/.test(f)); }
+    for (const { f, route } of fns) { assert.ok(/method: 'PUT'/.test(f)); assert.ok((f.match(/method:/g) || []).length === (f.match(/method: 'PUT'/g) || []).length); assert.ok((f.match(/api\('([^']*)'/g) || []).every((x) => x.startsWith(route.slice(0, -1)))); assert.ok(!/innerHTML|insertAdjacentHTML|outerHTML|document\.write/.test(f)); }
     assert.ok(!/innerHTML|insertAdjacentHTML|method:/.test(rest));
     const p = await open(); await p.click('Agents');
     assert.ok(p.calls.length >= 3 && p.calls.every((c) => c.method === 'GET' && /^\/v1\/endpoints\/(manager|agents|agent-alert)/.test(c.p)));

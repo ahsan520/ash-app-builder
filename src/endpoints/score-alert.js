@@ -93,4 +93,31 @@ async function writeOff(client, tenantId) {
   return r.rowCount > 0;
 }
 
-module.exports = { RULE_KEY, DEFAULT_LIMIT, LIMITS, DESCRIPTION, E4N_DESCRIPTION, XQL_SQL_RE, queryFor, limitFromQuery, checkLimit, parseBody, view, readRow, writeLimit, writeOff };
+
+// ---- E4p: preview of a limit -------------------------------------------------------------------------------------------------------------------------
+// "How many machines would a limit catch?" before it is saved. Reads the stored scan summaries (source type endpoint-alert with a sca_score, E4n) of the last
+// PREVIEW_DAYS days, newest first, keeps the NEWEST one per policy and machine (sca_key) and counts those under the limit. Read only; nothing is raised or changed.
+const PREVIEW_DAYS = 7;
+const PREVIEW_READ = 1000;     // newest summaries read
+const PREVIEW_LIST = 25;       // rows returned
+
+function previewPlan(now = Date.now()) {
+  return { v: 1, from: new Date(now - PREVIEW_DAYS * 86400000).toISOString(), to: null,
+    stages: [{ op: 'dataset', names: ['endpoint-alert'], list: false }, { op: 'filter', expr: { t: 'isnull', field: '@sca_score', neg: true } }],
+    mode: 'raw', limit: PREVIEW_READ, columns: null };
+}
+// rows: the store's raw rows, newest first ({ _time, parsed }). Returns { limit, days, read, truncated, summaries, under, list: [{ key, score, time }] } (lowest score first).
+function preview(rows, limit, truncated = false) {
+  const newest = new Map();
+  for (const r of rows || []) {
+    const p = r && r.parsed ? r.parsed : {};
+    const score = typeof p.sca_score === 'number' ? p.sca_score : (typeof p.sca_score === 'string' && /^[0-9]{1,3}$/.test(p.sca_score) ? Number(p.sca_score) : null);
+    const key = typeof p.sca_key === 'string' ? p.sca_key.slice(0, 300) : null;
+    if (score === null || !key || newest.has(key)) continue;   // newest first: the first one seen per key is the latest scan
+    newest.set(key, { key, score, time: r._time instanceof Date ? r._time.toISOString() : (r._time || null) });
+  }
+  const under = [...newest.values()].filter((x) => x.score < limit).sort((a, b) => a.score - b.score || (a.key < b.key ? -1 : 1));
+  return { limit, days: PREVIEW_DAYS, read: (rows || []).length, truncated: !!truncated, summaries: newest.size, under: under.length, list: under.slice(0, PREVIEW_LIST) };
+}
+
+module.exports = { PREVIEW_DAYS, PREVIEW_READ, PREVIEW_LIST, previewPlan, preview, RULE_KEY, DEFAULT_LIMIT, LIMITS, DESCRIPTION, E4N_DESCRIPTION, XQL_SQL_RE, queryFor, limitFromQuery, checkLimit, parseBody, view, readRow, writeLimit, writeOff };

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { db, guarded, apiError } = require('../shared');
+const { getEventStore } = require('../../events');
 const scoreAlert = require('../../endpoints/score-alert');
 
 // ---- "Endpoint configuration check score low" alert: its limit from the Endpoints page (src/endpoints/score-alert.js, docs/endpoints.md task E4o) -----------------------
@@ -32,6 +33,20 @@ router.put('/v1/endpoints/score-alert', ...guarded('detections:rules:write'), as
   } catch (e) {
     console.error('Score alert update failed:', e.message);
     apiError(res, 500, 'SCORE_ALERT_ERROR', 'Failed to save the configuration check score alert');
+  }
+});
+
+// E4p: how many machines a limit would catch, from the newest stored scan summary per policy and machine (last 7 days). Reads event contents, so it uses search:events:read
+// like the Endpoints alert tabs. Read only. ?limit=1..100
+router.get('/v1/endpoints/score-alert/preview', ...guarded('search:events:read'), async (req, res) => {
+  const l = scoreAlert.checkLimit(Array.isArray(req.query.limit) ? undefined : req.query.limit);
+  if (l.error) return apiError(res, 400, 'INVALID_SCORE_ALERT', l.error);
+  try {
+    const r = await getEventStore().search(req.tenant_id, scoreAlert.previewPlan());
+    res.status(200).json({ success: true, preview: scoreAlert.preview(r.rows, l.value, r.truncated) });
+  } catch (e) {
+    console.error('Score alert preview failed:', e.message);
+    apiError(res, 500, 'SCORE_ALERT_ERROR', 'Failed to read the scan summaries');
   }
 });
 

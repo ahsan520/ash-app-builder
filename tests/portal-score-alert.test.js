@@ -9,7 +9,7 @@ const sa = require('../src/endpoints/score-alert');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'portal', 'index.html'), 'utf8');
 const cut = (name) => { const i = html.indexOf('function ' + name + '('); assert.ok(i >= 0, name + ' not found'); const j = html.indexOf('\n}\n', i); return html.slice(i, j + 3); };
-const el = (tag, props, ...kids) => { const n = Object.assign({ tag, kids: kids.flat(Infinity) }, props || {}); n.props = n; return n; };
+const el = (tag, props, ...kids) => { const n = Object.assign({ tag, kids: kids.flat(Infinity) }, props || {}); n.props = n; n.replaceChildren = (...k) => { n.kids = k.flat(Infinity); }; return n; };
 const card = (title, ...kids) => ({ tag: 'card', props: { title }, kids: kids.flat(Infinity) });
 const pill = (text, cls) => ({ pill: text, cls });
 const calls = []; const alerts = []; let failNext = null;
@@ -56,6 +56,24 @@ describe('Endpoints, Configuration checks: score alert card', () => {
     alerts.length = 0; let applied = 0; const c = scoreAlertCard(view(), () => { applied += 1; });
     failNext = 'The rule\'s query was edited on the Detections page'; await buttons(c, 'Save')[0].onclick();
     assert.deepStrictEqual(alerts, ['The rule\'s query was edited on the Detections page']); assert.strictEqual(applied, 0);
+  });
+});
+
+describe('preview (E4p)', () => {
+  it('Preview asks for the typed limit (encoded) with a GET and shows the count and the list as text', async () => {
+    calls.length = 0;
+    const saved = api; // the stand-in api returns { settings } for everything, so build a card whose api answers the preview
+    const mk = new Function('el', 'card', 'pill', 'api', 'alert', cut('scoreAlertCard') + '\nreturn scoreAlertCard;');
+    const seen = []; const c = mk(el, card, pill, async (p, o) => { seen.push({ p, o }); return { preview: { limit: 60, days: 7, read: 9, truncated: true, summaries: 5, under: 2, list: [{ key: 'P on a', score: 10 }, { key: 'P on b', score: 45 }] } }; }, () => {})(view(), () => {});
+    input(c).props.value = ' 60 '; await buttons(c, 'Preview')[0].onclick();
+    assert.deepStrictEqual(seen, [{ p: '/v1/endpoints/score-alert/preview?limit=60', o: undefined }]);
+    const t = texts(c).join(' | ');
+    assert.match(t, /2 of 5 policy and machine pairs scored under 60%/); assert.match(t, /only the newest 9 summaries were read/); assert.match(t, /10%  P on a/); assert.match(t, /45%  P on b/); assert.ok(saved);
+  });
+  it('a failed preview shows the message; a hand-edited rule has no preview button (no number box)', async () => {
+    const mk = new Function('el', 'card', 'pill', 'api', 'alert', cut('scoreAlertCard') + '\nreturn scoreAlertCard;');
+    const c = mk(el, card, pill, async () => { throw new Error('boom'); }, () => {})(view(), () => {}); await buttons(c, 'Preview')[0].onclick(); assert.ok(texts(c).includes('boom'));
+    assert.strictEqual(buttons(scoreAlertCard(view('alert_level >= 1'), () => {}), 'Preview').length, 0);
   });
 });
 
