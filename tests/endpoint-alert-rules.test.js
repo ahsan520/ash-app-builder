@@ -49,15 +49,16 @@ describe('the parsing rule: the grouping fields', () => {
 });
 
 describe('the built-in endpoint rules', () => {
-  it('there are four, with unique keys, valid definitions and the endpoint category', () => {
-    assert.deepStrictEqual(Object.keys(RULES).sort(), ['endpoint-alert-critical', 'endpoint-alert-high', 'endpoint-alert-repeated', 'endpoint-fim-sensitive']);
+  it('there are five, with unique keys, valid definitions and the endpoint category', () => {
+    assert.deepStrictEqual(Object.keys(RULES).sort(), ['endpoint-alert-critical', 'endpoint-alert-high', 'endpoint-alert-repeated', 'endpoint-config-score-low', 'endpoint-fim-sensitive']);
     assert.strictEqual(new Set(BUILTIN_RULES.map((r) => r.key)).size, BUILTIN_RULES.length);
     for (const r of Object.values(RULES)) {
       assert.ok(!normalizeDefinition(r.definition).error, `${r.key}: ${JSON.stringify(normalizeDefinition(r.definition))}`);
       assert.strictEqual(r.category, 'Endpoint Security'); assert.strictEqual(r.kind, 'bioc');
       assert.ok(['low', 'medium', 'high', 'critical'].includes(r.severity));
-      assert.strictEqual(r.definition.source_type, 'endpoint-alert'); assert.strictEqual(r.definition.group_by, 'field:alert_key');
-      assert.deepStrictEqual(r.definition.suppression, { enabled: true, minutes: 60 });
+      const score = r.key === 'endpoint-config-score-low';   // E4n: one alert per policy and machine, at most one a day
+      assert.strictEqual(r.definition.source_type, 'endpoint-alert'); assert.strictEqual(r.definition.group_by, score ? 'field:sca_key' : 'field:alert_key');
+      assert.deepStrictEqual(r.definition.suppression, { enabled: true, minutes: score ? 1440 : 60 });
     }
   });
   it('severity matches the level band each rule covers', () => {

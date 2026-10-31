@@ -342,6 +342,16 @@ const BUILTIN_RULES = [
     },
   },
   {
+    key: 'endpoint-config-score-low', kind: 'bioc', category: 'Endpoint Security', name: 'Endpoint configuration check score low',
+    description: 'A configuration check scan of one machine finished with a score under 50% (the manager\'s scan summary). One alert per policy and machine, at most one a day. Raise or lower the 50 in the query, or switch the rule off, on this page.',
+    severity: 'medium', mitre: [],
+    definition: {
+      source_type: 'endpoint-alert', group_by: 'field:sca_key', threshold: 1, window_minutes: 60, run_every_minutes: 1, mode: 'realtime',
+      suppression: { enabled: true, minutes: 1440 },
+      xql: 'sca_score != null and sca_score < 50',   // E4n: sca_score is the summary's score (parsing rule wazuh_alert); a single failed check has none
+    },
+  },
+  {
     key: 'endpoint-fim-sensitive', kind: 'bioc', category: 'Endpoint Security', name: 'Sensitive file changed on an endpoint',
     description: 'File integrity monitoring saw a change to an account, sudo, SSH key, cron, startup or hosts file (alerts below level 8; higher ones are covered by the level rules).',
     severity: 'high', mitre: ['T1098', 'T1547'],

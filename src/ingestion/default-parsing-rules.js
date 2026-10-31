@@ -552,7 +552,9 @@ filter asix_via = "wazuh" and rule_id ~= "^[0-9]+$"
     file_path = syscheck_path,
     file_event = syscheck_event,
     alert_target = coalesce(agent_name, "unknown"),
-    alert_key = concat(rule_id, " on ", alert_target)
+    alert_key = concat(rule_id, " on ", alert_target),
+    sca_score = if(data_sca_type = "summary", to_integer(data_sca_score), null),
+    sca_key = if(data_sca_type = "summary", concat(coalesce(data_sca_policy, "unknown policy"), " on ", alert_target), null)
 | fields -tmp_*;
 /* ------------ wazuh_alert --------- */
 `;
