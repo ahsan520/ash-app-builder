@@ -36,6 +36,7 @@ async function open(manager = MANAGER, answers = {}) {
     if (a instanceof Error) throw a;
     if (a !== undefined) return a;
     if (p === '/v1/endpoints/manager') return { success: true, manager };
+    if (p === '/v1/endpoints/notices') return { success: true, ...require('../src/endpoints/notices').forApi() };
     if (p === '/v1/endpoints/agents/summary') return { success: true, summary: SUMMARY };
     if (p.startsWith('/v1/endpoints/agents?')) return { success: true, ...LIST };
     if (p.startsWith('/v1/endpoints/installer/linux?')) return { success: true, installer: { platform: 'linux', manager: '192.168.68.54', group: new URLSearchParams(p.split('?')[1]).get('group'), agent_version: '4.14.9-1', from_manager: true, filename: 'asix-endpoint-install.sh',
@@ -171,8 +172,23 @@ describe('Endpoints page', () => {
   });
   it('third-party notices: the open source component, its licence and source, with the version the manager reports', async () => {
     const p = await open(); await p.click('Third-party notices'); const t = p.text();
-    assert.match(t, /Wazuh/); assert.match(t, /GNU General Public License, version 2/); assert.match(t, /github\.com\/wazuh\/wazuh/); assert.match(t, /v4\.14\.9/); assert.match(t, /lawyer/);
-    const a = p.all().find((n) => n.tag === 'a'); assert.strictEqual(a.attrs.rel, 'noopener noreferrer'); assert.strictEqual(a.attrs.target, '_blank');
+    assert.ok(p.calls.some((c) => c.p === '/v1/endpoints/notices' && c.method === 'GET'), 'the tab reads the route, it does not keep its own copy');
+    assert.match(t, /Wazuh/); assert.match(t, /GNU General Public License, version 2/); assert.match(t, /github\.com\/wazuh\/wazuh/); assert.match(t, /v4\.14\.9/); assert.match(t, /lawyer/); assert.match(t, /Copyright Wazuh, Inc\./);
+    assert.match(t, /trademark/); assert.match(t, /--notices/); assert.match(t, /-Notices/);
+    const links = p.all().filter((n) => n.tag === 'a'); assert.ok(links.length >= 2, 'licence and source are links'); for (const a of links) { assert.strictEqual(a.attrs.rel, 'noopener noreferrer'); assert.strictEqual(a.attrs.target, '_blank'); assert.match(a.attrs.href, /^https:\/\//); }
+  });
+  it('third-party notices: once the text is reviewed the draft line goes away, and a licence address that is not https is shown as text, not a link', async () => {
+    const n = require('../src/endpoints/notices').forApi(); n.draft = false; n.reviewed = true; n.components[0].licence_url = 'javascript:alert(1)';
+    const p = await open(MANAGER, { '/v1/endpoints/notices': { success: true, ...n } }); await p.click('Third-party notices'); const t = p.text();
+    assert.ok(!/lawyer/.test(t)); assert.match(t, /GNU General Public License, version 2/); assert.ok(!p.all().some((x) => x.tag === 'a' && /javascript:/.test(x.attrs.href)));
+  });
+  it('third-party notices: a route that fails is shown as a message, and the other tabs still work', async () => {
+    const p = await open(MANAGER, { '/v1/endpoints/notices': new Error('500 boom') }); await p.click('Third-party notices'); assert.match(p.text(), /The notices could not be loaded: 500 boom/);
+    await p.click('Agents'); assert.match(p.text(), /web01/);
+  });
+  it('third-party notices: the tab names the product, no other tab does', async () => {
+    const p = await open(); for (const tab of ['Overview', 'Agents', 'Alerts', 'File integrity', 'Configuration checks', 'Add a machine']) { await p.click(tab); assert.ok(!/wazuh/i.test(p.text()), tab + ' shows the product name'); }
+    await p.click('Third-party notices'); assert.match(p.text(), /Wazuh/);
   });
   it('Refresh reloads the page', async () => { const p = await open(); await p.click('Refresh'); assert.strictEqual(p.routes.length, 1); });
 });

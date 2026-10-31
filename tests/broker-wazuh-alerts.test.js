@@ -74,7 +74,7 @@ describe('broker Wazuh alerts input: the files agree', () => {
     assert.deepStrictEqual(paused.KINDS, ['file', 'http', 'journald', 'wazuh', 'wazuhalerts']);
     const all = paused.KINDS.join(','); assert.ok(all.length <= 40 && /^[a-z,]+$/.test(all), 'the collectors columns check length <= 40 and ^[a-z,]+$ (k8s/12-schema-init.yaml)');
     const schema = read('k8s/12-schema-init.yaml'); assert.match(schema, /length\(inputs_paused\) <= 40 AND inputs_paused ~ '\^\[a-z,\]\+\$'/);
-    const html = read('src/portal/index.html'); assert.match(html, /const BROKER_PAUSABLE = \['file', 'http', 'journald', 'wazuh', 'wazuhalerts'\];/); assert.match(html, /wazuhalerts: 'Endpoint alerts'/); assert.match(html, /wazuhalerts: "the alerts the Wazuh manager raised/);
+    const html = read('src/portal/index.html'); assert.match(html, /const BROKER_PAUSABLE = \['file', 'http', 'journald', 'wazuh', 'wazuhalerts'\];/); assert.match(html, /wazuhalerts: 'Endpoint alerts'/); assert.match(html, /wazuhalerts: "the alerts the endpoint manager raised/);
   });
 });
 
