@@ -225,4 +225,77 @@ async function getAgent(m, id) {
   return a ? shapeAgent(a) : null;
 }
 
-module.exports = { WazuhApiError, checkApiUrl, addressOk, guardedLookup, parseAgentQuery, managerInfo, agentsSummary, listAgents, getAgent, forget, AGENT_ID_RE, LIMIT_MAX, STATUSES, SORT_FIELDS, shapeAgent, _tokens: tokens };
+
+// --- configuration checks (SCA) of ONE machine, E6f ------------------------------------------------------------------------------------------
+// Two more fixed paths, still GET only: /sca/<agent id> (the policies a machine was scanned with) and /sca/<agent id>/checks/<policy id> (every check of one policy with its current
+// result). The agent id is digits only, the policy id a short fixed alphabet, the query is validated parameter by parameter (parseScaQuery), and the answer is rebuilt from an
+// allow-list of fields with every text cut to a length. Written from the documented Wazuh 4.x shape; NOT checked against a real manager (docs/endpoints.md, "E6f as built").
+const POLICY_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/;
+const SCA_LIMIT_DEFAULT = 50, SCA_LIMIT_MAX = 500, SCA_POLICIES_MAX = 50;
+const SCA_RESULTS = { passed: 'passed', failed: 'failed', not_applicable: 'not applicable' };   // query word -> what the manager calls it
+const SCA_SORT_FIELDS = ['id', 'title', 'result'];
+// Query of GET /v1/endpoints/agents/:id/sca/:policy/checks -> the query string for the manager. Returns { error } or { query, limit, offset }.
+function parseScaQuery(q) {
+  q = q && typeof q === 'object' ? q : {};
+  const ALLOWED = ['limit', 'offset', 'result', 'search', 'sort'];
+  for (const k of Object.keys(q)) if (!ALLOWED.includes(k)) return { error: 'Unknown parameter "' + String(k).slice(0, 40) + '". Allowed: ' + ALLOWED.join(', ') };
+  for (const k of ALLOWED) if (Array.isArray(q[k])) return { error: k + ' can be given once' };
+  const int = (k, def, min, max) => {
+    if (q[k] === undefined || q[k] === '') return def;
+    if (!/^[0-9]{1,9}$/.test(String(q[k]))) return NaN;
+    const v = Number(q[k]); return v < min || v > max ? NaN : v;
+  };
+  const limit = int('limit', SCA_LIMIT_DEFAULT, 1, SCA_LIMIT_MAX), offset = int('offset', 0, 0, 1000000);
+  if (Number.isNaN(limit)) return { error: 'limit must be a whole number from 1 to ' + SCA_LIMIT_MAX };
+  if (Number.isNaN(offset)) return { error: 'offset must be a whole number from 0 to 1000000' };
+  const p = new URLSearchParams(); p.set('limit', String(limit)); p.set('offset', String(offset));
+  if (q.result !== undefined && q.result !== '') {
+    if (!Object.prototype.hasOwnProperty.call(SCA_RESULTS, String(q.result))) return { error: 'result must be one of ' + Object.keys(SCA_RESULTS).join(', ') };
+    p.set('result', SCA_RESULTS[String(q.result)]);
+  }
+  if (q.search !== undefined && q.search !== '') {
+    const s = String(q.search);
+    if (s.length > 100 || /[\u0000-\u001f\u007f]/.test(s)) return { error: 'search must be text of at most 100 characters' };
+    p.set('search', s);
+  }
+  if (q.sort !== undefined && q.sort !== '') {
+    const m = /^([+-]?)([A-Za-z]+)$/.exec(String(q.sort));
+    if (!m || !SCA_SORT_FIELDS.includes(m[2])) return { error: 'sort must be one of ' + SCA_SORT_FIELDS.join(', ') + ', optionally with a leading - for descending' };
+    p.set('sort', (m[1] === '-' ? '-' : '+') + m[2]);
+  }
+  return { query: p.toString(), limit, offset };
+}
+const scaResult = (v) => { const t = typeof v === 'string' ? v.trim().toLowerCase() : ''; return t === 'passed' || t === 'failed' || t === 'not applicable' ? t : null; };
+const pct = (v) => (Number.isFinite(Number(v)) && v !== null && v !== '' && Number(v) >= 0 && Number(v) <= 100 ? Number(v) : null);
+function shapePolicy(p) {
+  if (!p || typeof p !== 'object') return null;
+  const id = txt(p.policy_id, 100); if (!id) return null;
+  return { policy_id: id, name: txt(p.name, 200), description: txt(p.description, 500), passed: count(p.pass), failed: count(p.fail), not_applicable: count(p.invalid), total: count(p.total_checks), score: pct(p.score),
+    start_scan: txt(p.start_scan, 40), end_scan: txt(p.end_scan, 40) };
+}
+const pairs = (a) => (Array.isArray(a) ? a.slice(0, 20).map((x) => (x && typeof x === 'object' ? { key: txt(x.key, 100), value: txt(x.value, 200) } : null)).filter((x) => x && (x.key || x.value)) : []);
+function shapeCheck(c) {
+  if (!c || typeof c !== 'object') return null;
+  const id = txt(c.id, 20); if (id === null) return null;
+  const refs = Array.isArray(c.references) ? c.references.slice(0, 10).map((r) => txt(r, 300)).filter(Boolean).join(', ') : txt(c.references, 500);
+  return { id, title: txt(c.title, 300), result: scaResult(c.result), reason: txt(c.reason, 500), description: txt(c.description, 1000), rationale: txt(c.rationale, 1000), remediation: txt(c.remediation, 1000),
+    command: txt(c.command, 500), condition: txt(c.condition, 40), file: txt(c.file, 300), directory: txt(c.directory, 300), process: txt(c.process, 200), registry: txt(c.registry, 300),
+    references: refs || null, compliance: pairs(c.compliance) };
+}
+// The policies one machine was scanned with. [] when the manager has none (or does not know the agent: it answers 200 with no items and a failed item).
+async function scaPolicies(m, agentId) {
+  if (!AGENT_ID_RE.test(String(agentId))) throw new WazuhApiError('BAD_ID', 'An agent id is 3 to 8 digits');
+  const j = await get(m, '/sca/' + String(agentId) + '?limit=' + SCA_POLICIES_MAX + '&sort=%2Bname'), it = items(j);
+  if (!it) throw bad();
+  return it.map(shapePolicy).filter(Boolean);
+}
+// One policy's checks with their current result, paged. { total, limit, offset, checks }
+async function scaChecks(m, agentId, policyId, parsed) {
+  if (!AGENT_ID_RE.test(String(agentId))) throw new WazuhApiError('BAD_ID', 'An agent id is 3 to 8 digits');
+  if (typeof policyId !== 'string' || !POLICY_ID_RE.test(policyId)) throw new WazuhApiError('BAD_POLICY', 'A policy id is 1 to 100 letters, digits, dots, dashes or underscores');
+  const j = await get(m, '/sca/' + String(agentId) + '/checks/' + encodeURIComponent(String(policyId)) + '?' + parsed.query), it = items(j);
+  if (!it) throw bad();
+  return { total: count(j.data.total_affected_items) ?? it.length, limit: parsed.limit, offset: parsed.offset, checks: it.map(shapeCheck).filter(Boolean) };
+}
+
+module.exports = { WazuhApiError, checkApiUrl, addressOk, guardedLookup, parseAgentQuery, managerInfo, agentsSummary, listAgents, getAgent, scaPolicies, scaChecks, parseScaQuery, shapePolicy, shapeCheck, forget, AGENT_ID_RE, POLICY_ID_RE, SCA_RESULTS, SCA_LIMIT_MAX, LIMIT_MAX, STATUSES, SORT_FIELDS, shapeAgent, _tokens: tokens };

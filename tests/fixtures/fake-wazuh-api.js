@@ -2,6 +2,7 @@
 // A stand-in for the Wazuh manager API over HTTPS with its own self-signed certificate, written from the documented shape of Wazuh 4.x (NOT captured from a real manager):
 //   POST /security/user/authenticate?raw=true   basic auth -> the JWT as plain text
 //   GET  /manager/info, /agents/summary/status, /agents (agents_list, status, search, sort, limit, offset, os.platform)   Authorization: Bearer <jwt>
+//   GET  /sca/<agent>, /sca/<agent>/checks/<policy> (limit, offset, sort, search, result)   (E6f; the documented 4.x shape, with extra fields a real manager sends that must NOT be passed on)
 // It records every request so a test can say exactly what the proxy asked for, and has switches for the awkward cases.
 const https = require('https');
 const crypto = require('crypto');
@@ -29,10 +30,26 @@ const AGENTS = [
   { id: '003', name: 'WS-0042', ip: '10.0.1.42', status: 'never_connected', version: null, group: ['default'], dateAdd: '2026-10-22T09:00:00Z', node_name: 'unknown', manager: 'wazuh-mgr' },
 ];
 
-async function start({ user = 'asix-readonly', password = 'Str0ng-pw!', cn = 'wazuh-test', ca = true, tokenTtl = 900, dir, agents = AGENTS, tag = 'A', security = false } = {}) {
+// E6f: what the manager has for configuration checks, per agent id. `hash_file` and the references on a policy, and `rules`, are fields a real manager sends that the proxy leaves out.
+const check = (id, title, result, extra = {}) => ({ id, policy_id: 'cis_win11', title, description: 'About ' + title, rationale: 'Because ' + title, remediation: 'Fix ' + title, command: null, reason: null,
+  file: null, directory: null, process: null, registry: null, references: ['https://www.cisecurity.org/cis-benchmarks'], condition: 'all', result, compliance: [{ key: 'cis', value: '1.1.' + id }, { key: 'pci_dss', value: '2.2' }],
+  rules: [{ type: 'registry', rule: 'r:HKLM\\SOFTWARE\\X' }], ...extra });
+const SCA = {
+  '001': [
+    { policy_id: 'cis_win11', name: 'CIS Microsoft Windows 11 Enterprise Benchmark', description: 'Guidance for secure configuration.', references: ['https://www.cisecurity.org/'], pass: 2, fail: 2, invalid: 1, total_checks: 5, score: 50,
+      start_scan: '2026-10-30T10:00:00Z', end_scan: '2026-10-30T10:02:00Z', hash_file: 'deadbeef', checks: [
+        check(26000, 'Ensure Password history is set to 24 or more', 'failed', { remediation: 'Set it in Group Policy.' }), check(26001, 'Ensure Minimum password length is 14 or more', 'passed'),
+        check(26002, 'Ensure Account lockout duration is 15 or more', 'failed', { reason: 'Could not read the registry', registry: 'HKLM\\SOFTWARE\\Policies' }), check(26003, 'Ensure Guest account is disabled', 'passed'),
+        check(26004, 'Ensure BitLocker is enabled', 'not applicable', { reason: 'Not a laptop' })] },
+    { policy_id: 'sca_distro_independent_linux', name: 'Generic Linux checks', description: 'Checks for any Linux.', pass: 1, fail: 0, invalid: 0, total_checks: 1, score: 100, start_scan: '2026-10-30T10:03:00Z', end_scan: '2026-10-30T10:03:30Z', hash_file: 'f00', checks: [check(100, 'Ensure SSH root login is disabled', 'passed', { policy_id: 'sca_distro_independent_linux' })] },
+  ],
+  '002': [],
+};
+
+async function start({ user = 'asix-readonly', password = 'Str0ng-pw!', cn = 'wazuh-test', ca = true, tokenTtl = 900, dir, agents = AGENTS, tag = 'A', security = false, sca = SCA } = {}) {
   dir = dir || fs.mkdtempSync(path.join(os.tmpdir(), 'fakewazuh-'));
   const c = makeCert(dir, { cn, ca });
-  const state = { requests: [], tokens: new Set(), authCalls: 0, failAuth: false, delayMs: 0, mode: null, rejectTokens: false, tokenTtl, agents, tokenUser: new Map(), refuse: new Set(), nextId: 100 };
+  const state = { requests: [], tokens: new Set(), authCalls: 0, failAuth: false, delayMs: 0, mode: null, rejectTokens: false, tokenTtl, agents, tokenUser: new Map(), refuse: new Set(), nextId: 100, sca };
   // security mode: a fresh manager as Wazuh ships it, with the two well-known users and the default roles. Passwords are checked as given, the policy of the real API
   // (8 to 64 characters with an upper case letter, a lower case letter, a digit and a symbol) is applied to every new password, and `readonly` may read but not touch /security.
   state.users = security ? new Map([['wazuh', { id: 1, password: 'wazuh', roles: [1] }], ['wazuh-wui', { id: 2, password: 'wazuh-wui', roles: [1] }]]) : new Map([[user, { id: 3, password, roles: [2] }]]);
@@ -89,6 +106,23 @@ async function start({ user = 'asix-readonly', password = 'Str0ng-pw!', cn = 'wa
     if (req.method !== 'GET') return send(405, { title: 'Method not allowed' });
     if (u.pathname === '/manager/info') return send(200, { data: { affected_items: [{ version: 'v4.14.9', compilation_date: '2026-10-14T10:00:00Z', type: 'server', max_agents: '14000', openssl_support: 'yes', tz_offset: '+0000', tz_name: 'UTC', path: '/var/ossec' }], total_affected_items: 1, total_failed_items: 0, failed_items: [] }, message: 'ok', error: 0 });
     if (u.pathname === '/agents/summary/status') { const n = (s) => state.agents.filter((a) => a.status === s).length; return send(200, { data: { connection: { active: n('active'), disconnected: n('disconnected'), never_connected: n('never_connected'), pending: n('pending'), total: state.agents.length }, configuration: { synced: 1 } }, error: 0 }); }
+    let sm;
+    if ((sm = /^\/sca\/(\d+)$/.exec(u.pathname))) {
+      const pols = state.sca[sm[1]];
+      if (!pols) return send(200, { data: { affected_items: [], total_affected_items: 0, total_failed_items: 1, failed_items: [{ error: { code: 1701, message: 'Agent does not exist' }, id: [sm[1]] }] }, message: 'no', error: 1 });
+      const out = pols.map(({ checks, ...p }) => p), lim = Number(u.searchParams.get('limit') || 500);
+      return send(200, { data: { affected_items: out.slice(0, lim), total_affected_items: out.length, total_failed_items: 0, failed_items: [] }, message: 'ok', error: 0 });
+    }
+    if ((sm = /^\/sca\/(\d+)\/checks\/([^/]+)$/.exec(u.pathname))) {
+      const pol = (state.sca[sm[1]] || []).find((p) => p.policy_id === decodeURIComponent(sm[2]));
+      if (!pol) return send(200, { data: { affected_items: [], total_affected_items: 0, total_failed_items: 1, failed_items: [{ error: { code: 1802, message: 'Policy not found' } }] }, message: 'no', error: 1 });
+      let list = pol.checks.slice(); const q = u.searchParams;
+      if (q.get('result')) list = list.filter((c) => c.result === q.get('result'));
+      if (q.get('search')) list = list.filter((c) => JSON.stringify(c).toLowerCase().includes(q.get('search').toLowerCase()));
+      if (q.get('sort')) { const s = q.get('sort'), desc = s.startsWith('-'), f = s.replace(/^[+-]/, ''); list.sort((a, b) => String(a[f]).localeCompare(String(b[f]), undefined, { numeric: true }) * (desc ? -1 : 1)); }
+      const total = list.length, off = Number(q.get('offset') || 0), lim = Number(q.get('limit') || 500);
+      return send(200, { data: { affected_items: list.slice(off, off + lim), total_affected_items: total, total_failed_items: 0, failed_items: [] }, message: 'ok', error: 0 });
+    }
     if (u.pathname === '/agents') {
       let list = state.agents.slice(); const q = u.searchParams;
       if (q.get('agents_list')) { const ids = q.get('agents_list').split(','); list = list.filter((a) => ids.includes(a.id)); }
@@ -105,4 +139,4 @@ async function start({ user = 'asix-readonly', password = 'Str0ng-pw!', cn = 'wa
   return { url: 'https://127.0.0.1:' + srv.address().port, port: srv.address().port, user, password, cert: c.cert, certFile: c.certFile, state, tag, dir,
     stop: () => new Promise((r) => { srv.closeAllConnections && srv.closeAllConnections(); srv.close(r); }) };
 }
-module.exports = { start, makeCert, AGENTS };
+module.exports = { start, makeCert, AGENTS, SCA };

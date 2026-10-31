@@ -77,6 +77,7 @@ app.use(require('./routes/win-filter'));
 app.use(require('./routes/wazuh-manager'));
 app.use(require('./routes/agent-alert'));
 app.use(require('./routes/endpoint-alerts'));
+app.use(require('./routes/endpoint-checks'));
 
 app.get('/', (req, res) => {
   res.json({

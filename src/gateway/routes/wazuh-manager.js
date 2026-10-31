@@ -10,7 +10,7 @@ const installer = require('../../endpoints/agent-installer');
 // (the registry row is read under row security); nothing in the request chooses an address, a path or a credential, and the query string is validated parameter by parameter.
 // There is no route that registers, changes or removes a manager: an operator does that with src/endpoints/wazuh-manager-cli.js (see wazuh-manager-store.js for why).
 
-const STATUS = { AUTH_FAILED: 502, TLS: 502, UNREACHABLE: 502, TIMEOUT: 504, BAD_RESPONSE: 502, TOO_LARGE: 502, BUSY: 503, BLOCKED_ADDRESS: 502, BAD_ADDRESS: 502, BAD_ID: 400 };
+const STATUS = { AUTH_FAILED: 502, TLS: 502, UNREACHABLE: 502, TIMEOUT: 504, BAD_RESPONSE: 502, TOO_LARGE: 502, BUSY: 503, BLOCKED_ADDRESS: 502, BAD_ADDRESS: 502, BAD_ID: 400, BAD_POLICY: 400 };
 const apiProblem = (res, e) => apiError(res, STATUS[e.code] || 502, 'WAZUH_' + e.code, e.message);
 
 // The tenant's manager with its password opened: { m } or { sent: true } after the answer was written.
@@ -98,3 +98,4 @@ for (const [platform, make] of [['linux', installer.render], ['windows', install
 }
 
 module.exports = router;
+module.exports.handle = handle;     // the checks routes (endpoint-checks.js) reuse the registry lookup and the error mapping

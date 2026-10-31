@@ -1589,6 +1589,67 @@ function agentSkipButton(a, id, apply) {
   const send = async () => { try { const r = await api('/v1/endpoints/agent-alert', { method: 'PUT', body: { skip_agent: String(id), skip: !off } }); apply(r.settings); } catch (e) { alert(e.message); } };
   return el('button', { className: 'btn', textContent: off ? 'Alert when disconnected again' : 'Never alert when this machine is disconnected', onclick: send });
 }
+// ---- Configuration checks of one machine (E6f) ----
+// In an agent's detail on the Endpoints page: the policies the manager scanned the machine with, and every check of one policy with its current result, read from the manager on demand
+// (GET /v1/endpoints/agents/:id/sca and .../sca/:policy/checks). Nothing is requested until the button is pressed. All text is set as text, never as HTML.
+const EP_SCA_RESULTS = [['failed', 'Failed'], ['passed', 'Passed'], ['not_applicable', 'Not applicable'], ['', 'Any result']];
+const EP_SCA_LIMIT = 50;
+const EP_SCA_PILL = { failed: ['failed', 'bad'], passed: ['passed', 'ok'], 'not applicable': ['not applicable', 'off'] };
+function agentChecksCard(agentId) {
+  const box = el('div', { style: 'margin-top:12px' });
+  const base = '/v1/endpoints/agents/' + encodeURIComponent(agentId) + '/sca';
+  const S = { policy: null, result: 'failed', search: '', offset: 0 };
+  const failure = (e) => el('div', { className: 'err', textContent: e.message });
+  const showPolicies = async () => {
+    S.policy = null;
+    box.replaceChildren(el('div', { className: 'mute', textContent: 'Loading configuration checks...' }));
+    try {
+      const r = await api(base);
+      const cols = [
+        { h: 'Policy', f: (p) => el('span', { style: 'cursor:pointer;text-decoration:underline', textContent: p.name || p.policy_id, onclick: () => { S.policy = p; S.result = 'failed'; S.search = ''; S.offset = 0; showChecks(); } }) },
+        { h: 'Score', f: (p) => (p.score === null || p.score === undefined ? '-' : p.score + '%') },
+        { h: 'Passed', f: (p) => (p.passed === null ? '-' : String(p.passed)) }, { h: 'Failed', f: (p) => (p.failed === null ? '-' : String(p.failed)) },
+        { h: 'Not applicable', f: (p) => (p.not_applicable === null ? '-' : String(p.not_applicable)) }, { h: 'Last scan (UTC)', f: (p) => when(p.end_scan) },
+      ];
+      box.replaceChildren(el('h4', { textContent: 'Configuration checks' }), table(cols, r.policies || [], 'The manager has no configuration check results for this machine (no policy has run on it yet, or the agent has never reported one).'),
+        (r.policies || []).length ? el('div', { className: 'mute', style: 'margin-top:6px', textContent: 'Press a policy to see its checks.' }) : '');
+    } catch (e) { box.replaceChildren(failure(e)); }
+  };
+  const showChecks = async () => {
+    const pol = S.policy, out = el('div', {}), detail = el('div', {});
+    const result = el('select', {}, ...EP_SCA_RESULTS.map(([v, t]) => el('option', { value: v, textContent: t })));
+    const search = el('input', { placeholder: 'Search the checks', value: S.search, style: 'min-width:220px' });
+    result.value = S.result;
+    const load = async () => {
+      out.replaceChildren(el('div', { className: 'mute', textContent: 'Loading...' })); detail.replaceChildren();
+      const p = new URLSearchParams({ limit: String(EP_SCA_LIMIT), offset: String(S.offset), sort: '+id' });
+      if (S.result) p.set('result', S.result);
+      if (S.search.trim()) p.set('search', S.search.trim());
+      try {
+        const r = await api(base + '/' + encodeURIComponent(pol.policy_id) + '/checks?' + p.toString()), to = S.offset + r.checks.length;
+        const cols = [
+          { h: 'Result', f: (c) => { const x = EP_SCA_PILL[c.result] || [c.result || 'unknown', 'off']; return pill(x[0], x[1]); } },
+          { h: 'Check', f: (c) => el('span', { style: 'cursor:pointer;text-decoration:underline', textContent: c.id, onclick: () => open(c) }) }, { h: 'Title', f: (c) => c.title },
+        ];
+        const prev = el('button', { className: 'btn', textContent: 'Previous', onclick: () => { S.offset = Math.max(0, S.offset - EP_SCA_LIMIT); load(); } });
+        const next = el('button', { className: 'btn', textContent: 'Next', onclick: () => { S.offset += EP_SCA_LIMIT; load(); } });
+        prev.disabled = S.offset === 0; next.disabled = to >= r.total;
+        out.replaceChildren(table(cols, r.checks, 'No checks match.'), el('div', { className: 'mute', style: 'margin-top:8px;display:flex;gap:8px;align-items:center' }, prev, next, (r.total ? (S.offset + 1) + ' to ' + to : '0') + ' of ' + r.total));
+      } catch (e) { out.replaceChildren(failure(e)); }
+    };
+    const open = (c) => detail.replaceChildren(card('Check ' + c.id, kv({ Title: c.title, Result: c.result, Reason: c.reason, Description: c.description, Rationale: c.rationale, Remediation: c.remediation, Command: c.command, Condition: c.condition,
+      File: c.file, Directory: c.directory, Process: c.process, Registry: c.registry, References: c.references, Compliance: (c.compliance || []).map((x) => (x.key ? x.key + ' ' : '') + (x.value || '')).join(', ') })));
+    const apply = () => { S.result = result.value; S.search = search.value; S.offset = 0; load(); };
+    result.onchange = apply; search.onkeydown = (ev) => { if (ev.key === 'Enter') apply(); };
+    box.replaceChildren(el('h4', { textContent: pol.name || pol.policy_id }),
+      el('div', { className: 'mute', style: 'margin-bottom:6px', textContent: [pol.score === null || pol.score === undefined ? '' : 'Score ' + pol.score + '%', pol.passed === null ? '' : pol.passed + ' passed', pol.failed === null ? '' : pol.failed + ' failed', pol.not_applicable === null ? '' : pol.not_applicable + ' not applicable', pol.end_scan ? 'scanned ' + when(pol.end_scan) + ' UTC' : ''].filter(Boolean).join(', ') }),
+      el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px' }, el('button', { className: 'btn', textContent: 'All policies', onclick: () => showPolicies() }), result, search, el('button', { className: 'btn', textContent: 'Search', onclick: apply })),
+      out, detail);
+    load();
+  };
+  return el('div', {}, el('button', { className: 'btn', textContent: 'Show configuration checks', onclick: () => showPolicies() }), box);
+}
+
 async function pgEndpoints() {
   const m = (await api('/v1/endpoints/manager')).manager;
   const top = el('div', { style: 'display:flex;align-items:baseline;gap:12px;flex-wrap:wrap' }, el('h2', { textContent: 'Endpoints' }),
@@ -1637,7 +1698,8 @@ async function pgEndpoints() {
         const a = (await api('/v1/endpoints/agents/' + encodeURIComponent(id))).agent, o = a.os || {};
         detail.replaceChildren(card('Agent ' + a.id, kv({ Name: a.name, Status: (EP_STATUS[a.status] || [a.status])[0], Address: a.ip, 'Registered from': a.register_ip, Version: a.version, Groups: (a.groups || []).join(', '),
           OS: [o.name, o.version, o.arch].filter(Boolean).join(' '), Platform: o.platform, 'Last seen (UTC)': when(a.last_keep_alive), 'Registered (UTC)': when(a.date_added), Node: a.node, Manager: a.manager }),
-          aa && aa.available ? el('div', { style: 'margin-top:10px' }, agentSkipButton(aa, a.id, (x) => { aa = x; draw(); showOne(id); })) : ''));
+          aa && aa.available ? el('div', { style: 'margin-top:10px' }, agentSkipButton(aa, a.id, (x) => { aa = x; draw(); showOne(id); })) : '',
+          el('div', { style: 'margin-top:10px' }, agentChecksCard(a.id))));
       } catch (e) { detail.replaceChildren(el('div', { className: 'err', textContent: e.message })); }
     };
     const cols = [
