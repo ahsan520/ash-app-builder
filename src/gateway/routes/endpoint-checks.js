@@ -29,4 +29,13 @@ router.get('/v1/endpoints/agents/:id/sca/:policy/checks', ...guarded('search:eve
   res.status(200).json({ success: true, agent: req.params.id, policy: req.params.policy, ...(await api.scaChecks(m, req.params.id, req.params.policy, req.scaQuery)) });
 }));
 
+// What the machine is configured to monitor (E4q): its monitored folders (section syscheck) or the log files and event channels it reads (section logcollector). The manager asks
+// the agent, so the agent must be connected. Same permission and exposure as the checks above.
+router.get('/v1/endpoints/agents/:id/config/:section', ...guarded('search:events:read'), idCheck, (req, res, next) => {
+  if (!Object.prototype.hasOwnProperty.call(api.CONFIG_SECTIONS, req.params.section)) return apiError(res, 400, 'INVALID_CONFIG_SECTION', 'The section must be syscheck or logcollector');
+  next();
+}, handle(async (m, req, res) => {
+  res.status(200).json({ success: true, agent: req.params.id, config: await api.agentConfig(m, req.params.id, req.params.section) });
+}));
+
 module.exports = router;

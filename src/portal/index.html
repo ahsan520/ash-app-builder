@@ -1623,6 +1623,25 @@ function scoreAlertCard(s, apply) {
     out,
     el('div', { className: 'mute', style: 'margin-top:8px;font-size:12px', textContent: 'One alert per policy and machine, at most one a day (the built-in rule "Endpoint configuration check score low", severity ' + (s.severity || 'medium') + '; its severity and suppression are on the Detections page). It applies within about a minute and looks at the scan summaries of the last hour (the rule\'s window). Lowering the limit or turning it off does not close alerts already raised. Shipped limit: ' + s.default_limit + '%.' }));
 }
+// ---- What one machine is configured to monitor (E4q) ----
+// Read only. Two buttons in an agent's detail ask the manager (which asks the agent, so it must be connected) for the folders it watches for file changes and the log files and
+// event channels it reads (GET /v1/endpoints/agents/:id/config/syscheck | logcollector). Nothing is requested until a button is pressed. Every value is shown as text.
+function agentConfigCard(agentId) {
+  const box = el('div', { style: 'margin-top:8px' });
+  const show = async (section, title) => {
+    box.replaceChildren(el('div', { className: 'mute', textContent: 'Asking the manager...' }));
+    try {
+      const c = (await api('/v1/endpoints/agents/' + encodeURIComponent(agentId) + '/config/' + section)).config;
+      box.replaceChildren(el('h4', { textContent: title + ' (' + c.items.length + ')' }),
+        c.items.length ? el('div', {}, ...c.items.map((x) => el('div', { textContent: x }))) : el('div', { className: 'mute', textContent: 'The manager reports nothing configured here.' }),
+        c.ignored && c.ignored.length ? el('div', { style: 'margin-top:6px' }, el('div', { className: 'mute', textContent: 'Ignored (' + c.ignored.length + ')' }), ...c.ignored.map((x) => el('div', { className: 'mute', textContent: x }))) : '',
+        c.frequency_seconds !== null && c.frequency_seconds !== undefined ? el('div', { className: 'mute', style: 'margin-top:6px', textContent: 'Scan every ' + c.frequency_seconds + ' seconds' }) : '');
+    } catch (e) { box.replaceChildren(el('div', { className: 'err', textContent: e.message + ' (the agent must be connected for the manager to read its configuration)' })); }
+  };
+  return el('div', {}, el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
+    el('button', { className: 'btn', textContent: 'Show monitored folders', onclick: () => show('syscheck', 'Monitored folders') }),
+    el('button', { className: 'btn', textContent: 'Show logs read', onclick: () => show('logcollector', 'Logs and event channels read') })), box);
+}
 // ---- Configuration checks of one machine (E6f) ----
 // In an agent's detail on the Endpoints page: the policies the manager scanned the machine with, and every check of one policy with its current result, read from the manager on demand
 // (GET /v1/endpoints/agents/:id/sca and .../sca/:policy/checks). Nothing is requested until the button is pressed. All text is set as text, never as HTML.
@@ -1733,7 +1752,8 @@ async function pgEndpoints() {
         detail.replaceChildren(card('Agent ' + a.id, kv({ Name: a.name, Status: (EP_STATUS[a.status] || [a.status])[0], Address: a.ip, 'Registered from': a.register_ip, Version: a.version, Groups: (a.groups || []).join(', '),
           OS: [o.name, o.version, o.arch].filter(Boolean).join(' '), Platform: o.platform, 'Last seen (UTC)': when(a.last_keep_alive), 'Registered (UTC)': when(a.date_added), Node: a.node, Manager: a.manager }),
           aa && aa.available ? el('div', { style: 'margin-top:10px' }, agentSkipButton(aa, a.id, (x) => { aa = x; draw(); showOne(id); })) : '',
-          el('div', { style: 'margin-top:10px' }, agentChecksCard(a.id))));
+          el('div', { style: 'margin-top:10px' }, agentChecksCard(a.id)),
+          el('div', { style: 'margin-top:10px' }, agentConfigCard(a.id))));
       } catch (e) { detail.replaceChildren(el('div', { className: 'err', textContent: e.message })); }
     };
     const cols = [

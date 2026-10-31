@@ -129,10 +129,10 @@ describe('routes GET /v1/endpoints/agents/:id/sca and .../sca/:policy/checks', (
   const get = async (p) => { const r = await fetch(base + p); return { status: r.status, body: await r.json() }; };
 
   it('both are GET only and ask for search:events:read (the permission of the Configuration checks tab), not capacity:read', () => {
-    assert.ok(perms.length >= 2); assert.ok(perms.slice(-2).every((p) => p === 'search:events:read'), perms.join());   // the two new ones; the six before them belong to wazuh-manager.js (capacity:read), loaded for its helper
-    assert.ok(perms.slice(0, -2).every((p) => p === 'capacity:read'), 'the older routes keep capacity:read');
+    assert.ok(perms.length >= 3); assert.ok(perms.slice(-3).every((p) => p === 'search:events:read'), perms.join());   // E4q added a third route in this file   // the two new ones; the six before them belong to wazuh-manager.js (capacity:read), loaded for its helper
+    assert.ok(perms.slice(0, -3).every((p) => p === 'capacity:read'), 'the older routes keep capacity:read');
     const src = fs.readFileSync(path.join(__dirname, '..', 'src/gateway/routes/endpoint-checks.js'), 'utf8');
-    assert.ok(!/router\.(post|put|patch|delete|all|use)\(/.test(src)); assert.strictEqual((src.match(/router\.get\(/g) || []).length, 2);
+    assert.ok(!/router\.(post|put|patch|delete|all|use)\(/.test(src)); assert.strictEqual((src.match(/router\.get\(/g) || []).length, 3);
     assert.match(fs.readFileSync(path.join(__dirname, '..', 'src/gateway/index.js'), 'utf8'), /app\.use\(require\('\.\/routes\/endpoint-checks'\)\)/);
   });
   it('policies of an agent', async () => {

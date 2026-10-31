@@ -298,4 +298,41 @@ async function scaChecks(m, agentId, policyId, parsed) {
   return { total: count(j.data.total_affected_items) ?? it.length, limit: parsed.limit, offset: parsed.offset, checks: it.map(shapeCheck).filter(Boolean) };
 }
 
-module.exports = { WazuhApiError, checkApiUrl, addressOk, guardedLookup, parseAgentQuery, managerInfo, agentsSummary, listAgents, getAgent, scaPolicies, scaChecks, parseScaQuery, shapePolicy, shapeCheck, forget, AGENT_ID_RE, POLICY_ID_RE, SCA_RESULTS, SCA_LIMIT_MAX, LIMIT_MAX, STATUSES, SORT_FIELDS, shapeAgent, _tokens: tokens };
+// --- what ONE machine is configured to monitor (E4q) -----------------------------------------------------------------------------------------
+// Two more fixed paths, GET only, asked of the manager (which asks the agent, so the agent must be connected): /agents/<id>/config/syscheck/syscheck (monitored folders) and
+// /agents/<id>/config/logcollector/localfile (log files and event channels read). The section is chosen from this list, never built from the request. The answer is rebuilt
+// as short text lines with every list and text cut. Written from the documented Wazuh 4.x shape; NOT checked against a real manager (docs/endpoints.md, "E4q as built").
+const CONFIG_SECTIONS = { syscheck: 'syscheck/syscheck', logcollector: 'logcollector/localfile' };
+const CFG_MAX = 200;
+const cfgLine = (v) => { const t = txt(v, 300); return t ? t.replace(/\s+/g, ' ').trim() : null; };
+const optText = (o) => (Array.isArray(o) ? o.slice(0, 30).map((x) => cfgLine(x)).filter(Boolean).join(', ') : cfgLine(o));
+function shapeConfig(section, j) {
+  const d = j && j.data && typeof j.data === 'object' ? j.data : null;
+  if (!d) throw bad();
+  if (section === 'syscheck') {
+    const sc = d.syscheck && typeof d.syscheck === 'object' ? d.syscheck : {};
+    const dirs = (Array.isArray(sc.directories) ? sc.directories : []).slice(0, CFG_MAX).map((x) => {
+      if (typeof x === 'string') return cfgLine(x);
+      if (!x || typeof x !== 'object') return null;
+      const path = cfgLine(x.path || x.dir || (Array.isArray(x.dirs) ? x.dirs.join(', ') : x.dirs)), o = optText(x.opts);
+      return path ? path + (o ? ' (' + o + ')' : '') : null;
+    }).filter(Boolean);
+    const ignore = (Array.isArray(sc.ignore) ? sc.ignore : []).slice(0, CFG_MAX).map((x) => cfgLine(typeof x === 'object' && x ? x.path || x.pattern || x.regex : x)).filter(Boolean);
+    return { section, items: dirs, ignored: ignore, frequency_seconds: count(sc.frequency) ?? null, realtime_note: null };
+  }
+  const lf = Array.isArray(d.localfile) ? d.localfile : [];
+  const rows = lf.slice(0, CFG_MAX).map((x) => {
+    if (!x || typeof x !== 'object') return null;
+    const where = cfgLine(x.file || x.channel || x.location || x.alias || x.command || x.query);
+    const fmt = cfgLine(x.logformat || x.log_format);
+    return where ? where + (fmt ? ' (' + fmt + ')' : '') : null;
+  }).filter(Boolean);
+  return { section, items: rows, ignored: [], frequency_seconds: null, realtime_note: null };
+}
+async function agentConfig(m, agentId, section) {
+  if (!AGENT_ID_RE.test(String(agentId))) throw new WazuhApiError('BAD_ID', 'An agent id is 3 to 8 digits');
+  if (typeof section !== 'string' || !Object.prototype.hasOwnProperty.call(CONFIG_SECTIONS, section)) throw new WazuhApiError('BAD_SECTION', 'The section must be syscheck or logcollector');
+  return shapeConfig(section, await get(m, '/agents/' + String(agentId) + '/config/' + CONFIG_SECTIONS[section]));
+}
+
+module.exports = { CONFIG_SECTIONS, shapeConfig, agentConfig, WazuhApiError, checkApiUrl, addressOk, guardedLookup, parseAgentQuery, managerInfo, agentsSummary, listAgents, getAgent, scaPolicies, scaChecks, parseScaQuery, shapePolicy, shapeCheck, forget, AGENT_ID_RE, POLICY_ID_RE, SCA_RESULTS, SCA_LIMIT_MAX, LIMIT_MAX, STATUSES, SORT_FIELDS, shapeAgent, _tokens: tokens };

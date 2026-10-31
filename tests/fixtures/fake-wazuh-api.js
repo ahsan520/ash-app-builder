@@ -107,6 +107,11 @@ async function start({ user = 'asix-readonly', password = 'Str0ng-pw!', cn = 'wa
     if (u.pathname === '/manager/info') return send(200, { data: { affected_items: [{ version: 'v4.14.9', compilation_date: '2026-10-14T10:00:00Z', type: 'server', max_agents: '14000', openssl_support: 'yes', tz_offset: '+0000', tz_name: 'UTC', path: '/var/ossec' }], total_affected_items: 1, total_failed_items: 0, failed_items: [] }, message: 'ok', error: 0 });
     if (u.pathname === '/agents/summary/status') { const n = (s) => state.agents.filter((a) => a.status === s).length; return send(200, { data: { connection: { active: n('active'), disconnected: n('disconnected'), never_connected: n('never_connected'), pending: n('pending'), total: state.agents.length }, configuration: { synced: 1 } }, error: 0 }); }
     let sm;
+    if ((sm = /^\/agents\/(\d+)\/config\/(syscheck\/syscheck|logcollector\/localfile)$/.exec(u.pathname))) {   // E4q: the documented 4.x shape, with extra fields a real manager sends
+      if (sm[1] === '999') return send(400, { title: 'Wazuh Internal Error', detail: 'Agent is not active' });
+      if (sm[2] === 'syscheck/syscheck') return send(200, { data: { syscheck: { frequency: 43200, skip_nfs: 'yes', directories: [{ opts: ['check_all', 'realtime'], dirs: '/etc', recursion_level: 256 }, { opts: ['check_all'], path: '/usr/bin' }, 'C:\\Windows\\System32'], ignore: ['/etc/mtab', { pattern: '.log$' }], nodiff: ['/etc/ssl/private.key'] } }, message: 'ok', error: 0 });
+      return send(200, { data: { localfile: [{ file: '/var/log/syslog', logformat: 'syslog' }, { channel: 'Security', logformat: 'eventchannel', query: 'Event/System[EventID=4624]' }, { command: 'df -P', logformat: 'command', frequency: 360 }, 'junk', null] }, message: 'ok', error: 0 });
+    }
     if ((sm = /^\/sca\/(\d+)$/.exec(u.pathname))) {
       const pols = state.sca[sm[1]];
       if (!pols) return send(200, { data: { affected_items: [], total_affected_items: 0, total_failed_items: 1, failed_items: [{ error: { code: 1701, message: 'Agent does not exist' }, id: [sm[1]] }] }, message: 'no', error: 1 });
