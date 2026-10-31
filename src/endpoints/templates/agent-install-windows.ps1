@@ -3,6 +3,7 @@
 #
 # Usage (elevated PowerShell; the script is not signed, so start it like this):
 #   powershell -ExecutionPolicy Bypass -File .\asix-endpoint-install.ps1 -Check     # look only: system, manager reachable, package reachable; changes nothing
+#   powershell -ExecutionPolicy Bypass -File .\asix-endpoint-install.ps1 -Notices   # print the third-party (open source) notices for this software and stop; needs no administrator
 #   powershell -ExecutionPolicy Bypass -File .\asix-endpoint-install.ps1 [-Name NAME] [-PasswordFile FILE] [-MsiPath FILE] [-MsiSha256 HASH] [-Upgrade] [-ReEnroll]
 #
 #   -Name NAME         how this machine is listed in ASIX (default: its computer name; letters, digits . _ -, 2 to 128 characters).
@@ -29,6 +30,7 @@ param(
   [string]$MsiSha256 = '',
   [switch]$Upgrade,
   [switch]$ReEnroll,
+  [switch]$Notices,
   [Parameter(ValueFromRemainingArguments = $true)] [string[]]$Rest
 )
 $ErrorActionPreference = 'Stop'
@@ -42,6 +44,14 @@ function Err($m) { [Console]::Error.WriteLine($m) }
 function Die($m, $code = 1) { Err $m; exit $code }
 
 if ($Rest -and $Rest.Count -gt 0) { Die ('Unknown argument: ' + ($Rest -join ' ')) 2 }
+
+# The third-party notices (src/endpoints/notices.js puts the text in here when the script is made).
+if ($Notices) {
+  Write-Host @'
+@NOTICES@'@
+  exit 0
+}
+Say 'Third-party notices for this software: run this script with -Notices.'
 
 # Names and checks that only need the arguments (exit 2 = a mistake in how the script was started).
 if (-not $Name) {

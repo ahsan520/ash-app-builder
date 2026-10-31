@@ -4,6 +4,7 @@
 #
 # Usage (as root):
 #   ./asix-endpoint-install.sh --check                     # look only: system, manager reachable, package repository; changes nothing
+#   ./asix-endpoint-install.sh --notices                   # print the third-party (open source) notices for this software and stop; needs no root
 #   ./asix-endpoint-install.sh [--name NAME] [--password-file FILE] [--key-fingerprint FPR] [--upgrade] [--re-enroll]
 #
 #   --name NAME          how this machine is listed in ASIX (default: its short host name; letters, digits . _ -, 2 to 128 characters).
@@ -22,9 +23,15 @@
 # It does not open any firewall: this machine must reach @MANAGER@ on 1514/tcp (events) and 1515/tcp (enrolment).
 set -euo pipefail
 
+# The third-party notices (src/endpoints/notices.js puts the text in here when the script is made).
+show_notices() {
+cat <<'ASIX_NOTICES_TEXT'
+@NOTICES@ASIX_NOTICES_TEXT
+}
+
 MANAGER="@MANAGER@"; GROUP="@GROUP@"; WANT="@VERSION@"
 EMBEDDED_PASSWORD='__ASIX_ENROLL_PASSWORD__'; PLACEHOLDER="__ASIX_ENROLL_""PASSWORD__"
-NAME=""; PWFILE=""; KEY_FPR=""; CHECK=0; UPGRADE=0; REENROLL=0
+NAME=""; PWFILE=""; KEY_FPR=""; CHECK=0; UPGRADE=0; REENROLL=0; NOTICES=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --name) NAME="${2:-}"; shift 2;;
@@ -33,9 +40,12 @@ while [ $# -gt 0 ]; do
     --check) CHECK=1; shift;;
     --upgrade) UPGRADE=1; shift;;
     --re-enroll) REENROLL=1; shift;;
+    --notices) NOTICES=1; shift;;
     *) echo "Unknown option: $1" >&2; exit 2;;
   esac
 done
+if [ "$NOTICES" -eq 1 ]; then show_notices; exit 0; fi
+echo "Third-party notices for this software: run this script with --notices."
 [ -n "$NAME" ] || NAME="$( (hostname -s 2>/dev/null || hostname 2>/dev/null || echo endpoint) | tr 'A-Z' 'a-z' | tr -c 'a-z0-9._\n-' '-' | head -n1 | cut -c1-128)"
 [[ "$NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$ ]] || { echo "--name must be 2 to 128 characters: letters, digits, dot, underscore, hyphen (it must start with a letter or digit)." >&2; exit 2; }
 [ -z "$KEY_FPR" ] || [[ "$KEY_FPR" =~ ^[0-9A-F]{40}$ ]] || { echo "--key-fingerprint must be 40 hex characters." >&2; exit 2; }
