@@ -1230,7 +1230,7 @@ async function pgWinFilter() {
         card('What the sample events would do', el('table', {}, el('tr', {}, ['Channel', 'Event ID', 'Result', 'Rule', 'Message kept'].map((h) => el('th', { textContent: h }))),
           r.results.map((x) => el('tr', {}, el('td', { textContent: x.channel }), el('td', { textContent: String(x.event_id) }), el('td', {}, pill(x.keep ? 'Kept' : 'Dropped', x.keep ? 'ok' : 'off')),
             el('td', { textContent: x.rule_id || 'default' }), el('td', { textContent: x.keep ? (x.message === null ? '(removed)' : x.message) : '' }))))),
-        card('Sent to the Wazuh agents (agent group configuration)', el('pre', { style: 'overflow:auto;font-size:12px', textContent: r.outputs.agent_conf }),
+        card('Sent to the endpoint agents (agent group configuration)', el('pre', { style: 'overflow:auto;font-size:12px', textContent: r.outputs.agent_conf }),
           el('div', { className: 'mute', style: 'font-size:12px', textContent: 'An agent only gets a query where event IDs alone can say what the policy says; the broker always applies the whole policy.' }),
           el('ul', {}, Object.entries(r.outputs.xpath).filter(([, x]) => !x.query).map(([c, x]) => el('li', { className: 'mute', textContent: c + ': ' + x.reason })))),
         card('Applied on the broker (Vector)', el('pre', { style: 'overflow:auto;font-size:12px', textContent: r.outputs.vector })));
@@ -1504,7 +1504,7 @@ function brokerPausedCell(b) {
   if (p.overdue) return el('span', { title: 'Asked ' + (p.asked_at ? new Date(p.asked_at).toLocaleString() : 'a while ago') + ' and still not applied. A broker asks every 5 minutes: check that it opted in (--accept-config), has the current asix-broker-config.sh and that its timer runs (systemctl status asix-broker-config.timer).', style: 'display:inline-flex;gap:6px;flex-wrap:wrap' }, p.asked.length ? pill(names, 'off') : '', pill('Not applied', 'bad'));
   return el('span', { title: hint, style: 'display:inline-flex;gap:6px;flex-wrap:wrap' }, p.asked.length ? pill(names, 'off') : '', pill(p.asked.length ? st[0] : 'Resuming...', st[1]));
 }
-const BROKER_PAUSE_HELP = { file: 'the log file globs this broker reads', http: 'the listener for applications that POST JSON events', journald: "this VM's systemd journal (sshd, sudo, cron, the kernel)", wazuh: "the Windows events read from the Wazuh manager's archive file", wazuhalerts: "the alerts the Wazuh manager raised, from every endpoint" };
+const BROKER_PAUSE_HELP = { file: 'the log file globs this broker reads', http: 'the listener for applications that POST JSON events', journald: "this VM's systemd journal (sshd, sudo, cron, the kernel)", wazuh: "the Windows events read from the endpoint manager's archive file", wazuhalerts: "the alerts the endpoint manager raised, from every endpoint" };
 // What one input is doing now, for the dialog: asked and reported are compared the same way pausedState() does it (src/brokers/paused.js).
 function brokerPauseNote(b, k) {
   const p = b.inputs_paused || { asked: [], reported: null };
@@ -1557,8 +1557,7 @@ const EP_CHECK_RESULTS = [['passed', 'passed'], ['failed', 'failed'], ['not_appl
 const EP_MITRE_URL = /^https:\/\/attack\.mitre\.org\/techniques\/T[0-9]{4}(\/[0-9]{3})?\/$/;
 const epSevPill = (s, n) => el('span', { className: 'pill', style: 'white-space:nowrap;background:' + (EP_SEVCOL[s] || EP_SEVCOL.unknown) + '26;color:' + (EP_SEVCOL[s] || EP_SEVCOL.unknown) + ';font-weight:600', textContent: (s || 'unknown') + (n !== undefined ? '  ' + n : '') });
 const epMitreLink = (t) => (EP_MITRE_URL.test(t.url || '') ? el('a', { href: t.url, target: '_blank', rel: 'noopener noreferrer', textContent: t.id }) : el('span', { textContent: t.id }));
-const EP_NOTICES = [{ name: 'Wazuh (endpoint agent and manager)', licence: 'GNU General Public License, version 2', source: 'https://github.com/wazuh/wazuh',
-  note: 'Copyright Wazuh, Inc. and contributors. Wazuh is a trademark of its owner and is not used here as an ASIX name. Where ASIX gives you a modified build, the source of the changes is available on request.' }];
+// The Third-party notices tab reads GET /v1/endpoints/notices (src/endpoints/notices.js, docs/branding.md): the text is not kept in the page, so the page, the installers and the tests share one source.
 // The "Endpoint agent disconnected" alert (GET and PUT /v1/endpoints/agent-alert, E4m). A saved limit wins over the server's ASIX_AGENT_WATCH_MIN for this tenant;
 // "Follow the server setting" goes back to it. 0 = off. Machines listed as not watched never raise it. `apply(settings)` redraws the open tab with the answer.
 function agentAlertCard(a, apply) {
@@ -1951,10 +1950,21 @@ async function pgEndpoints() {
     return [...(cfg ? [scoreBox] : []), el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px' }, win, sev, ...(fim ? [fev] : []), ...(cfg ? [cres, policy] : []), text, agent, ...(cfg ? [] : [mitre]), el('button', { className: 'btn pri', textContent: 'Search', onclick: apply })), active, cards, card('', out), detail];
   };
 
-  const notices = () => [card('Third-party notices',
-    el('p', { className: 'mute', textContent: 'The endpoint agent and manager are built on open source software. Its licence requires these notices to stay with the product, so they are listed here and in the installer. Draft: a lawyer is to read this page before the first client installer ships (docs/endpoints.md, E7).' }),
-    table([{ h: 'Component', f: (n) => n.name }, { h: 'Version in use', f: () => st.version || '-' }, { h: 'Licence', f: (n) => n.licence },
-      { h: 'Source', f: (n) => el('a', { href: n.source, target: '_blank', rel: 'noopener noreferrer', textContent: n.source }) }, { h: 'Notice', f: (n) => n.note }], EP_NOTICES))];
+  const notices = () => {
+    const box = el('div', {}, el('p', { className: 'mute', textContent: 'Loading the notices...' }));
+    (async () => {
+      try {
+        const r = await api('/v1/endpoints/notices');
+        box.replaceChildren(
+          ...(r.draft ? [el('p', { className: 'mute', textContent: 'Draft: a lawyer is to read this page before the first client installer ships (docs/branding.md).' })] : []),
+          el('p', { className: 'mute', textContent: 'The endpoint agent and manager are built on open source software. Its licence requires these notices to stay with the product, so they are listed here and printed by the installer (run it with --notices on Linux or -Notices on Windows).' }),
+          table([{ h: 'Component', f: (n) => n.name }, { h: 'Version in use', f: () => st.version || '-' }, { h: 'Licence', f: (n) => (/^https:\/\//.test(n.licence_url || '') ? el('a', { href: n.licence_url, target: '_blank', rel: 'noopener noreferrer', textContent: n.licence }) : n.licence) },
+            { h: 'Source', f: (n) => el('a', { href: n.source, target: '_blank', rel: 'noopener noreferrer', textContent: n.source }) }, { h: 'Copyright', f: (n) => n.copyright }], r.components || []),
+          ...(r.statements || []).map((t) => el('p', { textContent: t })));
+      } catch (e) { box.replaceChildren(el('p', { className: 'mute', textContent: 'The notices could not be loaded: ' + (e && e.message ? e.message : e) })); }
+    })();
+    return [card('Third-party notices', box)];
+  };
 
   const TABS = [['overview', 'Overview', overview], ['agents', 'Agents', agentsView], ['alerts', 'Alerts', alertsView], ['fim', 'File integrity', () => alertsView('fim')], ['config', 'Configuration checks', () => alertsView('config')], ['install', 'Add a machine', installView], ['notices', 'Third-party notices', notices]];
   function draw() {
