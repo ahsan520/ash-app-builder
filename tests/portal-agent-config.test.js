@@ -30,3 +30,21 @@ describe('agent detail: what the machine monitors', () => {
   });
   it('is drawn in the agent detail next to the configuration checks', () => { assert.match(html, /agentChecksCard\(a\.id\)\),\n\s+el\('div', \{ style: 'margin-top:10px' \}, agentConfigCard\(a\.id\)\)/); });
 });
+
+describe('agent detail: compare what two machines monitor', () => {
+  const inputOf = (c) => all(c).find((n) => n.tag === 'input');
+  const cfg = { 1: { items: ['/etc', '/usr/bin', '/opt/a'], ignored: ['/etc/mtab'], frequency_seconds: 43200 }, 2: { items: ['/etc', '/usr/bin', '/srv/b'], ignored: [], frequency_seconds: 600 } };
+  const withApi = (seen) => async (p) => { seen.push(p); const m = /agents\/0*(\d+)\/config\/(\w+)/.exec(p); if (m[1] === '9') throw new Error('Agent is not connected'); return { config: cfg[m[1]] }; };
+  it('asks nothing until pressed, then reads both machines for the one section and shows what is only on each side', async () => {
+    const seen = []; const c = make(withApi(seen))('001'); inputOf(c).value = '002'; assert.deepStrictEqual(seen, []);
+    await btn(c, 'Compare monitored folders').props.onclick(); assert.deepStrictEqual(seen, ['/v1/endpoints/agents/001/config/syscheck', '/v1/endpoints/agents/002/config/syscheck']);
+    const t = texts(c).join(' | '); assert.match(t, /2 entries are the same on both/); assert.match(t, /Only on 001 \(2\)/); assert.match(t, /\/opt\/a/); assert.match(t, /ignored: \/etc\/mtab/); assert.match(t, /Only on 002 \(1\)/); assert.match(t, /\/srv\/b/); assert.match(t, /43200 seconds here, 600 on 002/);
+  });
+  it('refuses a bad id, the same machine, and shows a failure with the hint; logs read uses its own section', async () => {
+    const seen = []; const c = make(withApi(seen))('001'); const i = inputOf(c);
+    for (const v of ['', 'abc', '1', '002; drop', '../x']) { i.value = v; await btn(c, 'Compare logs read').props.onclick(); assert.match(texts(c).join(' '), /3 to 8 digits/); }
+    i.value = '001'; await btn(c, 'Compare logs read').props.onclick(); assert.match(texts(c).join(' '), /different machine/); assert.deepStrictEqual(seen, []);
+    i.value = '009'; await btn(c, 'Compare logs read').props.onclick(); assert.match(texts(c).join(' '), /not connected.*both agents must be connected/); assert.ok(seen.every((p) => /\/config\/logcollector$/.test(p)));
+  });
+  it('is read only and sets text, never HTML', () => { const f = cut('agentConfigCard'); assert.ok(!/method:|innerHTML/.test(f)); });
+});

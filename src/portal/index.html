@@ -1637,9 +1637,32 @@ function agentConfigCard(agentId) {
         c.frequency_seconds !== null && c.frequency_seconds !== undefined ? el('div', { className: 'mute', style: 'margin-top:6px', textContent: 'Scan every ' + c.frequency_seconds + ' seconds' }) : '');
     } catch (e) { box.replaceChildren(el('div', { className: 'err', textContent: e.message + ' (the agent must be connected for the manager to read its configuration)' })); }
   };
+  // Compare with another machine (read only): the same two reads for both agents, then what is only on one side. Exact text match of the entries as the manager writes them.
+  const other = el('input', { placeholder: 'Other agent id, e.g. 002', style: 'width:170px' });
+  const compare = async (section, title) => {
+    const id = String(other.value || '').trim();
+    if (!/^[0-9]{3,8}$/.test(id)) { box.replaceChildren(el('div', { className: 'err', textContent: 'The other agent id is 3 to 8 digits.' })); return; }
+    if (id === String(agentId)) { box.replaceChildren(el('div', { className: 'err', textContent: 'Pick a different machine to compare with.' })); return; }
+    box.replaceChildren(el('div', { className: 'mute', textContent: 'Asking the manager...' }));
+    try {
+      const get = async (x) => (await api('/v1/endpoints/agents/' + encodeURIComponent(x) + '/config/' + section)).config;
+      const mine = await get(agentId), theirs = await get(id);
+      const all = (c) => [...(c.items || []), ...(c.ignored || []).map((x) => 'ignored: ' + x)];
+      const a1 = all(mine), b1 = all(theirs), inB = new Set(b1), inA = new Set(a1);
+      const onlyA = a1.filter((x) => !inB.has(x)), onlyB = b1.filter((x) => !inA.has(x)), same = a1.filter((x) => inB.has(x)).length;
+      const list = (head, xs) => el('div', { style: 'margin-top:6px' }, el('div', { className: 'mute', textContent: head + ' (' + xs.length + ')' }), ...xs.map((x) => el('div', { textContent: x })));
+      box.replaceChildren(el('h4', { textContent: title + ': machine ' + agentId + ' compared with ' + id }),
+        el('div', { className: 'mute', textContent: same + ' entries are the same on both.' }),
+        list('Only on ' + agentId, onlyA), list('Only on ' + id, onlyB),
+        mine.frequency_seconds !== theirs.frequency_seconds && (mine.frequency_seconds !== null || theirs.frequency_seconds !== null) ? el('div', { className: 'mute', style: 'margin-top:6px', textContent: 'Scan every ' + (mine.frequency_seconds ?? '-') + ' seconds here, ' + (theirs.frequency_seconds ?? '-') + ' on ' + id }) : '');
+    } catch (e) { box.replaceChildren(el('div', { className: 'err', textContent: e.message + ' (both agents must be connected for the manager to read their configuration)' })); }
+  };
   return el('div', {}, el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
     el('button', { className: 'btn', textContent: 'Show monitored folders', onclick: () => show('syscheck', 'Monitored folders') }),
-    el('button', { className: 'btn', textContent: 'Show logs read', onclick: () => show('logcollector', 'Logs and event channels read') })), box);
+    el('button', { className: 'btn', textContent: 'Show logs read', onclick: () => show('logcollector', 'Logs and event channels read') })),
+  el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center' }, other,
+    el('button', { className: 'btn', textContent: 'Compare monitored folders', onclick: () => compare('syscheck', 'Monitored folders') }),
+    el('button', { className: 'btn', textContent: 'Compare logs read', onclick: () => compare('logcollector', 'Logs and event channels read') })), box);
 }
 // ---- Configuration checks of one machine (E6f) ----
 // In an agent's detail on the Endpoints page: the policies the manager scanned the machine with, and every check of one policy with its current result, read from the manager on demand
