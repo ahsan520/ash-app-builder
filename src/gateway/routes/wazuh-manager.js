@@ -98,4 +98,6 @@ for (const [platform, make] of [['linux', installer.render], ['windows', install
 }
 
 module.exports = router;
-module.exports.handle = handle;     // the checks routes (endpoint-checks.js) reuse the registry lookup and the error mapping
+// The checks routes (endpoint-checks.js) reuse the registry lookup and the error mapping. NEVER call this export `handle`: `module.exports` is an Express router and
+// `router.handle` is the method Express itself calls to run every request through the router; overwriting it makes every request that reaches this router hang.
+module.exports.withManager = handle;

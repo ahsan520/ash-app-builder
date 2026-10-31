@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const { guarded, apiError } = require('../shared');
 const api = require('../../endpoints/wazuh-api');
-const { handle } = require('./wazuh-manager');
+const { withManager: handle } = require('./wazuh-manager');
 
 // ---- Configuration checks of ONE machine, straight from the manager (docs/endpoints.md, task E6f) ------------------------------------------------
 // Two GET routes. They show which weaknesses a machine has, the same exposure as the Configuration checks tab (which reads event contents), so the permission is that tab's,
