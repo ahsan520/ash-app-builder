@@ -11,6 +11,7 @@ const db = require('../db');
 const { buildRuleMatch } = require('./rule-query');
 const { getEventStore } = require('../events');
 const { mitreForGroups } = require('../endpoints/endpoint-alerts');
+const scoreAlert = require('../endpoints/score-alert');
 
 const LOCK_KEY = 7412001; // arbitrary app-wide advisory lock id
 
@@ -343,12 +344,12 @@ const BUILTIN_RULES = [
   },
   {
     key: 'endpoint-config-score-low', kind: 'bioc', category: 'Endpoint Security', name: 'Endpoint configuration check score low',
-    description: 'A configuration check scan of one machine finished with a score under 50% (the manager\'s scan summary). One alert per policy and machine, at most one a day. Raise or lower the 50 in the query, or switch the rule off, on this page.',
+    description: scoreAlert.DESCRIPTION,   // E4o: does not name the limit, which can be changed from the Endpoints page
     severity: 'medium', mitre: [],
     definition: {
       source_type: 'endpoint-alert', group_by: 'field:sca_key', threshold: 1, window_minutes: 60, run_every_minutes: 1, mode: 'realtime',
       suppression: { enabled: true, minutes: 1440 },
-      xql: 'sca_score != null and sca_score < 50',   // E4n: sca_score is the summary's score (parsing rule wazuh_alert); a single failed check has none
+      xql: scoreAlert.queryFor(scoreAlert.DEFAULT_LIMIT),   // E4n: 'sca_score != null and sca_score < 50'. sca_score is the summary's score (parsing rule wazuh_alert); a single failed check has none. E4o: the number is the limit the Endpoints page edits
     },
   },
   {
@@ -365,9 +366,11 @@ const BUILTIN_RULES = [
 
 // Built-in rules whose shipped query changed after installs had already stored the old one. ensureBuiltinRules inserts once and
 // never overwrites, so a changed rule would stay old on every existing tenant. For each entry the stored rule is replaced ONLY
-// while its query is still exactly the old shipped text (nobody edited it); an edited rule is left alone.
+// while its query is still exactly the old shipped text (nobody edited it); an edited rule is left alone. An entry with `oldDescription` instead changes the
+// description alone, and only while it is still exactly that old text.
 const BUILTIN_RULE_UPGRADES = [
   { key: 'endpoint-alert-repeated', oldXql: 'alert_level >= 5 and alert_level < 8' },   // E4k: now also leaves out configuration check alerts
+  { key: 'endpoint-config-score-low', oldDescription: scoreAlert.E4N_DESCRIPTION },   // E4o: only the description changed (it no longer names 50); the query and the limit are never touched
 ];
 
 async function ensureBuiltinRules(client, tenantId) {
@@ -383,6 +386,13 @@ async function ensureBuiltinRules(client, tenantId) {
   for (const u of BUILTIN_RULE_UPGRADES) {
     const r = BUILTIN_RULES.find((b) => b.key === u.key);
     if (!r) continue;
+    if (u.oldDescription) {   // description only, and only while it is still exactly the old shipped text
+      await client.query(
+        'UPDATE detection_rules SET description = $4 WHERE tenant_id = $1 AND builtin_key = $2 AND description = $3',
+        [tenantId, u.key, u.oldDescription, r.description]
+      );
+      continue;
+    }
     await client.query(
       `UPDATE detection_rules
           SET definition = jsonb_set(definition, '{xql}', to_jsonb($4::text)), description = $5

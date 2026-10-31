@@ -75,11 +75,23 @@ describe('the built-in endpoint rules', () => {
   });
   it('E4k: a stored rule is replaced only while its query is still exactly the old shipped text', async () => {
     const calls = []; await ensureBuiltinRules({ query: async (sql, args) => { calls.push({ sql, args }); } }, TENANT);
-    const ups = calls.filter((c) => /^\s*UPDATE/.test(c.sql));
+    const allUps = calls.filter((c) => /^\s*UPDATE/.test(c.sql));
+    assert.strictEqual(allUps.length, 2, 'the E4k query upgrade and the E4o description-only upgrade');
+    const ups = allUps.filter((c) => c.args[1] === 'endpoint-alert-repeated');
     assert.strictEqual(ups.length, 1);
     assert.ok(/definition->>'xql' = \$3/.test(ups[0].sql) && /tenant_id = \$1 AND builtin_key = \$2/.test(ups[0].sql));
     assert.deepStrictEqual(ups[0].args.slice(0, 4), [TENANT, 'endpoint-alert-repeated', 'alert_level >= 5 and alert_level < 8', RULES['endpoint-alert-repeated'].definition.xql]);
     assert.ok(RULES['endpoint-alert-repeated'].definition.xql.includes('data_sca_policy'));
+  });
+  it('E4o: the score rule\'s description is replaced only while it is still exactly the E4n text, and its query and limit are never written', async () => {
+    const sa = require('../src/endpoints/score-alert');
+    const calls = []; await ensureBuiltinRules({ query: async (sql, args) => { calls.push({ sql, args }); } }, TENANT);
+    const ups = calls.filter((c) => /^\s*UPDATE/.test(c.sql) && c.args[1] === 'endpoint-config-score-low');
+    assert.strictEqual(ups.length, 1);
+    assert.ok(/SET description = \$4 WHERE tenant_id = \$1 AND builtin_key = \$2 AND description = \$3/.test(ups[0].sql));
+    assert.ok(!/xql|definition/.test(ups[0].sql), 'the limit lives in the query: this upgrade must not touch it');
+    assert.deepStrictEqual(ups[0].args, [TENANT, 'endpoint-config-score-low', sa.E4N_DESCRIPTION, sa.DESCRIPTION]);
+    assert.strictEqual(RULES['endpoint-config-score-low'].definition.xql, 'sca_score != null and sca_score < 50');
   });
 });
 

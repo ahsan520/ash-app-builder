@@ -1589,6 +1589,29 @@ function agentSkipButton(a, id, apply) {
   const send = async () => { try { const r = await api('/v1/endpoints/agent-alert', { method: 'PUT', body: { skip_agent: String(id), skip: !off } }); apply(r.settings); } catch (e) { alert(e.message); } };
   return el('button', { className: 'btn', textContent: off ? 'Alert when disconnected again' : 'Never alert when this machine is disconnected', onclick: send });
 }
+// ---- Low configuration check score alert (E4o) ----
+// The limit of the built-in rule "Endpoint configuration check score low" (GET and PUT /v1/endpoints/score-alert). The limit is the number in that rule's own query, so the Detections
+// page shows the same thing. Save switches the rule on at the given limit; Turn off switches it off and keeps the limit. `apply(settings)` redraws the card with the answer.
+function scoreAlertCard(s, apply) {
+  const title = 'Alert when a configuration check score is low';
+  if (!s) return card(title, el('div', { className: 'mute', textContent: 'The score alert could not be read.' }));
+  if (!s.available) return card(title, pill('Not ready', 'off'), el('span', { className: 'mute', style: 'margin-left:8px', textContent: 'The rule is created within a minute of the API starting. Open this tab again shortly.' }));
+  const send = async (body) => { try { const r = await api('/v1/endpoints/score-alert', { method: 'PUT', body }); apply(r.settings); } catch (e) { alert(e.message); } };
+  const off = s.enabled ? el('button', { className: 'btn', textContent: 'Turn off', title: 'Switch the rule off; its limit is kept', onclick: () => send({ off: true }) }) : '';
+  if (s.edited) {
+    return card(title, pill(s.enabled ? 'On (edited)' : 'Off', s.enabled ? 'ok' : 'off'),
+      el('div', { className: 'mute', style: 'margin-top:8px;font-size:12px', textContent: 'The rule\'s query was edited on the Detections page, so the limit is not changed from here. Change it there, or press Reset on the rule to get the shipped query back.' }),
+      off ? el('div', { style: 'margin-top:8px' }, off) : '');
+  }
+  const lim = el('input', { type: 'number', min: s.limits[0], max: s.limits[1], value: String(s.limit), style: 'width:90px' });
+  const state = s.enabled ? pill('On: score under ' + s.limit + '%', 'ok') : pill('Off', 'off');
+  return card(title,
+    el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, state),
+    el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px' },
+      el('span', { textContent: 'Alert when a scan finishes with a score under' }), lim, el('span', { textContent: '%' }),
+      el('button', { className: 'btn pri', textContent: s.enabled ? 'Save' : 'Save and turn on', onclick: () => send({ limit: lim.value.trim() }) }), off),
+    el('div', { className: 'mute', style: 'margin-top:8px;font-size:12px', textContent: 'One alert per policy and machine, at most one a day (the built-in rule "Endpoint configuration check score low", severity ' + (s.severity || 'medium') + '; its severity and suppression are on the Detections page). It applies within about a minute and looks at the scan summaries of the last hour (the rule\'s window). Lowering the limit or turning it off does not close alerts already raised. Shipped limit: ' + s.default_limit + '%.' }));
+}
 // ---- Configuration checks of one machine (E6f) ----
 // In an agent's detail on the Endpoints page: the policies the manager scanned the machine with, and every check of one policy with its current result, read from the manager on demand
 // (GET /v1/endpoints/agents/:id/sca and .../sca/:policy/checks). Nothing is requested until the button is pressed. All text is set as text, never as HTML.
@@ -1890,8 +1913,11 @@ async function pgEndpoints() {
     const apply = () => { S.window = win.value; S.severity = sev.value; S.q = text.value; S.agent = agent.value; S.mitre = mitre.value; S.file_event = fev.value; S.check_result = cres.value; S.policy = policy.value; S.offset = 0; detail.replaceChildren(); loadCards(); loadList(); };
     text.onkeydown = agent.onkeydown = mitre.onkeydown = policy.onkeydown = (ev) => { if (ev.key === 'Enter') apply(); };
     win.onchange = apply; sev.onchange = apply; fev.onchange = apply; cres.onchange = apply;
+    const scoreBox = el('div', {});   // E4o: only on the Configuration checks tab
+    const drawScore = (x) => scoreBox.replaceChildren(scoreAlertCard(x, drawScore));
+    if (cfg) api('/v1/endpoints/score-alert').then((r) => drawScore(r.settings)).catch(() => drawScore(null));
     drawActive(); loadCards(); loadList();
-    return [el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px' }, win, sev, ...(fim ? [fev] : []), ...(cfg ? [cres, policy] : []), text, agent, ...(cfg ? [] : [mitre]), el('button', { className: 'btn pri', textContent: 'Search', onclick: apply })), active, cards, card('', out), detail];
+    return [...(cfg ? [scoreBox] : []), el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px' }, win, sev, ...(fim ? [fev] : []), ...(cfg ? [cres, policy] : []), text, agent, ...(cfg ? [] : [mitre]), el('button', { className: 'btn pri', textContent: 'Search', onclick: apply })), active, cards, card('', out), detail];
   };
 
   const notices = () => [card('Third-party notices',

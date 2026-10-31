@@ -61,10 +61,11 @@ describe('Endpoints page', () => {
     assert.ok(!/wazuh/i.test(p.text()), 'overview and agents show no Wazuh name');
   });
   it('is read only: only GET calls to the E4c routes, and no HTML injection', async () => {
-    // E4m: the two small functions of the disconnected-agent alert are the ONLY place that writes; everything else stays read only. They may only PUT to the one route.
-    const e4m = ['agentAlertCard', 'agentSkipButton'].map((n) => { const i = source.indexOf('function ' + n + '('); assert.ok(i >= 0, n); return source.slice(i, source.indexOf('\n}\n', i) + 3); });
-    const rest = e4m.reduce((s, f) => s.replace(f, ''), source);
-    for (const f of e4m) { assert.ok(/method: 'PUT'/.test(f)); assert.ok((f.match(/method:/g) || []).length === (f.match(/method: 'PUT'/g) || []).length); assert.ok((f.match(/api\('([^']*)'/g) || []).every((x) => x === "api('/v1/endpoints/agent-alert'")); assert.ok(!/innerHTML|insertAdjacentHTML|outerHTML|document\.write/.test(f)); }
+    // E4m and E4o: the functions of the disconnected-agent alert and of the score alert card are the ONLY places that write; everything else stays read only. Each may only PUT to its own one route.
+    const writers = [[['agentAlertCard', 'agentSkipButton'], "api('/v1/endpoints/agent-alert'"], [['scoreAlertCard'], "api('/v1/endpoints/score-alert'"]];
+    const fns = writers.flatMap(([names, route]) => names.map((n) => { const i = source.indexOf('function ' + n + '('); assert.ok(i >= 0, n); return { f: source.slice(i, source.indexOf('\n}\n', i) + 3), route }; }));
+    const rest = fns.reduce((s, x) => s.replace(x.f, ''), source);
+    for (const { f, route } of fns) { assert.ok(/method: 'PUT'/.test(f)); assert.ok((f.match(/method:/g) || []).length === (f.match(/method: 'PUT'/g) || []).length); assert.ok((f.match(/api\('([^']*)'/g) || []).every((x) => x === route)); assert.ok(!/innerHTML|insertAdjacentHTML|outerHTML|document\.write/.test(f)); }
     assert.ok(!/innerHTML|insertAdjacentHTML|method:/.test(rest));
     const p = await open(); await p.click('Agents');
     assert.ok(p.calls.length >= 3 && p.calls.every((c) => c.method === 'GET' && /^\/v1\/endpoints\/(manager|agents|agent-alert)/.test(c.p)));
