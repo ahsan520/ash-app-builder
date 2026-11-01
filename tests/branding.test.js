@@ -21,8 +21,8 @@ describe('the portal', () => {
   // Allowed in src/portal/index.html (anything else that matches the name is shown to a person and must not name the product):
   const ALLOWED = [
     /\b'?wazuh(alerts)?'?(?=\s*[:,\]])/g,                                  // internal input keys the broker heartbeat reports ('wazuh', 'wazuhalerts'); the page shows the label next to them
-    /wazuh_managers table/g,                                              // operator text: the database table an operator has to create by running the schema job
-    /src\/endpoints\/wazuh-manager-cli\.js/g, /asix-wazuh-registration\.json/g,   // operator text: the command that registers a manager, and its input file
+    /wazuh_managers table/g, /wazuh_indexers table/g,                                              // operator text: the database table an operator has to create by running the schema job
+    /src\/endpoints\/wazuh-(manager|indexer)-cli\.js/g, /asix-wazuh-registration\.json/g,   // operator text: the command that registers a manager, and its input file
     /\/var\/ossec\/etc\/authd\.pass/g,                                    // operator text: the path of the enrolment password file on the manager VM
   ];
   const lines = read('src/portal/index.html').split('\n');
@@ -45,7 +45,7 @@ describe('messages the API sends to the portal', () => {
   const STR = "'(?:[^'\\\\\\n]|\\\\.)*'|\"(?:[^\"\\\\\\n]|\\\\.)*\"";
   // apiError(res, 404, 'CODE', 'message') and new SomeError('CODE', 'message'): the message is what a person reads. Codes (WAZUH_...) are part of the API and may keep the name.
   const MSG = [new RegExp("apiError\\([^,]+,\\s*\\d+,\\s*(?:" + STR + "),\\s*(" + STR + ")", 'g'), new RegExp("new \\w*Error\\(\\s*(?:" + STR + "),\\s*(" + STR + ")", 'g')];
-  const ALLOWED_MESSAGES = [/The database has no wazuh_managers table yet/];   // operator text: the table the schema job creates
+  const ALLOWED_MESSAGES = [/The database has no wazuh_(managers|indexers) table yet/];   // operator text: the table the schema job creates
   it('finds the messages it is meant to check (so the scan itself cannot silently find none)', () => {
     const n = files.map((f) => { const s = read(f); return MSG.map((re) => (s.match(re) || []).length).reduce((a, b) => a + b, 0); }).reduce((a, b) => a + b, 0); assert.ok(n > 40, 'only ' + n + ' messages found');
   });

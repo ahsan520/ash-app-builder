@@ -1852,6 +1852,85 @@ function agentChecksCard(agentId) {
   return el('div', {}, el('button', { className: 'btn', textContent: 'Show configuration checks', onclick: () => showPolicies() }), box);
 }
 
+// ---- Vulnerabilities tab (E6e) ----
+// Reads GET /v1/endpoints/vulnerabilities/status, /summary and the list (src/endpoints/wazuh-indexer.js, docs/wazuh-indexer.md): the findings the endpoint manager keeps in the central
+// indexer, one row per machine, package and vulnerability id. Read only. Nothing here chooses an address or an index: the server reads the one registered for this tenant.
+const EP_VULN_COL = { critical: '#e5484d', high: '#f08a24', medium: '#e6c229', low: '#6b7fa3', unknown: '#6b7fa3' };
+const EP_VULN_SEVS = ['critical', 'high', 'medium', 'low'];
+const EP_VULN_LIMIT = 50;
+const EP_VULN_SORTS = [['-score', 'Highest score first'], ['-detected', 'Newest first'], ['cve', 'Vulnerability id'], ['agent', 'Machine'], ['package', 'Package']];
+const vulnSevPill = (s, n) => el('span', { className: 'pill', style: 'white-space:nowrap;background:' + (EP_VULN_COL[s] || EP_VULN_COL.unknown) + '26;color:' + (EP_VULN_COL[s] || EP_VULN_COL.unknown) + ';font-weight:600', textContent: (s || 'unknown') + (n !== undefined ? '  ' + n : '') });
+const vulnLink = (u) => (/^https?:\/\//i.test(u || '') ? el('div', {}, el('a', { href: u, target: '_blank', rel: 'noopener noreferrer', textContent: u })) : el('div', { textContent: String(u || '') }));
+function vulnerabilitiesView() {
+  const F = { severity: '', q: '', agent: '', sort: '-score', offset: 0 };
+  const box = el('div', {}, el('div', { className: 'mute', textContent: 'Loading the vulnerability source...' }));
+  const cards = el('div', {}), out = el('div', {}), detail = el('div', {});
+  const sev = el('select', {}, el('option', { value: '', textContent: 'Any severity' }), ...EP_VULN_SEVS.map((s) => el('option', { value: s, textContent: s[0].toUpperCase() + s.slice(1) })));
+  const sort = el('select', {}, ...EP_VULN_SORTS.map(([v, t]) => el('option', { value: v, textContent: t })));
+  const text = el('input', { placeholder: 'Package, vulnerability id or machine', style: 'min-width:260px' });
+  const agent = el('input', { placeholder: 'Agent id', style: 'width:110px' });
+  const filters = (p) => { if (F.severity) p.set('severity', F.severity); if (F.q.trim()) p.set('q', F.q.trim()); if (F.agent.trim()) p.set('agent', F.agent.trim()); return p; };
+  const pickFilter = (k, v) => { F[k] = v; F.offset = 0; if (k === 'agent') agent.value = v; if (k === 'severity') sev.value = v; detail.replaceChildren(); loadCards(); loadList(); };
+  const loadCards = async () => {
+    cards.replaceChildren(el('div', { className: 'mute', textContent: 'Loading...' }));
+    try {
+      const s = (await api('/v1/endpoints/vulnerabilities/summary?' + filters(new URLSearchParams()).toString())).summary;
+      cards.replaceChildren(
+        el('div', { className: 'grid' },
+          card('Findings', el('div', { className: 'stat' }, String(s.total), el('small', { textContent: s.distinct_cves + ' different vulnerabilities on ' + s.machines + ' machine' + (s.machines === 1 ? '' : 's') }))),
+          card('By severity', el('div', {}, ...EP_VULN_SEVS.map((k) => el('span', { style: 'cursor:pointer', title: 'Show only ' + k, onclick: () => pickFilter('severity', k) }, vulnSevPill(k, s.severity[k])))), s.severity.unknown ? el('div', { className: 'mute', textContent: s.severity.unknown + ' with no usable severity' }) : '')),
+        el('div', { className: 'grid' },
+          card('Most affected machines', s.top_agents.length ? table([{ h: 'Machine', f: (r) => el('span', { style: 'cursor:pointer;text-decoration:underline', textContent: (r.name || r.agent_id) + ' (' + r.agent_id + ')', onclick: () => pickFilter('agent', r.agent_id) }) }, { h: 'Findings', f: (r) => r.count }], s.top_agents) : el('div', { className: 'mute', textContent: 'Nothing yet.' })),
+          card('Most common packages', s.top_packages.length ? table([{ h: 'Package', f: (r) => el('span', { style: 'cursor:pointer;text-decoration:underline', textContent: r.key, onclick: () => pickFilter('q', r.key) }) }, { h: 'Findings', f: (r) => r.count }], s.top_packages) : el('div', { className: 'mute', textContent: 'Nothing yet.' })),
+          card('Most common vulnerabilities', s.top_cves.length ? table([{ h: 'Vulnerability', f: (r) => el('span', { style: 'cursor:pointer;text-decoration:underline', textContent: r.key, onclick: () => pickFilter('q', r.key) }) }, { h: 'Machines', f: (r) => r.count }], s.top_cves) : el('div', { className: 'mute', textContent: 'Nothing yet.' }))));
+    } catch (e) { cards.replaceChildren(el('div', { className: 'err', textContent: e.message })); }
+  };
+  const showOne = (f) => detail.replaceChildren(card('Finding ' + f.cve,
+    el('div', { style: 'margin-bottom:8px' }, vulnSevPill(f.severity), f.under_evaluation ? el('span', { className: 'mute', style: 'margin-left:8px', textContent: 'Still being evaluated by the vendor feed' }) : ''),
+    kv({ 'Vulnerability': f.cve, 'Score': f.score === null ? '-' : f.score + (f.score_version ? ' (CVSS ' + f.score_version + ')' : ''), 'Machine': (f.agent_name || '-') + (f.agent_id ? ' (' + f.agent_id + ')' : ''), 'Operating system': f.os,
+      'Package': f.package, 'Installed version': f.version, 'Package type': f.package_type, 'Architecture': f.architecture, 'Published (UTC)': when(f.published_at), 'Detected (UTC)': when(f.detected_at) }),
+    f.description ? el('p', { textContent: f.description }) : '', f.references.length ? el('div', {}, el('h4', { textContent: 'References' }), ...f.references.map(vulnLink)) : ''));
+  const cols = [
+    { h: 'Severity', f: (f) => vulnSevPill(f.severity) }, { h: 'Score', f: (f) => (f.score === null ? '-' : f.score) },
+    { h: 'Vulnerability', f: (f) => el('span', { style: 'cursor:pointer;text-decoration:underline', textContent: f.cve, onclick: () => showOne(f) }) },
+    { h: 'Machine', f: (f) => (f.agent_name || '-') + (f.agent_id ? ' (' + f.agent_id + ')' : '') }, { h: 'Package', f: (f) => f.package || '-' }, { h: 'Version', f: (f) => f.version || '-' },
+    { h: 'Detected (UTC)', f: (f) => when(f.detected_at) },
+  ];
+  const loadList = async () => {
+    out.replaceChildren(el('div', { className: 'mute', textContent: 'Loading...' }));
+    try {
+      const r = await api('/v1/endpoints/vulnerabilities?' + filters(new URLSearchParams({ limit: String(EP_VULN_LIMIT), offset: String(F.offset), sort: F.sort })).toString()), to = F.offset + r.findings.length;
+      const prev = el('button', { className: 'btn', textContent: 'Previous', onclick: () => { F.offset = Math.max(0, F.offset - EP_VULN_LIMIT); loadList(); } });
+      const next = el('button', { className: 'btn', textContent: 'Next', onclick: () => { F.offset += EP_VULN_LIMIT; loadList(); } });
+      prev.disabled = F.offset === 0; next.disabled = to >= r.total || to >= 10000;
+      out.replaceChildren(table(cols, r.findings, 'No findings match. A machine shows here once the endpoint manager has scanned its installed software.'),
+        el('div', { className: 'mute', style: 'margin-top:8px;display:flex;gap:8px;align-items:center' }, prev, next, (r.total ? (F.offset + 1) + ' to ' + to : '0') + ' of ' + r.total));
+    } catch (e) { out.replaceChildren(el('div', { className: 'err', textContent: e.message })); }
+  };
+  const apply = () => { F.severity = sev.value || ''; F.q = text.value || ''; F.agent = agent.value || ''; F.sort = sort.value || '-score'; F.offset = 0; detail.replaceChildren(); loadCards(); loadList(); };
+  text.onkeydown = agent.onkeydown = (ev) => { if (ev.key === 'Enter') apply(); };
+  sev.onchange = apply; sort.onchange = apply;
+  (async () => {
+    let s;
+    try { s = (await api('/v1/endpoints/vulnerabilities/status')).source; } catch (e) { box.replaceChildren(card('Vulnerabilities', el('div', { className: 'err', textContent: e.message }))); return; }
+    if (!s.available) { box.replaceChildren(card('Vulnerabilities', pill('Not ready', 'off'), el('span', { className: 'mute', style: 'margin-left:8px', textContent: 'The database has no wazuh_indexers table yet. A normal deploy runs the schema job that creates it.' }))); return; }
+    if (!s.registered) {
+      box.replaceChildren(card('No vulnerability source registered', el('p', { className: 'mute', textContent: 'Vulnerability findings are read from the central indexer, which receives them from the endpoint manager. No indexer is registered for this tenant. After the indexer is set up and the manager sends to it, an operator registers it with the registration file made for this tenant:' }),
+        el('pre', { style: 'overflow:auto;font-size:12px', textContent: 'kubectl -n asix-platform exec -i deploy/asix-api -- node src/endpoints/wazuh-indexer-cli.js register --tenant "NAME" < indexer-registration.json' })));
+      return;
+    }
+    const st = s.status || {};
+    const head = card('Vulnerability source', el('div', { style: 'margin-bottom:8px' }, st.reachable ? pill('\u2713 Reachable', 'ok') : pill('\u2715 Not reachable', 'bad'),
+        st.reachable ? '' : el('span', { className: 'mute', style: 'margin-left:8px', textContent: (st.code ? st.code + ': ' : '') + (st.message || 'No answer') })),
+      kv({ Label: s.label, Address: s.host + ':' + s.port, 'Index': s.index, 'Indexer user': s.index_user, 'Findings stored': st.reachable ? st.count : '-', 'Pinned certificate (SHA-256)': s.cert_sha256, 'Registered or changed (UTC)': when(s.updated_at) }));
+    if (!st.reachable) { box.replaceChildren(head); return; }
+    if (!st.count) { box.replaceChildren(head, card('', el('div', { className: 'mute', textContent: 'The source answers but holds no findings yet. They appear after the manager has been switched to send to the indexer and has scanned a machine\u2019s installed software.' }))); return; }
+    box.replaceChildren(head, el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin:12px 0' }, sev, sort, text, agent, el('button', { className: 'btn pri', textContent: 'Search', onclick: apply })), cards, card('', out), detail);
+    loadCards(); loadList();
+  })();
+  return [box];
+}
+
 async function pgEndpoints() {
   const m = (await api('/v1/endpoints/manager')).manager;
   const top = el('div', { style: 'display:flex;align-items:baseline;gap:12px;flex-wrap:wrap' }, el('h2', { textContent: 'Endpoints' }),
@@ -2116,7 +2195,7 @@ async function pgEndpoints() {
     return [card('Third-party notices', box)];
   };
 
-  const TABS = [['overview', 'Overview', overview], ['agents', 'Agents', agentsView], ['alerts', 'Alerts', alertsView], ['fim', 'File integrity', () => alertsView('fim')], ['config', 'Configuration checks', () => alertsView('config')], ['groups', 'Group settings', () => [groupConfigCard()]], ['install', 'Add a machine', installView], ['notices', 'Third-party notices', notices]];
+  const TABS = [['overview', 'Overview', overview], ['agents', 'Agents', agentsView], ['alerts', 'Alerts', alertsView], ['fim', 'File integrity', () => alertsView('fim')], ['config', 'Configuration checks', () => alertsView('config')], ['vuln', 'Vulnerabilities', vulnerabilitiesView], ['groups', 'Group settings', () => [groupConfigCard()]], ['install', 'Add a machine', installView], ['notices', 'Third-party notices', notices]];
   function draw() {
     tabs.replaceChildren(...TABS.map(([id, label]) => el('div', { className: 'xtab' + (tab === id ? ' on' : ''), textContent: label, onclick: () => { tab = id; draw(); } })));
     const cur = TABS.find((t) => t[0] === tab) || TABS[0];

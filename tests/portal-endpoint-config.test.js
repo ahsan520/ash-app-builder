@@ -83,7 +83,7 @@ const cfgCalls = (p) => p.listCalls().filter((c) => qs(c.p).kind === 'configurat
 describe('Endpoints page, Configuration checks tab', () => {
   it('there is a Configuration checks tab after File integrity; nothing is loaded for it until it is opened, and the other tabs never ask for it', async () => {
     const p = await open(cfgAnswers()); const labels = p.all().filter((n) => typeof n === 'object' && n.attrs && n.attrs.className && String(n.attrs.className).startsWith('xtab')).map((n) => n.attrs.textContent);
-    assert.deepStrictEqual(labels, ['Overview', 'Agents', 'Alerts', 'File integrity', 'Configuration checks', 'Group settings', 'Add a machine', 'Third-party notices']);
+    assert.deepStrictEqual(labels, ['Overview', 'Agents', 'Alerts', 'File integrity', 'Configuration checks', 'Vulnerabilities', 'Group settings', 'Add a machine', 'Third-party notices']);
     assert.ok(!p.calls.some((c) => c.p.includes('/alerts')), 'no alert call before a tab is opened');
     await p.alertsTab(); await p.click('File integrity'); assert.ok(p.calls.filter((c) => c.p.includes('/alerts')).every((c) => !c.p.includes('configuration') && !c.p.includes('check_result') && !c.p.includes('policy=')));
   });

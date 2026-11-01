@@ -23,7 +23,7 @@ The decisions behind it are decisions 2 and 3 in `docs/endpoints.md`; this page 
 | Installers: `packages.wazuh.com`, `GPG-KEY-WAZUH`, `documentation.wazuh.com` | The publisher's addresses | The package comes from there; the person is told to compare the key fingerprint with the publisher's guide ("Installation guide, Wazuh agent") |
 | Installers: the repository's display name (`EL-$releasever - Wazuh`) and the installed program's name when the Windows script looks for it (`Wazuh Agent*`) | Text inside a repository file; a match string | Upstream names |
 | Portal, Brokers page: the input keys `wazuh` and `wazuhalerts` | Internal keys the broker's heartbeat reports | Never shown; the page shows "Windows events" and "Endpoint alerts" |
-| Portal, Endpoints page: `wazuh_managers table`, `wazuh-manager-cli.js`, `asix-wazuh-registration.json`, `/var/ossec/etc/authd.pass` | Operator text | The command, table and path an operator types |
+| Portal, Endpoints page: `wazuh_managers table`, `wazuh_indexers table`, `wazuh-manager-cli.js`, `wazuh-indexer-cli.js`, `asix-wazuh-registration.json`, `/var/ossec/etc/authd.pass` | Operator text | The command, table and path an operator types |
 | Operator names of the group configuration feature (E10): the table `wazuh_manager_writers`, the script option `--group-writer`, the command `register-writer`, the file `asix-wazuh-writer-registration.json`, the API user `asix-groupconfig` | Operator text and names on the manager | Read by the person who runs ASIX; the portal tab says "group configuration user" |
 | API: codes such as `WAZUH_NO_MANAGER` | Error codes | Part of the API; the messages next to them say "endpoint manager" |
 | Server logs (`console.error`) | Operator logs | Not shown to a client |
