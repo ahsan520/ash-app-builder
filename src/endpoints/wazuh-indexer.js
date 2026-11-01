@@ -179,7 +179,8 @@ const pick = (src, path) => { const v = at(src, path); return v !== undefined ? 
 const score = (v) => (Number.isFinite(Number(v)) && v !== null && v !== '' && Number(v) >= 0 && Number(v) <= 10 ? Number(v) : null);
 const sev = (v) => { const t = typeof v === 'string' ? v.trim().toLowerCase() : ''; return SEVERITIES.includes(t) ? t : (t ? 'unknown' : null); };
 function refs(v) {
-  const l = Array.isArray(v) ? v : (typeof v === 'string' && v ? [v] : []);
+  // A real 4.14 index holds ONE string with the links joined by ", " (checked 2026-11-01); a list is also accepted.
+  const l = Array.isArray(v) ? v : (typeof v === 'string' && v ? v.split(/,\s+(?=https?:\/\/)/i) : []);
   return l.slice(0, 10).map((x) => txt(x, 300)).filter((x) => x && /^https?:\/\//i.test(x));   // links only: the portal never turns anything else into a link
 }
 function shapeFinding(hit) {
