@@ -46,7 +46,7 @@ const SCA = {
   '002': [],
 };
 
-async function start({ user = 'asix-readonly', password = 'Str0ng-pw!', cn = 'wazuh-test', ca = true, tokenTtl = 900, dir, agents = AGENTS, tag = 'A', security = false, sca = SCA } = {}) {
+async function start({ user = 'asix-readonly', password = 'Str0ng-pw!', cn = 'wazuh-test', ca = true, tokenTtl = 900, dir, agents = AGENTS, tag = 'A', security = false, sca = SCA, writer = null, groups = null } = {}) {
   dir = dir || fs.mkdtempSync(path.join(os.tmpdir(), 'fakewazuh-'));
   const c = makeCert(dir, { cn, ca });
   const state = { requests: [], tokens: new Set(), authCalls: 0, failAuth: false, delayMs: 0, mode: null, rejectTokens: false, tokenTtl, agents, tokenUser: new Map(), refuse: new Set(), nextId: 100, sca };
@@ -54,6 +54,11 @@ async function start({ user = 'asix-readonly', password = 'Str0ng-pw!', cn = 'wa
   // (8 to 64 characters with an upper case letter, a lower case letter, a digit and a symbol) is applied to every new password, and `readonly` may read but not touch /security.
   state.users = security ? new Map([['wazuh', { id: 1, password: 'wazuh', roles: [1] }], ['wazuh-wui', { id: 2, password: 'wazuh-wui', roles: [1] }]]) : new Map([[user, { id: 3, password, roles: [2] }]]);
   state.roles = [{ id: 1, name: 'administrator' }, { id: 2, name: 'readonly' }];
+  // E10: groups with their agent.conf, and a "writer" user (role 7: may read groups and update a group's configuration; the readonly role may not).
+  state.groups = new Map(Object.entries(groups || { default: '<agent_config>\n  <localfile>\n    <log_format>syslog</log_format>\n    <location>/var/log/messages</location>\n  </localfile>\n</agent_config>\n', linux: '' }));
+  state.groupWrites = []; state.rejectConf = null;
+  state.policies = [];
+  if (writer) { state.users.set(writer.user, { id: 7, password: writer.password, roles: [7] }); state.roles.push({ id: 7, name: 'asix-groupconfig', policies: [70] }); state.policies.push({ id: 70, name: 'asix-groupconfig-policy', policy: { actions: ['group:read', 'group:update_config'], resources: ['group:id:*'], effect: 'allow' } }); }
   const strong = (p) => typeof p === 'string' && p.length >= 8 && p.length <= 64 && /[A-Z]/.test(p) && /[a-z]/.test(p) && /[0-9]/.test(p) && /[^A-Za-z0-9]/.test(p);
   const srv = https.createServer({ key: c.key, cert: c.cert }, (req, res) => {
     const u = new URL(req.url, 'https://x');
@@ -73,12 +78,15 @@ async function start({ user = 'asix-readonly', password = 'Str0ng-pw!', cn = 'wa
     }
     const bearer = /^Bearer (.+)$/.exec(req.headers.authorization || '');
     if (!bearer || !state.tokens.has(bearer[1]) || state.rejectTokens) return send(401, { title: 'Unauthorized', detail: 'Invalid token' });
-    const who = state.users.get(state.tokenUser.get(bearer[1])) || { roles: [] }, isAdmin = who.roles.includes(1), canRead = isAdmin || who.roles.includes(2);
+    const who = state.users.get(state.tokenUser.get(bearer[1])) || { roles: [] }, isAdmin = who.roles.includes(1);
+    const hasAction = (action) => isAdmin || who.roles.some((rid) => ((state.roles.find((r) => r.id === rid) || {}).policies || []).some((pid) => ((state.policies.find((q) => q.id === pid) || {}).policy || { actions: [] }).actions.includes(action)));
+    const canRead = isAdmin || who.roles.includes(2) || hasAction('agent:read');
     const items = (a) => ({ data: { affected_items: a, total_affected_items: a.length, total_failed_items: 0, failed_items: [] }, message: 'ok', error: 0 });
     if (u.pathname.startsWith('/security/')) {
       if (!isAdmin) return send(403, { title: 'Permission Denied' });
       if (req.method === 'GET' && u.pathname === '/security/users') return send(200, items([...state.users].map(([n, r]) => ({ id: r.id, username: n, allow_run_as: false, roles: r.roles }))));
       if (req.method === 'GET' && u.pathname === '/security/roles') return send(200, items(state.roles));
+      if (req.method === 'GET' && u.pathname === '/security/policies') return send(200, items(state.policies));
       let body = ''; req.on('data', (c) => { body += c; });
       return req.on('end', () => {
         let j = {}; try { j = JSON.parse(body || '{}'); } catch { return send(400, { title: 'Bad request' }); }
@@ -99,8 +107,40 @@ async function start({ user = 'asix-readonly', password = 'Str0ng-pw!', cn = 'wa
           for (const rid of String(u.searchParams.get('role_ids') || '').split(',')) if (rid && !e[1].roles.includes(Number(rid))) e[1].roles.push(Number(rid));
           return send(200, items([{ id: e[1].id }]));
         }
+        if (req.method === 'POST' && u.pathname === '/security/policies') {
+          const pol = j.policy; if (!j.name || !pol || !Array.isArray(pol.actions) || !Array.isArray(pol.resources) || !['allow', 'deny'].includes(pol.effect)) return send(400, { title: 'Bad Request', detail: 'Invalid policy' });
+          if (state.policies.some((q) => q.name === j.name)) return send(400, { title: 'Bad Request', detail: 'exists' });
+          const np = { id: state.nextId++, name: j.name, policy: pol }; state.policies.push(np); return send(200, items([np]));
+        }
+        if (req.method === 'POST' && u.pathname === '/security/roles') {
+          if (!j.name || state.roles.some((r) => r.name === j.name)) return send(400, { title: 'Bad Request', detail: 'Invalid role' });
+          const nr = { id: state.nextId++, name: j.name, policies: [] }; state.roles.push(nr); return send(200, items([nr]));
+        }
+        if (req.method === 'POST' && (m = /^\/security\/roles\/(\d+)\/policies$/.exec(u.pathname))) {
+          const role = state.roles.find((r) => r.id === Number(m[1])); if (!role) return send(404, { title: 'Not found' }); role.policies = role.policies || [];
+          for (const pid of String(u.searchParams.get('policy_ids') || '').split(',')) { if (pid && state.policies.some((q) => q.id === Number(pid)) && !role.policies.includes(Number(pid))) role.policies.push(Number(pid)); }
+          return send(200, items([role]));
+        }
         send(404, { title: 'Not found' });
       });
+    }
+    if (u.pathname === '/groups' || u.pathname.startsWith('/groups/')) {
+      const can = (action) => isAdmin || who.roles.some((rid) => ((state.roles.find((r) => r.id === rid) || {}).policies || []).some((pid) => ((state.policies.find((q) => q.id === pid) || {}).policy || { actions: [] }).actions.includes(action)));
+      if (!can(req.method === 'PUT' ? 'group:update_config' : 'group:read')) return send(403, { title: 'Permission Denied', detail: 'Permission denied: Resource type: group' });
+      if (req.method === 'GET' && u.pathname === '/groups') return send(200, items([...state.groups.keys()].map((n) => ({ name: n, count: state.agents.filter((a) => (a.group || []).includes(n)).length, mergedSum: 'x', configSum: 'y' }))));
+      const gm = /^\/groups\/([^/]+)\/(files\/agent\.conf|configuration)$/.exec(u.pathname); const gname = gm ? decodeURIComponent(gm[1]) : null;
+      if (!gm || !state.groups.has(gname)) return send(400, { title: 'Wazuh Error', detail: 'Group \'' + gname + '\' does not exist', error: 1710 });
+      if (req.method === 'GET' && gm[2] === 'files/agent.conf') return send(200, state.groups.get(gname), 'application/xml');
+      if (req.method === 'PUT' && gm[2] === 'configuration') {
+        const chunks = []; return req.on('data', (c) => chunks.push(c)).on('end', () => {
+          const xml = Buffer.concat(chunks).toString('utf8'); state.groupWrites.push({ group: gname, xml, contentType: req.headers['content-type'] });
+          const stack = []; let ok = true; for (const t of xml.replace(/<!--[\s\S]*?-->/g, '').matchAll(/<(\/?)([A-Za-z_][\w-]*)[^<>]*?(\/?)>/g)) { if (t[3]) continue; if (t[1]) { if (stack.pop() !== t[2]) ok = false; } else stack.push(t[2]); }
+          if (stack.length) ok = false;
+          const why = state.rejectConf ? state.rejectConf(xml) : (ok ? null : 'Wazuh syntax error: not well formed');
+          if (why) return send(200, { data: { affected_items: [], total_affected_items: 0, total_failed_items: 1, failed_items: [{ error: { code: 1114, message: why }, id: [gname] }] }, message: 'Could not update', error: 1 });
+          state.groups.set(gname, xml); return send(200, items([gname]));
+        });
+      }
     }
     if (!canRead) return send(403, { title: 'Permission Denied' });
     if (req.method !== 'GET') return send(405, { title: 'Method not allowed' });

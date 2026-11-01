@@ -23,6 +23,12 @@
 #   --cert-file P    the API's certificate (default /var/ossec/api/configuration/security/server.crt; if that file does not exist the certificate is read from the running API).
 #   --out-dir DIR    where the registration file goes (default /root).
 #
+#   --group-writer   ALSO create the group configuration user for ASIX (docs/endpoints.md, task E10): a second API user, default name asix-groupconfig, whose role may only read
+#                    groups and update a group's configuration (policy asix-groupconfig-policy: actions group:read and group:update_config on group:id:*). It is tried before the
+#                    script goes on: it must be able to list groups and must NOT be able to list agents. Its password is kept in /var/ossec/etc/asix-api-groupconfig.pass and
+#                    written, with nothing else, to asix-wazuh-writer-registration.json (register it with `wazuh-manager-cli.js register-writer`).
+#   --group-user N   the name of that user (default asix-groupconfig).
+#
 # The script is safe to run again: with nothing left to do it changes nothing and rewrites the registration file with the same password. Passwords are never printed and never put
 # on a command line (a command line is visible to other users of the machine); the API is reached with the certificate pinned (curl --pinnedpubkey), so a loopback
 # impostor cannot collect the password either. It does NOT open the firewall: let ONLY the ASIX API node reach this machine's API port, for example
@@ -30,7 +36,7 @@
 # Built and tested against a stand-in for the Wazuh API (tests/wazuh-api-setup-script.test.js), NOT a real manager: see docs/endpoints.md, "E4c as built".
 set -euo pipefail
 
-ADDRESS=""; PORT="55000"; LABEL=""; RO_USER="asix-readonly"; ROTATE=0; CHECK=0; CERT_FILE=""; OUT_DIR=""
+ADDRESS=""; PORT="55000"; LABEL=""; RO_USER="asix-readonly"; ROTATE=0; CHECK=0; CERT_FILE=""; OUT_DIR=""; GROUP_WRITER=0; GW_USER="asix-groupconfig"
 while [ $# -gt 0 ]; do
   case "$1" in
     --address) ADDRESS="$2"; shift 2;;
@@ -38,6 +44,8 @@ while [ $# -gt 0 ]; do
     --label) LABEL="$2"; shift 2;;
     --user) RO_USER="$2"; shift 2;;
     --rotate) ROTATE=1; shift;;
+    --group-writer) GROUP_WRITER=1; shift;;
+    --group-user) GW_USER="$2"; shift 2;;
     --check) CHECK=1; shift;;
     --cert-file) CERT_FILE="$2"; shift 2;;
     --out-dir) OUT_DIR="$2"; shift 2;;
@@ -46,6 +54,8 @@ while [ $# -gt 0 ]; do
 done
 [[ "$PORT" =~ ^[0-9]{1,5}$ ]] && [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || { echo "--port must be a number from 1 to 65535." >&2; exit 2; }
 [[ "$RO_USER" =~ ^[A-Za-z0-9._-]{3,64}$ ]] || { echo "--user must be 3 to 64 letters, digits, dots, dashes or underscores." >&2; exit 2; }
+[[ "$GW_USER" =~ ^[A-Za-z0-9._-]{3,64}$ ]] || { echo "--group-user must be 3 to 64 letters, digits, dots, dashes or underscores." >&2; exit 2; }
+[ "$GW_USER" != "$RO_USER" ] || { echo "--group-user must not be the read-only user: the two users must be different." >&2; exit 2; }
 if [ "$CHECK" -eq 0 ]; then
   [ -n "$ADDRESS" ] || { echo "--address is required (the address ASIX will use to reach this manager's API)." >&2; exit 2; }
   [[ "$ADDRESS" =~ ^[A-Za-z0-9._:-]{1,253}$ ]] || { echo "--address must be a host name or an IP address." >&2; exit 2; }
@@ -54,7 +64,7 @@ fi
 
 # Where things are. The environment variables exist for the tests; on a manager the defaults are right.
 OSSEC="${ASIX_WAZUH_DIR:-/var/ossec}"; BASE="${ASIX_WAZUH_API_BASE:-https://127.0.0.1:$PORT}"
-ETC="$OSSEC/etc"; ADMIN_PW="$ETC/asix-api-admin.pass"; WUI_PW="$ETC/asix-api-wui.pass"; RO_PW="$ETC/asix-api-readonly.pass"
+ETC="$OSSEC/etc"; ADMIN_PW="$ETC/asix-api-admin.pass"; WUI_PW="$ETC/asix-api-wui.pass"; RO_PW="$ETC/asix-api-readonly.pass"; GW_PW="$ETC/asix-api-groupconfig.pass"
 [ -n "$CERT_FILE" ] || CERT_FILE="$OSSEC/api/configuration/security/server.crt"
 [ -n "$OUT_DIR" ] || OUT_DIR="/root"
 [ -n "$LABEL" ] || LABEL="$(hostname 2>/dev/null || echo wazuh-manager)"
@@ -124,6 +134,16 @@ user_has_role() {   # user_has_role TOKEN USERNAME ROLE_ID -> exit 0 when yes
   [ "$HTTP" = "200" ] || return 1
   printf '%s' "$BODY" | NAME="$2" RID="$3" jpy 'import sys,json,os; d=json.load(sys.stdin); u=next((u for u in d["data"]["affected_items"] if u.get("username")==os.environ["NAME"]),{}); sys.exit(0 if int(os.environ["RID"]) in [int(x) for x in u.get("roles",[])] else 1)'
 }
+policy_id() {   # policy_id TOKEN NAME -> numeric id, or nothing
+  api GET "/security/policies?limit=500" "" "token:$1"
+  [ "$HTTP" = "200" ] || return 0
+  printf '%s' "$BODY" | NAME="$2" jpy 'import sys,json,os; d=json.load(sys.stdin); n=os.environ["NAME"]; print(next((str(r["id"]) for r in d["data"]["affected_items"] if r.get("name")==n),""), end="")'
+}
+role_has_policy() {   # role_has_policy TOKEN ROLE_ID POLICY_ID -> exit 0 when yes
+  api GET "/security/roles?limit=500" "" "token:$1"
+  [ "$HTTP" = "200" ] || return 1
+  printf '%s' "$BODY" | RID="$2" PID="$3" jpy 'import sys,json,os; d=json.load(sys.stdin); r=next((r for r in d["data"]["affected_items"] if int(r["id"])==int(os.environ["RID"])),{}); sys.exit(0 if int(os.environ["PID"]) in [int(x) for x in r.get("policies",[])] else 1)'
+}
 # A password the Wazuh API accepts (8 to 64 characters with an upper case letter, a lower case letter, a digit and a symbol), random.
 new_password() { printf 'Aa1!%s' "$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 24)"; }
 read_pw() { [ -s "$1" ] && head -n 1 "$1" | tr -d '\r\n' || true; }
@@ -153,6 +173,10 @@ if [ "$CHECK" -eq 1 ]; then
   else
     RO_TOKEN=""; SAVED_RO="$(read_pw "$RO_PW")"; [ -n "$SAVED_RO" ] && RO_TOKEN="$(sign_in "$RO_USER" "$SAVED_RO")"
     if [ -n "$RO_TOKEN" ]; then say "the read-only user '$RO_USER' exists and its saved password works"; else problem "no working read-only user '$RO_USER' yet: run this script without --check."; fi
+    if [ "$GROUP_WRITER" -eq 1 ]; then
+      GW_TOKEN=""; SAVED_GW="$(read_pw "$GW_PW")"; [ -n "$SAVED_GW" ] && GW_TOKEN="$(sign_in "$GW_USER" "$SAVED_GW")"
+      if [ -n "$GW_TOKEN" ]; then say "the group configuration user '$GW_USER' exists and its saved password works"; else problem "no working group configuration user '$GW_USER' yet: run this script with --group-writer and without --check."; fi
+    fi
   fi
   echo; if [ "$PROBLEMS" -eq 0 ]; then echo "Nothing to do."; else echo "$PROBLEMS problem(s). Run without --check to fix them."; exit 1; fi
   exit 0
@@ -203,6 +227,66 @@ VER="$(printf '%s' "$BODY" | jpy 'import sys,json; print(json.load(sys.stdin)["d
 api GET "/agents?limit=1" "" "token:$RO_TOKEN"; [ "$HTTP" = "200" ] || die "'$RO_USER' cannot list agents (HTTP $HTTP): its role does not allow it."
 say "listed agents"
 
+if [ "$GROUP_WRITER" -eq 1 ]; then
+  echo "== 5b. The group configuration user for ASIX (--group-writer) =="
+  POL_NAME="asix-groupconfig-policy"; GW_ROLE="asix-groupconfig"
+  PID_G="$(policy_id "$ADMIN_TOKEN" "$POL_NAME")"
+  if [ -z "$PID_G" ]; then
+    api POST "/security/policies" "$(N="$POL_NAME" jpy 'import json,os; print(json.dumps({"name": os.environ["N"], "policy": {"actions": ["group:read", "group:update_config"], "resources": ["group:id:*"], "effect": "allow"}}), end="")')" "token:$ADMIN_TOKEN"
+    [ "$HTTP" = "200" ] || die "the API refused to create the policy '$POL_NAME' (HTTP $HTTP)."
+    PID_G="$(policy_id "$ADMIN_TOKEN" "$POL_NAME")"; [ -n "$PID_G" ] || die "the policy '$POL_NAME' was created but is not listed."
+    say "created the policy '$POL_NAME' (group:read and group:update_config on all groups, nothing else)"
+  else say "the policy '$POL_NAME' exists"; fi
+  GRID="$(role_id "$ADMIN_TOKEN" "$GW_ROLE")"
+  if [ -z "$GRID" ]; then
+    api POST "/security/roles" "$(N="$GW_ROLE" jpy 'import json,os; print(json.dumps({"name": os.environ["N"]}), end="")')" "token:$ADMIN_TOKEN"
+    [ "$HTTP" = "200" ] || die "the API refused to create the role '$GW_ROLE' (HTTP $HTTP)."
+    GRID="$(role_id "$ADMIN_TOKEN" "$GW_ROLE")"; [ -n "$GRID" ] || die "the role '$GW_ROLE' was created but is not listed."
+    say "created the role '$GW_ROLE'"
+  else say "the role '$GW_ROLE' exists"; fi
+  if role_has_policy "$ADMIN_TOKEN" "$GRID" "$PID_G"; then say "the role '$GW_ROLE' has the policy '$POL_NAME'"
+  else
+    api POST "/security/roles/$GRID/policies?policy_ids=$PID_G" "" "token:$ADMIN_TOKEN"
+    [ "$HTTP" = "200" ] || die "the API refused to give the role '$GW_ROLE' the policy '$POL_NAME' (HTTP $HTTP)."
+    say "gave the role '$GW_ROLE' the policy '$POL_NAME'"
+  fi
+  GW_ID="$(user_id "$ADMIN_TOKEN" "$GW_USER")"; GW_PASS="$(read_pw "$GW_PW")"
+  if [ -z "$GW_ID" ]; then
+    GW_PASS="$(new_password)"; save_pw "$GW_PW" "$GW_PASS"
+    api POST "/security/users" "$(U="$GW_USER" P="$GW_PASS" jpy 'import json,os; print(json.dumps({"username": os.environ["U"], "password": os.environ["P"]}), end="")')" "token:$ADMIN_TOKEN"
+    [ "$HTTP" = "200" ] || { rm -f "$GW_PW"; die "the API refused to create the user '$GW_USER' (HTTP $HTTP)."; }
+    GW_ID="$(user_id "$ADMIN_TOKEN" "$GW_USER")"; [ -n "$GW_ID" ] || die "the user '$GW_USER' was created but is not listed."
+    say "created '$GW_USER' (password in $GW_PW)"
+  elif [ "$ROTATE" -eq 1 ] || [ -z "$GW_PASS" ] || [ -z "$(sign_in "$GW_USER" "$GW_PASS")" ]; then
+    GW_PASS="$(new_password)"; save_pw "$GW_PW" "$GW_PASS"
+    set_password "$ADMIN_TOKEN" "$GW_ID" "$GW_PASS" || die "the API refused the new password of '$GW_USER' (HTTP $HTTP)."
+    say "set a new password for '$GW_USER' (saved in $GW_PW)"
+  else say "'$GW_USER' exists and its saved password works"; fi
+  if user_has_role "$ADMIN_TOKEN" "$GW_USER" "$GRID"; then say "'$GW_USER' has the role '$GW_ROLE'"
+  else
+    api POST "/security/users/$GW_ID/roles?role_ids=$GRID" "" "token:$ADMIN_TOKEN"
+    [ "$HTTP" = "200" ] || die "the API refused to give '$GW_USER' the role '$GW_ROLE' (HTTP $HTTP)."
+    say "gave '$GW_USER' the role '$GW_ROLE'"
+  fi
+  echo "   tried as '$GW_USER':"
+  GW_TOKEN="$(sign_in "$GW_USER" "$GW_PASS")"; [ -n "$GW_TOKEN" ] || die "cannot sign in as '$GW_USER' with the saved password."
+  api GET "/groups?limit=1" "" "token:$GW_TOKEN"; [ "$HTTP" = "200" ] || die "'$GW_USER' cannot list groups (HTTP $HTTP): its role does not allow it."
+  say "listed groups"
+  api GET "/agents?limit=1" "" "token:$GW_TOKEN"
+  [ "$HTTP" = "403" ] || die "'$GW_USER' could list agents (HTTP $HTTP): it can do more than it should. Nothing was written for ASIX; check the roles of '$GW_USER' on the manager."
+  say "refused when it asked for agents (as it should be)"
+  api GET "/security/users?limit=1" "" "token:$GW_TOKEN"
+  [ "$HTTP" = "403" ] || die "'$GW_USER' could read the API's users (HTTP $HTTP): it can do more than it should."
+  say "refused when it asked for users (as it should be)"
+  mkdir -p "$OUT_DIR"; GREG="$OUT_DIR/asix-wazuh-writer-registration.json"
+  ( umask 077; U="$GW_USER" P="$GW_PASS" python3 - > "$GREG.new" <<'PY'
+import json, os
+print(json.dumps({"user": os.environ["U"], "password": os.environ["P"]}, indent=2))
+PY
+  ); chmod 600 "$GREG.new"; mv "$GREG.new" "$GREG"
+  say "wrote $GREG (root only; it holds the group configuration password and nothing else)"
+fi
+
 echo "== 6. The registration file for ASIX =="
 mkdir -p "$OUT_DIR"; REG="$OUT_DIR/asix-wazuh-registration.json"
 ( umask 077; U="$RO_USER" P="$RO_PASS" A="$ADDRESS" PT="$PORT" L="$LABEL" CRT="$WORK/server.crt" python3 - > "$REG.new" <<'PY'
@@ -219,4 +303,8 @@ echo "  2. Copy $REG to the machine that runs kubectl for ASIX and register it f
 echo "       kubectl -n asix-platform exec -i deploy/asix-api -- node src/endpoints/wazuh-manager-cli.js register --tenant \"TENANT NAME\" < asix-wazuh-registration.json"
 echo "     (it signs in first and saves only if that works), then delete the copy."
 echo "  3. In ASIX:  GET /v1/endpoints/manager  shows the manager and its version;  GET /v1/endpoints/agents  lists its agents."
+if [ "$GROUP_WRITER" -eq 1 ]; then
+  echo "  Group configuration (E10): register the second user too, after the manager above, then switch changes on in ASIX (ASIX_ENDPOINT_CONFIG_WRITE=true, off by default):"
+  echo "       kubectl -n asix-platform exec -i deploy/asix-api -- node src/endpoints/wazuh-manager-cli.js register-writer --tenant \"TENANT NAME\" < asix-wazuh-writer-registration.json"
+fi
 echo "  The API certificate sha256 is $FPR. If the manager's certificate is ever replaced, run this again and register again."

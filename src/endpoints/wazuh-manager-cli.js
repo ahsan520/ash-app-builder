@@ -15,10 +15,11 @@
 // --no-check is given (the manager is not up yet). Nothing here is reachable from a route: see src/endpoints/wazuh-manager-store.js.
 const db = require('../db');
 const store = require('./wazuh-manager-store');
+const writerStore = require('./group-config-store');
 const api = require('./wazuh-api');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const USAGE = 'usage:\n  wazuh-manager-cli.js register --tenant <name|id> [--no-check] < registration.json\n  wazuh-manager-cli.js show     --tenant <name|id>\n  wazuh-manager-cli.js check    --tenant <name|id>\n  wazuh-manager-cli.js remove   --tenant <name|id>';
+const USAGE = 'usage:\n  wazuh-manager-cli.js register-writer --tenant <name|id> [--no-check] < writer.json   ({ "user", "password" }: the group configuration user, E10)\n  wazuh-manager-cli.js remove-writer   --tenant <name|id>\n  wazuh-manager-cli.js register --tenant <name|id> [--no-check] < registration.json\n  wazuh-manager-cli.js show     --tenant <name|id>\n  wazuh-manager-cli.js check    --tenant <name|id>\n  wazuh-manager-cli.js remove   --tenant <name|id>';
 
 function parseArgs(argv) {
   const [cmd, ...rest] = argv; const o = { cmd, tenant: null, noCheck: false };
@@ -27,9 +28,9 @@ function parseArgs(argv) {
     else if (rest[i] === '--no-check') o.noCheck = true;
     else return { error: 'Unknown or incomplete option: ' + rest[i] };
   }
-  if (!['register', 'show', 'check', 'remove'].includes(cmd)) return { error: 'Unknown command' };
+  if (!['register', 'show', 'check', 'remove', 'register-writer', 'remove-writer'].includes(cmd)) return { error: 'Unknown command' };
   if (!o.tenant) return { error: '--tenant is required' };
-  if (o.noCheck && cmd !== 'register') return { error: '--no-check only goes with register' };
+  if (o.noCheck && !['register', 'register-writer'].includes(cmd)) return { error: '--no-check only goes with register and register-writer' };
   return o;
 }
 
@@ -72,10 +73,30 @@ async function run(argv, io) {
       io.out('Registered for tenant "' + t.name + '": ' + reg.api_url + ' as ' + reg.api_user + ' (certificate sha256 ' + reg.cert_sha256 + ', valid until ' + reg.not_after + ')');
       return 0;
     }
+    if (o.cmd === 'register-writer' || o.cmd === 'remove-writer') {
+      if (o.cmd === 'remove-writer') { const n = await db.withTenant(t.id, (c) => writerStore.clearWriter(c, t.id)); api.forget(t.id + '#writer'); io.out(n ? 'Removed the group configuration user of tenant "' + t.name + '". The user on the manager is untouched: delete it there too.' : 'Tenant "' + t.name + '" had no group configuration user registered.'); return 0; }
+      let input;
+      try { input = JSON.parse(await readAll(io.stdin)); } catch (e) { io.err('Standard input must hold the registration as JSON: { "user", "password" }'); return 2; }
+      const p = writerStore.parseRegistration(input);
+      if (p.error) { io.err('Not saved: ' + p.error); return 2; }
+      if (!require('../notifications/secret-box').configured()) { io.err('Not saved: NOTIFY_ENCRYPTION_KEY is not set in this environment, so the password cannot be stored safely'); return 1; }
+      const mrow = await db.withTenant(t.id, (c) => store.readRow(c, t.id));
+      if (!mrow) { io.err('Not saved: tenant "' + t.name + '" has no central manager registered yet (register it first: the writer uses the same address and certificate).'); return 1; }
+      if (!o.noCheck) {
+        const wm = api.asWriter(store.credentials(mrow), { api_user: p.reg.api_user, api_password: p.reg.password, hash: 'probe' });
+        try { api.forget(wm.tenant_id); const g = await api.groupList(store.credentials(mrow), { api_user: p.reg.api_user, api_password: p.reg.password, hash: 'probe' }); io.out('The manager accepted the user and lists ' + g.length + ' group(s).'); }
+        catch (e) { io.err('Not saved: the manager did not accept the user for reading groups (' + (e.code || 'ERROR') + '): ' + e.message + '\nFix it, or use --no-check to save it anyway.'); return 1; }
+      }
+      await db.withTenant(t.id, (c) => writerStore.writeWriter(c, t.id, p.reg, 'cli')); api.forget(t.id + '#writer');
+      io.out('Registered the group configuration user ' + p.reg.api_user + ' for tenant "' + t.name + '". Changes stay switched off until ASIX_ENDPOINT_CONFIG_WRITE is "true" on the server.');
+      return 0;
+    }
     const row = await db.withTenant(t.id, (c) => store.readRow(c, t.id));
     if (o.cmd === 'show') {
       if (!row) { io.out('Tenant "' + t.name + '" has no central manager registered.'); return 0; }
       const v = store.view(row);
+      const wrow = await db.withTenant(t.id, (c) => writerStore.readWriter(c, t.id)).catch(() => null);
+      io.out('Group configuration user: ' + (wrow ? wrow.api_user : 'none registered'));
       io.out('Tenant "' + t.name + '": ' + row.api_url + ' as ' + v.api_user + ', certificate sha256 ' + v.cert_sha256 + (v.label ? ', label "' + v.label + '"' : '') + ', saved ' + new Date(v.updated_at).toISOString());
       return 0;
     }

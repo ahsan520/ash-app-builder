@@ -70,10 +70,11 @@ describe('Endpoints page, Alerts tab', () => {
   });
   it('is read only: only GET calls, on the three alert routes, and no HTML injection anywhere in the page code', async () => {
     // E4m and E4o: the functions of the disconnected-agent alert and of the score alert card are the ONLY places that write; everything else stays read only. Each may only PUT to its own one route.
-    const writers = [[['agentAlertCard', 'agentSkipButton'], "api('/v1/endpoints/agent-alert'"], [['scoreAlertCard'], "api('/v1/endpoints/score-alert'"]];
-    const fns = writers.flatMap(([names, route]) => names.map((n) => { const i = source.indexOf('function ' + n + '('); assert.ok(i >= 0, n); return { f: source.slice(i, source.indexOf('\n}\n', i) + 3), route }; }));
+    // E10: groupConfigCard is the third, and the only one that also POSTs (preview and undo); it is held to its own routes in tests/portal-group-config.test.js.
+    const writers = [[['agentAlertCard', 'agentSkipButton'], "api('/v1/endpoints/agent-alert'", ['PUT']], [['scoreAlertCard'], "api('/v1/endpoints/score-alert'", ['PUT']], [['groupConfigCard'], "api(GC", ['PUT', 'POST']]];
+    const fns = writers.flatMap(([names, route, methods]) => names.map((n) => { const i = source.indexOf('function ' + n + '('); assert.ok(i >= 0, n); return { f: source.slice(i, source.indexOf('\n}\n', i) + 3), route, methods }; }));
     const rest = fns.reduce((s, x) => s.replace(x.f, ''), source);
-    for (const { f, route } of fns) { assert.ok(/method: 'PUT'/.test(f)); assert.ok((f.match(/method:/g) || []).length === (f.match(/method: 'PUT'/g) || []).length); assert.ok((f.match(/api\('([^']*)'/g) || []).every((x) => x.startsWith(route.slice(0, -1)))); assert.ok(!/innerHTML|insertAdjacentHTML|outerHTML|document\.write/.test(f)); }
+    for (const { f, route, methods } of fns) { assert.ok(methods.every((m) => f.includes("method: '" + m + "'"))); assert.ok((f.match(/method:/g) || []).length === methods.map((m) => (f.match(new RegExp("method: '" + m + "'", 'g')) || []).length).reduce((x, y) => x + y, 0)); assert.ok((f.match(/api\('([^']*)'/g) || []).every((x) => x.startsWith(route.slice(0, -1)))); assert.ok(!/innerHTML|insertAdjacentHTML|outerHTML|document\.write/.test(f)); }
     assert.ok(!/innerHTML|insertAdjacentHTML|outerHTML|document\.write|method:/.test(rest));
     const p = await open(); await p.alertsTab(); await p.click('Search');
     const a = p.calls.filter((c) => c.p.includes('/alerts')); assert.ok(a.length >= 4);

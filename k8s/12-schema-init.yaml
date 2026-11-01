@@ -630,6 +630,46 @@ data:
         WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
     GRANT SELECT, INSERT, UPDATE, DELETE ON wazuh_managers TO asix_admin;
 
+    -- Group configuration written by ASIX (docs/endpoints.md, task E10): a SEPARATE manager API user that may only read groups and update a group's configuration,
+    -- and the history of every change, so any change can be undone. No HTTP route writes the user; an operator registers it (wazuh-manager-cli.js register-writer).
+    CREATE TABLE IF NOT EXISTS wazuh_manager_writers (
+        tenant_id UUID PRIMARY KEY REFERENCES tenants(id),
+        api_user VARCHAR(64) NOT NULL,
+        api_secret_enc TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_by TEXT
+    );
+    ALTER TABLE wazuh_manager_writers ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS wazuh_manager_writers_tenant_isolation ON wazuh_manager_writers;
+    CREATE POLICY wazuh_manager_writers_tenant_isolation ON wazuh_manager_writers FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+    GRANT SELECT, INSERT, UPDATE, DELETE ON wazuh_manager_writers TO asix_admin;
+
+    CREATE TABLE IF NOT EXISTS endpoint_group_config_history (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID NOT NULL REFERENCES tenants(id),
+        group_name VARCHAR(64) NOT NULL,
+        action VARCHAR(20) NOT NULL CHECK (action IN ('apply', 'remove', 'undo')),
+        result VARCHAR(20) NOT NULL CHECK (result IN ('applied', 'rolled_back', 'failed')),
+        entries_before JSONB NOT NULL,
+        entries_after JSONB NOT NULL,
+        before_sha256 VARCHAR(64) NOT NULL,
+        after_sha256 VARCHAR(64),
+        before_content TEXT NOT NULL,
+        note TEXT,
+        actor TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_group_config_history ON endpoint_group_config_history (tenant_id, group_name, created_at DESC);
+    ALTER TABLE endpoint_group_config_history ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS endpoint_group_config_history_tenant_isolation ON endpoint_group_config_history;
+    CREATE POLICY endpoint_group_config_history_tenant_isolation ON endpoint_group_config_history FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+    GRANT SELECT, INSERT, UPDATE, DELETE ON endpoint_group_config_history TO asix_admin;
+
     -- ============================================================
     -- Alert notifications: channels (email / Slack / webhook) and the delivery outbox
     -- ============================================================

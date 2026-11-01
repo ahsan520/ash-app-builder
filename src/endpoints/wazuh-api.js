@@ -69,7 +69,7 @@ function checkApiUrl(raw) {
 // --- one HTTPS exchange ---------------------------------------------------------------------------------------------------------------------
 // ca = the manager's own certificate: it is the ONLY trust anchor, so the handshake fails (before anything is sent, the password included) for any other certificate.
 // The host name is not compared (the certificate Wazuh makes for itself names whatever its installer put there); pinning the exact certificate is the stronger check.
-function exchange(m, { method = 'GET', path, headers = {} }) {
+function exchange(m, { method = 'GET', path, headers = {}, body }) {
   return new Promise((resolve, reject) => {
     const u = checkApiUrl(m.api_url);
     if (u.error) return reject(new WazuhApiError('BAD_ADDRESS', u.error));
@@ -77,7 +77,7 @@ function exchange(m, { method = 'GET', path, headers = {} }) {
     const req = https.request({
       host: u.host, port: u.port, path, method, agent: false, timeout: TIMEOUT_MS, lookup: guardedLookup,
       ca: m.ca_pem, rejectUnauthorized: true, checkServerIdentity: () => undefined, minVersion: 'TLSv1.2',
-      headers: { Accept: 'application/json', 'User-Agent': 'asix-wazuh-proxy', ...headers },
+      headers: { Accept: 'application/json', 'User-Agent': 'asix-wazuh-proxy', ...(body !== undefined ? { 'Content-Length': Buffer.byteLength(body, 'utf8') } : {}), ...headers },
     }, (res) => {
       const chunks = []; let n = 0;
       res.on('data', (c) => {
@@ -89,6 +89,7 @@ function exchange(m, { method = 'GET', path, headers = {} }) {
     });
     req.on('timeout', () => { req.destroy(); finish(reject, new WazuhApiError('TIMEOUT', 'The manager did not answer within ' + Math.round(TIMEOUT_MS / 1000) + ' seconds')); });
     req.on('error', (e) => finish(reject, mapNetError(e)));
+    if (body !== undefined) req.write(body, 'utf8');
     req.end();
   });
 }
@@ -335,4 +336,56 @@ async function agentConfig(m, agentId, section) {
   return shapeConfig(section, await get(m, '/agents/' + String(agentId) + '/config/' + CONFIG_SECTIONS[section]));
 }
 
-module.exports = { CONFIG_SECTIONS, shapeConfig, agentConfig, WazuhApiError, checkApiUrl, addressOk, guardedLookup, parseAgentQuery, managerInfo, agentsSummary, listAgents, getAgent, scaPolicies, scaChecks, parseScaQuery, shapePolicy, shapeCheck, forget, AGENT_ID_RE, POLICY_ID_RE, SCA_RESULTS, SCA_LIMIT_MAX, LIMIT_MAX, STATUSES, SORT_FIELDS, shapeAgent, _tokens: tokens };
+// --- group configuration, the ONE thing ASIX writes (E10) --------------------------------------------------------------------------------------
+// Everything above is read only. These three calls use a SEPARATE API user (the "writer", registered with wazuh-manager-cli.js register-writer) whose role the manager's own RBAC limits to
+// reading groups and updating a group's configuration. The paths are fixed here, the group name is checked, and the only body ever sent is the text of one agent.conf.
+const GROUP_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+const checkGroup = (g) => { if (typeof g !== 'string' || !GROUP_RE.test(g) || g === '.' || g === '..') throw new WazuhApiError('BAD_GROUP', 'A group name is 1 to 64 letters, digits, dots, dashes or underscores'); return encodeURIComponent(g); };
+// The writer as a "manager" for exchange() and token(): same address and certificate, its own user, and its own token cache entry (tenant id + '#writer').
+const asWriter = (m, w) => ({ ...m, tenant_id: m.tenant_id + '#writer', api_user: w.api_user, api_password: w.api_password, api_secret_enc_hash: 'w:' + (w.hash || '') });
+// One call with the writer's token; returns { status, text }. One retry with a new token on 401, like get().
+async function request(wm, { method = 'GET', path, body, contentType }) {
+  const n = inFlight.get(wm.tenant_id) || 0;
+  if (n >= MAX_IN_FLIGHT) throw new WazuhApiError('BUSY', 'Too many calls to this manager at once, try again in a moment');
+  inFlight.set(wm.tenant_id, n + 1);
+  try {
+    for (let attempt = 0; ; attempt++) {
+      const t = await token(wm, attempt > 0);
+      const r = await exchange(wm, { method, path, body, headers: { Authorization: 'Bearer ' + t, ...(contentType ? { 'Content-Type': contentType } : {}) } });
+      if (r.status === 401 && attempt === 0) { forget(wm.tenant_id); continue; }
+      if (r.status === 401) throw new WazuhApiError('AUTH_FAILED', 'The manager refused the registered group configuration user and password', r.status);
+      if (r.status === 403) throw new WazuhApiError('FORBIDDEN', 'The group configuration user may not do this (its role needs to read groups and to update group configuration)', r.status);
+      return r;
+    }
+  } finally {
+    const left = (inFlight.get(wm.tenant_id) || 1) - 1; if (left > 0) inFlight.set(wm.tenant_id, left); else inFlight.delete(wm.tenant_id);
+  }
+}
+const parseJson = (r) => { let j = null; try { j = JSON.parse(r.text); } catch { /* checked by the caller */ } return j && typeof j === 'object' ? j : null; };
+async function groupList(m, w) {
+  const r = await request(asWriter(m, w), { path: '/groups?limit=500' }); const j = parseJson(r);
+  if (r.status !== 200 || !items(j)) throw new WazuhApiError('BAD_RESPONSE', 'The manager answered the group list with an unexpected reply (HTTP ' + r.status + ')', r.status);
+  return items(j).map((g) => ({ name: txt(g && g.name, 64), agents: count(g && g.count) })).filter((g) => g.name && GROUP_RE.test(g.name));
+}
+// The raw text of a group's agent.conf. A group with no file yet reads as ''.
+async function groupAgentConf(m, w, group) {
+  const g = checkGroup(group); const r = await request(asWriter(m, w), { path: '/groups/' + g + '/files/agent.conf?raw=true' });
+  if (r.status === 404) return '';
+  if (r.status !== 200 || typeof r.text !== 'string') {
+    const j = parseJson(r); if (j && j.title === 'Not Found') return '';
+    throw new WazuhApiError('BAD_RESPONSE', 'The manager answered the group configuration with an unexpected reply (HTTP ' + r.status + ')', r.status);
+  }
+  const j = parseJson(r); if (j && j.error !== undefined && j.data === undefined) throw new WazuhApiError('BAD_RESPONSE', 'The manager answered the group configuration with an error', r.status);
+  return r.text;
+}
+// Replaces a group's agent.conf. The manager checks the XML itself and refuses a file it cannot read (REJECTED, with its own message).
+async function putGroupAgentConf(m, w, group, xml) {
+  const g = checkGroup(group); if (typeof xml !== 'string' || Buffer.byteLength(xml, 'utf8') > 262144) throw new WazuhApiError('BAD_BODY', 'The configuration must be text of at most 256 kB');
+  const r = await request(asWriter(m, w), { method: 'PUT', path: '/groups/' + g + '/configuration', body: xml, contentType: 'application/xml' });
+  const j = parseJson(r);
+  if (r.status === 200 && j && j.error === 0 && j.data && j.data.total_failed_items === 0) return true;
+  const failed = j && j.data && Array.isArray(j.data.failed_items) && j.data.failed_items[0] && j.data.failed_items[0].error ? txt(j.data.failed_items[0].error.message, 300) : null;
+  throw new WazuhApiError('REJECTED', 'The manager did not accept the configuration' + (failed ? ': ' + failed : (j && j.detail ? ': ' + txt(j.detail, 300) : ' (HTTP ' + r.status + ')')), r.status);
+}
+
+module.exports = { GROUP_RE, asWriter, groupList, groupAgentConf, putGroupAgentConf, CONFIG_SECTIONS, shapeConfig, agentConfig, WazuhApiError, checkApiUrl, addressOk, guardedLookup, parseAgentQuery, managerInfo, agentsSummary, listAgents, getAgent, scaPolicies, scaChecks, parseScaQuery, shapePolicy, shapeCheck, forget, AGENT_ID_RE, POLICY_ID_RE, SCA_RESULTS, SCA_LIMIT_MAX, LIMIT_MAX, STATUSES, SORT_FIELDS, shapeAgent, _tokens: tokens };

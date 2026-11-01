@@ -63,10 +63,11 @@ describe('Endpoints page', () => {
   });
   it('is read only: only GET calls to the E4c routes, and no HTML injection', async () => {
     // E4m and E4o: the functions of the disconnected-agent alert and of the score alert card are the ONLY places that write; everything else stays read only. Each may only PUT to its own one route.
-    const writers = [[['agentAlertCard', 'agentSkipButton'], "api('/v1/endpoints/agent-alert'"], [['scoreAlertCard'], "api('/v1/endpoints/score-alert'"]];
-    const fns = writers.flatMap(([names, route]) => names.map((n) => { const i = source.indexOf('function ' + n + '('); assert.ok(i >= 0, n); return { f: source.slice(i, source.indexOf('\n}\n', i) + 3), route }; }));
+    // E10: groupConfigCard is the third, and the only one that also POSTs (preview and undo); it is held to its own routes in tests/portal-group-config.test.js.
+    const writers = [[['agentAlertCard', 'agentSkipButton'], "api('/v1/endpoints/agent-alert'", ['PUT']], [['scoreAlertCard'], "api('/v1/endpoints/score-alert'", ['PUT']], [['groupConfigCard'], "api(GC", ['PUT', 'POST']]];
+    const fns = writers.flatMap(([names, route, methods]) => names.map((n) => { const i = source.indexOf('function ' + n + '('); assert.ok(i >= 0, n); return { f: source.slice(i, source.indexOf('\n}\n', i) + 3), route, methods }; }));
     const rest = fns.reduce((s, x) => s.replace(x.f, ''), source);
-    for (const { f, route } of fns) { assert.ok(/method: 'PUT'/.test(f)); assert.ok((f.match(/method:/g) || []).length === (f.match(/method: 'PUT'/g) || []).length); assert.ok((f.match(/api\('([^']*)'/g) || []).every((x) => x.startsWith(route.slice(0, -1)))); assert.ok(!/innerHTML|insertAdjacentHTML|outerHTML|document\.write/.test(f)); }
+    for (const { f, route, methods } of fns) { assert.ok(methods.every((m) => f.includes("method: '" + m + "'"))); assert.ok((f.match(/method:/g) || []).length === methods.map((m) => (f.match(new RegExp("method: '" + m + "'", 'g')) || []).length).reduce((a, b) => a + b, 0)); assert.ok((f.match(/api\('([^']*)'/g) || []).every((x) => x.startsWith(route.slice(0, -1)))); assert.ok(!/innerHTML|insertAdjacentHTML|outerHTML|document\.write/.test(f)); }
     assert.ok(!/innerHTML|insertAdjacentHTML|method:/.test(rest));
     const p = await open(); await p.click('Agents');
     assert.ok(p.calls.length >= 3 && p.calls.every((c) => c.method === 'GET' && /^\/v1\/endpoints\/(manager|agents|agent-alert)/.test(c.p)));
@@ -191,7 +192,7 @@ describe('Endpoints page', () => {
     await p.click('Agents'); assert.match(p.text(), /web01/);
   });
   it('third-party notices: the tab names the product, no other tab does', async () => {
-    const p = await open(); for (const tab of ['Overview', 'Agents', 'Alerts', 'File integrity', 'Configuration checks', 'Add a machine']) { await p.click(tab); assert.ok(!/wazuh/i.test(p.text()), tab + ' shows the product name'); }
+    const p = await open(); for (const tab of ['Overview', 'Agents', 'Alerts', 'File integrity', 'Configuration checks', 'Group settings', 'Add a machine']) { await p.click(tab); assert.ok(!/wazuh/i.test(p.text()), tab + ' shows the product name'); }
     await p.click('Third-party notices'); assert.match(p.text(), /Wazuh/);
   });
   it('Refresh reloads the page', async () => { const p = await open(); await p.click('Refresh'); assert.strictEqual(p.routes.length, 1); });

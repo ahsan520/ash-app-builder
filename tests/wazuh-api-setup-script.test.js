@@ -133,4 +133,43 @@ describe('wazuh-api-setup.sh', { skip: have ? false : 'needs curl, openssl and p
     fs.writeFileSync(path.join(bin, 'id'), '#!/bin/sh\necho 1000\n', { mode: 0o755 });
     const r = await full(); assert.strictEqual(r.code, 1); assert.match(r.err, /Run as root/); assert.strictEqual(M.state.requests.length, 0);
   });
+
+  describe('--group-writer (E10): the group configuration user', () => {
+    const gw = (extra = []) => full(['--group-writer', ...extra]);
+    const GREG = () => path.join(out, 'asix-wazuh-writer-registration.json');
+    it('creates a policy, a role and a user that may only read groups and update a group\'s configuration, tries it, and writes a registration with a user and a password only', async () => {
+      const r = await gw(); assert.strictEqual(r.code, 0, r.all);
+      assert.match(r.out, /created the policy 'asix-groupconfig-policy'/); assert.match(r.out, /created the role 'asix-groupconfig'/); assert.match(r.out, /created 'asix-groupconfig'/); assert.match(r.out, /listed groups/); assert.match(r.out, /refused when it asked for agents/); assert.match(r.out, /refused when it asked for users/);
+      const pol = M.state.policies.find((q) => q.name === 'asix-groupconfig-policy'); assert.deepStrictEqual(pol.policy, { actions: ['group:read', 'group:update_config'], resources: ['group:id:*'], effect: 'allow' });
+      const reg = JSON.parse(fs.readFileSync(GREG(), 'utf8')); assert.deepStrictEqual(Object.keys(reg).sort(), ['password', 'user']); assert.strictEqual(reg.user, 'asix-groupconfig'); assert.strictEqual(reg.password, pw('asix-api-groupconfig.pass')); assert.strictEqual(mode(GREG()), '600'); assert.strictEqual(mode(path.join(oss, 'etc', 'asix-api-groupconfig.pass')), '600');
+      assert.ok(!r.all.includes(reg.password), 'the password is never printed'); assert.ok(!fs.readFileSync(curlLog, 'utf8').includes(reg.password), 'nor put on a curl command line');
+      assert.ok(fs.existsSync(path.join(out, 'asix-wazuh-registration.json')), 'the read-only registration is written as before');
+    });
+    it('the user can do what ASIX needs and no more, as the manager itself says', async () => {
+      await gw(); const reg = JSON.parse(fs.readFileSync(GREG(), 'utf8')); const api = require('../src/endpoints/wazuh-api');
+      process.env.ASIX_WAZUH_ALLOW_LOOPBACK = 'true'; const m = { tenant_id: 'T-gw', api_url: M.url, api_user: 'x', api_password: 'x', ca_pem: M.cert, cert_sha256: 'x', api_secret_enc_hash: 'h' };
+      assert.ok((await api.groupList(m, { api_user: reg.user, api_password: reg.password, hash: 'a' })).length >= 2);
+      await api.putGroupAgentConf(m, { api_user: reg.user, api_password: reg.password, hash: 'a' }, 'default', '<agent_config/>\n'); assert.strictEqual(M.state.groups.get('default'), '<agent_config/>\n');
+      const ro = JSON.parse(fs.readFileSync(path.join(out, 'asix-wazuh-registration.json'), 'utf8')); await assert.rejects(api.putGroupAgentConf(m, { api_user: ro.user, api_password: ro.password, hash: 'b' }, 'default', '<agent_config/>\n'), (e) => e.code === 'FORBIDDEN', 'the read-only user still cannot write');
+    });
+    it('run again it changes nothing and keeps the same password; --rotate gives a new one', async () => {
+      await gw(); const first = pw('asix-api-groupconfig.pass'); M.state.requests.length = 0; const r = await gw(); assert.strictEqual(r.code, 0, r.all); assert.deepStrictEqual(writes(), [], 'no write on the second run'); assert.strictEqual(pw('asix-api-groupconfig.pass'), first); assert.match(r.out, /exists and its saved password works/);
+      const r3 = await gw(['--rotate']); assert.strictEqual(r3.code, 0, r3.all); assert.notStrictEqual(pw('asix-api-groupconfig.pass'), first); assert.strictEqual(JSON.parse(fs.readFileSync(GREG(), 'utf8')).password, pw('asix-api-groupconfig.pass'));
+    });
+    it('without the flag nothing about it is created or written', async () => {
+      const r = await full(); assert.strictEqual(r.code, 0, r.all); assert.ok(!fs.existsSync(GREG())); assert.deepStrictEqual(M.state.policies, []); assert.ok(!M.state.roles.some((x) => x.name === 'asix-groupconfig'));
+    });
+    it('--check with the flag says the user is missing, then fine, and changes nothing', async () => {
+      let r = await run(['--check', '--group-writer', '--cert-file', M.certFile]); assert.match(r.all, /no working group configuration user/);
+      await gw(); M.state.requests.length = 0; r = await run(['--check', '--group-writer', '--cert-file', M.certFile]); assert.match(r.out, /the group configuration user 'asix-groupconfig' exists and its saved password works/); assert.deepStrictEqual(writes(), []);
+    });
+    it('stops, and writes no registration for it, when the user could do more than it should', async () => {
+      M.state.policies.push({ id: 900, name: 'asix-groupconfig-policy', policy: { actions: ['group:read', 'group:update_config', 'agent:read'], resources: ['*:*:*'], effect: 'allow' } });
+      const r = await gw(); assert.notStrictEqual(r.code, 0); assert.match(r.err, /could list agents.*can do more than it should/); assert.ok(!fs.existsSync(GREG()));
+    });
+    it('refuses a group user name that is the read-only user, or odd', async () => {
+      for (const [args, re] of [[['--group-writer', '--group-user', 'asix-readonly'], /must not be the read-only user/], [['--group-writer', '--group-user', 'a b'], /--group-user must be/]]) { const r = await full(args); assert.strictEqual(r.code, 2); assert.match(r.err, re); }
+      assert.deepStrictEqual(writes(), []);
+    });
+  });
 });
