@@ -510,6 +510,14 @@ data:
     -- --accept-config). config_rejected_win_filter is the hash of the program it tried and put back. Information only, like config_syslog_port.
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS config_win_filter TEXT CHECK (config_win_filter IS NULL OR config_win_filter ~ '^([0-9a-f]{64})?$');
     ALTER TABLE collectors ADD COLUMN IF NOT EXISTS config_rejected_win_filter TEXT CHECK (config_rejected_win_filter IS NULL OR config_rejected_win_filter ~ '^[0-9a-f]{64}$');
+    -- Broker capacity and placement (src/brokers/placement.js, docs/broker-groups.md). host_cpus, host_mem_mb and agents_enrolled are what the broker's heartbeat says (information only;
+    -- NULL = never said: an older script, or no endpoint manager on that VM). broker_group and agent_limit are set from the Brokers page: a group name, and the number of agents this broker
+    -- may be given (NULL = use the estimate from its size).
+    ALTER TABLE collectors ADD COLUMN IF NOT EXISTS host_cpus INTEGER CHECK (host_cpus IS NULL OR host_cpus BETWEEN 1 AND 4096);
+    ALTER TABLE collectors ADD COLUMN IF NOT EXISTS host_mem_mb INTEGER CHECK (host_mem_mb IS NULL OR host_mem_mb BETWEEN 256 AND 16777216);
+    ALTER TABLE collectors ADD COLUMN IF NOT EXISTS agents_enrolled INTEGER CHECK (agents_enrolled IS NULL OR agents_enrolled BETWEEN 0 AND 1000000);
+    ALTER TABLE collectors ADD COLUMN IF NOT EXISTS broker_group TEXT CHECK (broker_group IS NULL OR broker_group ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$');
+    ALTER TABLE collectors ADD COLUMN IF NOT EXISTS agent_limit INTEGER CHECK (agent_limit IS NULL OR agent_limit BETWEEN 1 AND 100000);
     CREATE INDEX IF NOT EXISTS idx_collectors_tenant_seen ON collectors(tenant_id, last_seen);
     CREATE INDEX IF NOT EXISTS idx_collectors_key ON collectors(key_id);
 

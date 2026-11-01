@@ -16,6 +16,7 @@ const db = require('../db');
 const { hashKey, KEY_PREFIX, PLATFORMS } = require('./http-ingest');
 const { brokerAuthMiddleware } = require('../gateway/middleware');
 const { parseInputs } = require('../brokers/inputs');
+const { parseHost, parseAgents } = require('../brokers/placement');
 
 const NAME_RE = /^[A-Za-z0-9._:-]{1,100}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -88,17 +89,22 @@ router.post('/v1/ingest/heartbeat', authKey, small, async (req, res) => {
   if (d.error) return err(res, 400, 'HEARTBEAT_INVALID_COLLECTOR', d.error);
   // What a broker says it runs (src/brokers/inputs.js). Optional and information only: nothing usable, or an older script, leaves the stored value alone.
   const inputs = parseInputs(req.body && req.body.collector ? req.body.collector.inputs : null);
+  // The VM's size and how many agents its endpoint manager has (src/brokers/placement.js). Optional and information only, like the inputs: nothing usable leaves the stored value alone.
+  const host = parseHost(req.body && req.body.collector ? req.body.collector.host : null);
+  const agents = parseAgents(req.body && req.body.collector ? req.body.collector.agents : null);
   try {
     await db.withTenant(key.tenant_id, async (client) => {
       await client.query(
-        `INSERT INTO collectors (tenant_id, key_id, name, platform, os, version, last_ip, events_total, inputs)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8)
+        `INSERT INTO collectors (tenant_id, key_id, name, platform, os, version, last_ip, events_total, inputs, host_cpus, host_mem_mb, agents_enrolled)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8, $9, $10, $11)
          ON CONFLICT (tenant_id, name) DO UPDATE SET
            key_id = EXCLUDED.key_id, platform = COALESCE(EXCLUDED.platform, collectors.platform),
            os = COALESCE(EXCLUDED.os, collectors.os), version = COALESCE(EXCLUDED.version, collectors.version),
            inputs = COALESCE(EXCLUDED.inputs, collectors.inputs),
+           host_cpus = COALESCE(EXCLUDED.host_cpus, collectors.host_cpus), host_mem_mb = COALESCE(EXCLUDED.host_mem_mb, collectors.host_mem_mb),
+           agents_enrolled = COALESCE(EXCLUDED.agents_enrolled, collectors.agents_enrolled),
            last_ip = EXCLUDED.last_ip, last_seen = localtimestamp`,
-        [key.tenant_id, key.id, d.name, d.platform, d.os, d.version, clientIp(req), inputs]);
+        [key.tenant_id, key.id, d.name, d.platform, d.os, d.version, clientIp(req), inputs, host ? host.cpus : null, host ? host.mem_mb : null, agents]);
       await client.query('UPDATE ingestion_keys SET last_used_at = localtimestamp WHERE id = $1', [key.id]);
     });
     res.status(200).json({ success: true, interval_seconds: INTERVAL_S });

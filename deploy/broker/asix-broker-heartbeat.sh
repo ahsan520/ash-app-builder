@@ -37,8 +37,18 @@ case ",${VECTOR_CONFIG:-}," in *vector-journald.yaml,*) INPUTS="$INPUTS,journald
 case ",${VECTOR_CONFIG:-}," in *vector-wazuh.yaml,*) INPUTS="$INPUTS,wazuh";; esac
 case ",${VECTOR_CONFIG:-}," in *vector-wazuhalerts.yaml,*) INPUTS="$INPUTS,wazuhalerts";; esac
 
-BODY=$(printf '{"collector":{"name":"%s","platform":"linux","os":"%s","version":"%s","inputs":"%s"}}' \
-  "$(clean "$ASIX_BROKER_NAME" 100)" "$(clean "Vector broker VM (${OS})" 100)" "$(clean "vector-${VER:-unknown}" 50)" "$(clean "$INPUTS" 120)")
+# The size of this VM and, where a Wazuh manager runs here, how many agents are enrolled on it (docs/broker-groups.md). Whole numbers only; anything that is not one is left
+# out rather than sent. The count is the number of lines in the manager's client.keys (one per enrolled agent, active or not); the vector user reads it through the wazuh group
+# that bootstrap-broker.sh --wazuh adds it to, and a broker that cannot read it simply sends no count. ASIX_WAZUH_KEYS lets a test point at another file.
+num_ok() { case "$1" in ''|*[!0-9]*) return 1;; esac; }
+CPUS="$(nproc 2>/dev/null)"; MEM_KB="$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null)"
+HOST=""
+if num_ok "$CPUS" && num_ok "$MEM_KB" && [ "$CPUS" -ge 1 ] && [ "$MEM_KB" -ge 262144 ]; then HOST=$(printf ',"host":{"cpus":%s,"mem_mb":%s}' "$CPUS" "$((MEM_KB / 1024))"); fi
+AGENTS=""; KEYS="${ASIX_WAZUH_KEYS:-/var/ossec/etc/client.keys}"
+if [ -r "$KEYS" ]; then N="$(grep -Ec '^[0-9]+ ' "$KEYS" 2>/dev/null)"; num_ok "$N" && AGENTS=$(printf ',"agents":%s' "$N"); fi
+
+BODY=$(printf '{"collector":{"name":"%s","platform":"linux","os":"%s","version":"%s","inputs":"%s"%s%s}}' \
+  "$(clean "$ASIX_BROKER_NAME" 100)" "$(clean "Vector broker VM (${OS})" 100)" "$(clean "vector-${VER:-unknown}" 50)" "$(clean "$INPUTS" 120)" "$HOST" "$AGENTS")
 
 ARGS=(-fsS -m 10 -X POST -H "Authorization: Bearer ${ASIX_INGEST_KEY}" -H "Content-Type: application/json" --data "$BODY")
 [ -n "${ASIX_CA_FILE:-}" ] && ARGS+=(--cacert "$ASIX_CA_FILE")

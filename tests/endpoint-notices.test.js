@@ -23,10 +23,11 @@ describe('notices module', () => {
     }
     const t = notices.text(); assert.match(t, /GNU General Public License, version 2/); assert.match(t, /github\.com\/wazuh\/wazuh/); assert.match(t, /Copyright Wazuh, Inc\./); assert.match(t, /trademark/);
   });
-  it('is a draft until REVIEWED is true, and says so in the text and in the API answer', () => {
-    assert.strictEqual(notices.REVIEWED, false, 'flip REVIEWED only after the lawyer read (docs/branding.md)');
+  it('is reviewed (the lawyer read of 2026-10-31, docs/branding.md): no draft line in the text or the API answer, and the draft form still exists for a future change', () => {
+    assert.strictEqual(notices.REVIEWED, true, 'REVIEWED is true since the lawyer read; set it back to false if the wording changes before the next read');
+    assert.ok(!/DRAFT/.test(notices.text()), 'the live text carries no draft line');
     assert.match(notices.text(false), /DRAFT/); assert.ok(!/DRAFT/.test(notices.text(true)));
-    const a = notices.forApi(); assert.strictEqual(a.draft, true); assert.strictEqual(a.reviewed, false); assert.strictEqual(a.text, notices.text());
+    const a = notices.forApi(); assert.strictEqual(a.draft, false); assert.strictEqual(a.reviewed, true); assert.strictEqual(a.text, notices.text()); assert.ok(!/DRAFT/.test(a.text));
   });
   it('is safe to paste into a shell or PowerShell script, in both forms', () => {
     for (const t of [notices.text(false), notices.text(true)]) {
@@ -60,7 +61,7 @@ describe('route GET /v1/endpoints/notices', () => {
   });
   it('answers with the module text, and nothing in the request changes it', async () => {
     const a = await (await fetch(base + '/v1/endpoints/notices')).json(); const b = await (await fetch(base + '/v1/endpoints/notices?draft=0&text=x&reviewed=true')).json();
-    assert.strictEqual(a.success, true); assert.deepStrictEqual(a, b); assert.deepStrictEqual({ ...a, success: undefined }, { ...notices.forApi(), success: undefined }); assert.strictEqual(a.draft, true);
+    assert.strictEqual(a.success, true); assert.deepStrictEqual(a, b); assert.deepStrictEqual({ ...a, success: undefined }, { ...notices.forApi(), success: undefined }); assert.strictEqual(a.draft, false);
   });
   it('has no write route', async () => { assert.strictEqual((await fetch(base + '/v1/endpoints/notices', { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } })).status, 404); });
   it('is mounted in the gateway, before the readiness route', () => {

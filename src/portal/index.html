@@ -1538,6 +1538,64 @@ function brokerPauseEdit(b) {
   m.box.append(el('div', { className: 'actions' }, cancel, save));
   return m;
 }
+// ---- Broker capacity and placement (docs/broker-groups.md, task E8) ----
+// How many endpoint agents each broker's manager has against what its VM can look after, brokers grouped by name, and which broker the next machine should go to.
+// Information only: the limits are estimates from the VM's CPUs and memory (or a number you set), and nothing is pushed to a broker.
+const BROKER_CAP_PILL = { ok: 'ok', near: 'bad', full: 'bad', unknown: 'off' };
+function brokerCapacityText(c) {
+  if (!c || (c.limit === null && c.enrolled === null)) return '-';
+  if (c.enrolled === null) return 'limit ' + c.limit;
+  if (c.limit === null) return c.enrolled + ' enrolled';
+  return c.enrolled + ' / ' + c.limit + ' (' + c.used_percent + '%)';
+}
+function brokerCapacityCell(b) {
+  const c = b && b.capacity ? b.capacity : null;
+  const text = brokerCapacityText(c);
+  if (text === '-') return el('span', { className: 'mute', textContent: '-', title: 'This broker has not said how big it is or how many agents it has. Copy the current asix-broker-heartbeat.sh to the broker and re-run the bootstrap. A broker with no endpoint manager says no agent count.' });
+  const size = c.cpus !== null && c.mem_mb !== null ? c.cpus + ' CPUs, ' + (c.mem_mb / 1024).toFixed(1) + ' GB. ' : '';
+  const src = { set: 'set by you', estimated: 'estimated from its size', unknown: 'not known' }[c.limit_source] || '';
+  const note = { near: ' Nearly full.', full: ' Full: the next machines should go to another broker.' }[c.state] || '';
+  return el('span', { title: size + 'Limit ' + (c.limit === null ? '-' : c.limit) + ' (' + src + ').' + note, style: 'display:inline-flex;gap:6px;flex-wrap:wrap' },
+    pill(text, BROKER_CAP_PILL[c.state] || 'off'), b.group ? el('span', { className: 'mute', textContent: b.group }) : '');
+}
+function brokerPlacementEdit(b) {
+  const c = b.capacity || {};
+  const err = el('div', { className: 'err' });
+  const group = el('input', { value: b.group || '', placeholder: 'for example acme-site', style: 'width:240px' });
+  const limit = el('input', { value: c.limit_source === 'set' ? String(c.limit) : '', placeholder: c.recommended ? 'estimate: ' + c.recommended : 'size not known', style: 'width:160px' });
+  const m = openModal(el('h2', { textContent: 'Capacity of ' + b.name }),
+    el('p', { className: 'desc', textContent: 'A group is a name you choose for brokers that look after the same client: the next machine is given to the broker in the group that is least full for its size. The agent limit is how many machines this broker may be given; empty uses the estimate from its CPUs and memory. Nothing is sent to the broker.' }),
+    el('div', { style: 'display:grid;gap:10px;margin:10px 0' }, el('label', {}, 'Group ', group), el('label', {}, 'Agent limit ', limit)), err);
+  const cancel = el('button', { className: 'btn', textContent: 'Cancel', onclick: () => m.close() });
+  const save = el('button', { className: 'btn pri', textContent: 'Save', onclick: async () => {
+    err.textContent = ''; save.disabled = true;
+    try { await api('/v1/brokers/' + b.id + '/placement', { method: 'PUT', body: { group: group.value.trim() || null, agent_limit: limit.value.trim() || null } }); m.close(); route(); } catch (e) { err.textContent = e.message; save.disabled = false; }
+  } });
+  m.box.append(el('div', { className: 'actions' }, cancel, save));
+  return m;
+}
+function brokerPlacementCard(p) {
+  if (!p || !p.brokers || !p.brokers.length) return '';
+  const out = el('div', { className: 'mute', style: 'margin-top:8px' });
+  const n = el('input', { type: 'number', min: '1', placeholder: 'endpoints', style: 'width:120px' });
+  const calc = el('button', { className: 'btn', textContent: 'Calculate', onclick: async () => {
+    out.textContent = '';
+    try {
+      const r = (await api('/v1/brokers/placement?endpoints=' + encodeURIComponent(n.value.trim()))).plan;
+      out.textContent = r.endpoints.toLocaleString() + ' machines at about ' + r.per_broker + ' per broker need ' + r.brokers_for_load + ' brokers plus ' + r.spare + ' spare = ' + r.brokers_total + '. You have ' + r.brokers_now + (r.more_brokers ? ', so add ' + r.more_brokers + '.' : '.');
+    } catch (e) { out.textContent = e.message; }
+  } });
+  return card('Agent capacity and placement',
+    el('p', { className: 'desc', textContent: 'Each broker that runs an endpoint manager says how many agents are enrolled. The limit is an estimate from its CPUs and memory unless you set one (Capacity button). Put brokers that serve one client in one group and the next machine goes to the broker that is least full for its size.' }),
+    table([
+      { h: 'Group', f: (g) => g.name || el('span', { className: 'mute', textContent: 'Not in a group' }) },
+      { h: 'Brokers', f: (g) => g.connected + ' of ' + g.brokers + ' connected' },
+      { h: 'Agents', f: (g) => (g.unknown_brokers === g.brokers ? '-' : g.enrolled + ' / ' + g.limit + (g.used_percent === null ? '' : ' (' + g.used_percent + '%)') + (g.unknown_brokers ? ', ' + g.unknown_brokers + ' not reporting' : '')) },
+      { h: 'State', f: (g) => pill({ ok: 'Room', near: 'Nearly full', full: 'Full', unknown: 'Unknown' }[g.state] || '?', BROKER_CAP_PILL[g.state] || 'off') },
+      { h: 'Next machine goes to', f: (g) => (g.next ? g.next.name + ' (' + g.next.free + ' free)' : el('span', { className: 'mute', textContent: 'none: ' + g.members.map((x) => x.name + ' ' + (x.why_not || '')).join('; ') })) },
+    ], p.groups, 'No brokers yet.'),
+    el('div', { style: 'margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, el('span', { textContent: 'How many brokers does a client need? ' }), n, calc), out);
+}
 // Read-only: the broker VMs that report to this install (docs/broker-vm.md), and the command to add one.
 // ---- Endpoints (docs/endpoints.md task E6) ---------------------------------------------------------
 // A read-only view of the tenant's endpoint manager, through the E4c routes (GET /v1/endpoints/manager, /agents/summary, /agents, /agents/:id; permission capacity:read).
@@ -2005,6 +2063,7 @@ async function pgEndpoints() {
 async function pgBrokers() {
   const r = await api('/v1/brokers'), s = r.summary;
   let bcfg = null; try { bcfg = (await api('/v1/broker-config')).config; } catch (e) { bcfg = null; }
+  let place = null; try { place = await api('/v1/brokers/placement'); } catch (e) { place = null; }   // the page still loads without it
   const ver = Object.entries(s.versions).map(([v, n]) => v + ' x' + n).join(', ');
   return [el('div', { style: 'display:flex;align-items:baseline;gap:12px;flex-wrap:wrap' }, el('h2', { textContent: 'Brokers' }), el('span', { className: 'mute', textContent: 'updated ' + when(r.generated_at) + ' UTC' }),
       el('button', { className: 'btn', style: 'margin-left:auto', textContent: 'Refresh', onclick: () => route() })),
@@ -2015,17 +2074,18 @@ async function pgBrokers() {
       card('Vector versions', el('div', {}, s.total ? ver : '-', s.mixed_versions ? el('div', { className: 'mute', style: 'margin-top:6px;font-size:12px', textContent: 'More than one version is in use.' }) : ''))),
     brokerUpgradeCard(r),
     brokerConfigCard(bcfg, s),
+    brokerPlacementCard(place),
     card('', table([
       { h: 'Name', f: (b) => b.name + (b.alias ? ' (' + b.alias + ')' : '') },
       { h: 'Status', f: (b) => pill(b.status === 'connected' ? '\u2713 Connected' : '\u2715 Disconnected', b.status === 'connected' ? 'ok' : 'off') },
       { h: 'Vector', f: (b) => b.vector_version || '-' }, { h: 'Upgrade', f: (b) => (UPGRADE_PILL[b.upgrade] ? UPGRADE_PILL[b.upgrade](r.vector_target) : '-') },
-      { h: 'Inputs', f: brokerInputsCell }, { h: 'Paused', f: brokerPausedCell }, { h: 'Syslog port', f: brokerConfigCell }, { h: 'TLS port', f: brokerTlsCell }, { h: 'Config check', f: brokerSignatureCell }, { h: 'Windows filter', f: brokerWinFilterCell },
+      { h: 'Inputs', f: brokerInputsCell }, { h: 'Paused', f: brokerPausedCell }, { h: 'Syslog port', f: brokerConfigCell }, { h: 'TLS port', f: brokerTlsCell }, { h: 'Config check', f: brokerSignatureCell }, { h: 'Windows filter', f: brokerWinFilterCell }, { h: 'Agents', f: brokerCapacityCell },
       { h: 'OS', f: (b) => b.os || '-' }, { h: 'IP address', f: (b) => b.last_ip || '-' },
       { h: 'Last seen (UTC)', f: (b) => when(b.last_seen) }, { h: 'Events (24h)', f: (b) => b.events_24h.toLocaleString() },
       { h: 'Alert if down', f: (b) => (b.watch_disconnect ? pill('On', 'ok') : b.watch_disconnect_by_default ? pill('On (all)', 'ok') : b.watch_exclude ? pill('Left out', 'off') : pill('Off', 'off')) },
       { h: 'Installer', f: (b) => (b.installer ? b.installer.name + (b.installer.status === 'revoked' ? ' (revoked)' : '') : 'deleted') },
       { h: 'Needs attention', f: (b) => (b.problems.length ? el('span', { style: 'color:var(--bad,#c33)', textContent: b.problems.join(' ') }) : '') },
-      { h: '', f: (b) => el('span', {}, el('button', { className: 'btn', textContent: 'Ports', title: 'Set a syslog port or a syslog-over-TLS port for this broker alone, or leave it out of the tenant-wide ports', onclick: () => brokerPortsEdit(b) }), ' ', el('button', { className: 'btn', textContent: 'Inputs', title: 'Pause or resume log files, HTTP/JSON or the journal on this broker', onclick: () => brokerPauseEdit(b) }), ' ', el('button', { className: 'btn', textContent: 'Rotate key', onclick: () => rotateBrokerKey(b) })) },
+      { h: '', f: (b) => el('span', {}, el('button', { className: 'btn', textContent: 'Ports', title: 'Set a syslog port or a syslog-over-TLS port for this broker alone, or leave it out of the tenant-wide ports', onclick: () => brokerPortsEdit(b) }), ' ', el('button', { className: 'btn', textContent: 'Inputs', title: 'Pause or resume log files, HTTP/JSON or the journal on this broker', onclick: () => brokerPauseEdit(b) }), ' ', el('button', { className: 'btn', textContent: 'Capacity', title: 'Put this broker in a group and set how many endpoint agents it may be given', onclick: () => brokerPlacementEdit(b) }), ' ', el('button', { className: 'btn', textContent: 'Rotate key', onclick: () => rotateBrokerKey(b) })) },
     ], r.brokers, 'No brokers yet. Create an installer, then run the command below on the broker VM.')),
     el('h3', { style: 'margin-top:18px', textContent: 'Add a broker' }),
     card('', el('p', { className: 'desc', textContent: 'Create an installer first (Settings, Installers) and copy its key: it is shown once. Then on the new VM, as root:' }),

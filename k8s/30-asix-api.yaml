@@ -72,12 +72,14 @@ spec:
             # Base URL used for "Open in ASIX" links in notifications (filled in by deploy.sh)
             - name: ASIX_PUBLIC_URL
               value: "__ASIX_PUBLIC_URL__"
-            # Parser workers (src/ingestion/parser-pool.js): "0" parses inline in the API process (the default and the
-            # previous behaviour). "2" parses on two worker threads per replica with a time limit per batch, so a
-            # runaway pattern or a parser crash cannot freeze or kill the API. Each worker is capped at 192 MB of heap
-            # and adds roughly 40-60 MB, so raise the memory limit below when you turn it on (for example 768Mi).
+            # Parser workers (src/ingestion/parser-pool.js): "0" parses inline in the API process (the previous behaviour).
+            # "2" parses on two worker threads per replica with a time limit per batch, so a runaway pattern or a parser
+            # crash cannot freeze or kill the API. Turned on to "2" on 2026-10-31 for the lab (1,000 to 3,000 endpoint clients
+            # are the target); watch Settings, Parser pool for events stored unparsed. Each worker is capped at 192 MB of heap
+            # and adds roughly 40-60 MB, so the memory limit below is 768Mi and the CPU limit 1000m (the workers share it).
+            # To go back: set "0", ./sync-and-deploy.sh. Nothing else needs to change.
             - name: ASIX_PARSER_WORKERS
-              value: "0"
+              value: "2"
             - name: ASIX_PARSER_TIMEOUT_MS
               value: "5000"
             # Collector watchdog (src/collectors/watchdog.js): raises an alert when a collector you turned "Alert if down"
@@ -137,10 +139,10 @@ spec:
           resources:
             requests:
               cpu: "250m"
-              memory: "256Mi"
+              memory: "384Mi"
             limits:
-              cpu: "500m"
-              memory: "512Mi"
+              cpu: "1000m"
+              memory: "768Mi"
           # Probes (hardened 2026-10-31, see docs/parallel-work.md "H1"). The old 1 s timeouts were the Kubernetes default: a pod that was only slow for a moment was killed.
           # startupProbe: up to 3 minutes to start before the other two begin (schema, event store, first connections). readinessProbe: /v1/health/ready is mounted after every
           # router, so a pod whose request chain is broken never becomes Ready and the rolling update stops with the old pods still serving. livenessProbe: / also goes through

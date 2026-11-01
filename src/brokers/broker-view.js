@@ -6,6 +6,7 @@ const { effectiveMinutes, isCustom, statusOf, tsMs } = require('../collectors/st
 const { upgradeState } = require('./upgrade');
 const watchAll = require('../collectors/watch-all');
 const { listInputs } = require('./inputs');
+const placement = require('./placement');
 const { pausedState } = require('./paused');
 const { winFilterState } = require('../endpoints/win-filter-broker');
 const { configState, tlsState, effectivePort, portSource, effectiveTlsPort, tlsSource, signatureState, SIGNATURE_HELP } = require('./config');
@@ -39,6 +40,8 @@ function shape(row, { now = Date.now(), events24h = 0, target = null, syslogPort
     installer: row.key_id ? { id: row.key_id, name: row.installer_name || null, status: row.key_status || 'active', key_prefix: row.key_prefix || null, last_used_at: row.key_last_used_at || null } : null,
   };
   b.inputs = listInputs(row.inputs);   // [{kind, port}] as the broker's heartbeat said, or null when it never has (older script); not a problem
+  b.group = row.broker_group || null;   // set from the Brokers page (src/brokers/placement.js)
+  b.capacity = placement.capacityOf(row);   // { cpus, mem_mb, enrolled, recommended, limit, limit_source, free, used_percent, state: unknown | ok | near | full }; information, not a problem
   b.problems = problemsOf(b, now);
   b.upgrade = upgradeState(b.vector_version, target);   // none | unknown | current | behind | ahead (src/brokers/upgrade.js); not a problem
   // The port asked of THIS broker: its own if one was set on the Brokers page, else the tenant-wide one (src/brokers/config.js).
@@ -82,6 +85,9 @@ function summarize(brokers) {
     signature_verifying: brokers.filter((b) => b.signature && b.signature.state === 'verifying').length,
     signature_not_verifying: brokers.filter((b) => b.signature && b.signature.state === 'not_verifying').length,
     signature_refused: brokers.filter((b) => b.signature && b.signature.state === 'refused').length,
+    agents_enrolled: brokers.reduce((n, b) => n + (b.capacity && b.capacity.enrolled !== null ? b.capacity.enrolled : 0), 0),
+    capacity_near: brokers.filter((b) => b.capacity && b.capacity.state === 'near').length,
+    capacity_full: brokers.filter((b) => b.capacity && b.capacity.state === 'full').length,
     events_24h: brokers.reduce((n, b) => n + b.events_24h, 0),
     versions, mixed_versions: Object.keys(versions).length > 1,
   };

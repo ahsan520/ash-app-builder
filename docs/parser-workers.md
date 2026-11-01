@@ -28,9 +28,8 @@ Code: `src/ingestion/parse-batch.js`, `rule-sets.js`, `parser-worker.js`, `parse
 | `ASIX_PARSER_TIMEOUT_MS` | `5000` | Time limit for one batch (up to 1,000 events). |
 | `ASIX_PARSER_QUEUE` | `100` | Batches allowed to wait for a free worker. `0` means never wait. |
 
-`k8s/30-asix-api.yaml` carries the first and the second, set to `"0"` and `"5000"`. To turn it on, set the first to `"2"`, raise
-the pod memory limit (each worker adds roughly 40 to 60 MB; 768Mi is a sensible start for 2 workers) and run
-`./sync-and-deploy.sh`. The API logs `[parser] 2 parser worker thread(s), ...` at start.
+`k8s/30-asix-api.yaml` carries the first and the second, **since 2026-10-31 set to `"2"`** (the lab; memory limit 768Mi, CPU limit 1000m) and `"5000"`. To turn it off, set the first back to `"0"` and run
+`./sync-and-deploy.sh`; to change the count, set it and raise the memory limit by roughly 40 to 60 MB per worker. The API logs `[parser] 2 parser worker thread(s), ...` at start.
 
 ## How a batch flows
 1. `http-ingest.js` builds the items as before, then calls `parse-service.parseForIngest(tenantId, sourceType, items)`.

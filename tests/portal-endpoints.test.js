@@ -173,9 +173,13 @@ describe('Endpoints page', () => {
   it('third-party notices: the open source component, its licence and source, with the version the manager reports', async () => {
     const p = await open(); await p.click('Third-party notices'); const t = p.text();
     assert.ok(p.calls.some((c) => c.p === '/v1/endpoints/notices' && c.method === 'GET'), 'the tab reads the route, it does not keep its own copy');
-    assert.match(t, /Wazuh/); assert.match(t, /GNU General Public License, version 2/); assert.match(t, /github\.com\/wazuh\/wazuh/); assert.match(t, /v4\.14\.9/); assert.match(t, /lawyer/); assert.match(t, /Copyright Wazuh, Inc\./);
+    assert.match(t, /Wazuh/); assert.match(t, /GNU General Public License, version 2/); assert.match(t, /github\.com\/wazuh\/wazuh/); assert.match(t, /v4\.14\.9/); assert.ok(!/lawyer/.test(t), 'reviewed: no draft line'); assert.match(t, /Copyright Wazuh, Inc\./);
     assert.match(t, /trademark/); assert.match(t, /--notices/); assert.match(t, /-Notices/);
     const links = p.all().filter((n) => n.tag === 'a'); assert.ok(links.length >= 2, 'licence and source are links'); for (const a of links) { assert.strictEqual(a.attrs.rel, 'noopener noreferrer'); assert.strictEqual(a.attrs.target, '_blank'); assert.match(a.attrs.href, /^https:\/\//); }
+  });
+  it('third-party notices: while the text is a draft the page says a lawyer is to read it (the mechanism stays for the next change of wording)', async () => {
+    const n = require('../src/endpoints/notices').forApi(); n.draft = true; n.reviewed = false;
+    const p = await open(MANAGER, { '/v1/endpoints/notices': { success: true, ...n } }); await p.click('Third-party notices'); assert.match(p.text(), /lawyer/);
   });
   it('third-party notices: once the text is reviewed the draft line goes away, and a licence address that is not https is shown as text, not a link', async () => {
     const n = require('../src/endpoints/notices').forApi(); n.draft = false; n.reviewed = true; n.components[0].licence_url = 'javascript:alert(1)';

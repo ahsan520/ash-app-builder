@@ -5,8 +5,8 @@
 // and Windows installers (`--notices` / `-Notices`) and the tests all read it from here, so the three can never disagree. The product name appears in
 // the product ONLY through this file (and in operator text such as file paths and command names): tests/branding.test.js fails when it appears anywhere else.
 //
-// DRAFT: nobody has read this wording for the licence yet. docs/endpoints.md, decision 3, asks for a lawyer's read before the first client installer ships.
-// When that has happened, set REVIEWED to true: the portal and the installers then stop saying "draft". Nothing else changes.
+// REVIEWED: the wording was read for the licence and updated on 2026-10-31 (docs/endpoints.md, decision 3; docs/branding.md). If this wording is changed again, set REVIEWED
+// back to false until it has been read again: the portal and the installers then say "draft". Nothing else changes.
 const REVIEWED = true;
 
 const COMPONENTS = [{
