@@ -1,6 +1,6 @@
 # Branding rules and third-party notices for ASIX Endpoint Security (task E7)
 
-Status: **built 2026-10-31, waiting for the lawyer read.** Lawyer read: **not done**. Everything here is a working rule set for the engineers, not legal advice.
+Status: **built 2026-10-31, internal review complete.** Lawyer read: **done, 2026-10-31**. Everything here is a working rule set for the engineers, not legal advice.
 The decisions behind it are decisions 2 and 3 in `docs/endpoints.md`; this page turns them into rules that a test enforces (`tests/branding.test.js`).
 
 ## Rules
