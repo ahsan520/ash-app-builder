@@ -88,6 +88,10 @@ describe('against a stand-in indexer', () => {
       description: 'Description of CVE-2026-1002', references: ['https://nvd.nist.gov/vuln/detail/CVE-2026-1002'], published_at: '2026-08-01T00:00:00Z', detected_at: '2026-10-30T10:00:01Z', under_evaluation: false });
     const text = JSON.stringify(r); for (const s of ['secret-kernel-build', '/secret/install/path', '10.0.0.9', 'cti.wazuh.com', 'node01', 'groups']) assert.ok(!text.includes(s), s + ' leaked');
   });
+  it('a reference string with several links joined by a comma is split (the real Wazuh 4.14 shape)', () => {
+    const f = ix.shapeFinding({ _source: { vulnerability: { id: 'CVE-2026-98161', reference: 'https://ubuntu.com/security/CVE-2026-98161, https://www.cve.org/CVERecord?id=CVE-2026-98161' } } });
+    assert.deepStrictEqual(f.references, ['https://ubuntu.com/security/CVE-2026-98161', 'https://www.cve.org/CVERecord?id=CVE-2026-98161']);
+  });
   it('only http(s) references become links and long text is cut', async () => {
     const f = (await ix.listFindings(mk(A), q({ cve: 'CVE-2026-4001' }))).findings[0];
     assert.deepStrictEqual(f.references, ['https://example.org/advisory']); assert.strictEqual(f.description.length, 1500);
