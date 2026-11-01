@@ -22,7 +22,7 @@ const BASE_DEFAULT = '<agent_config>\n  <localfile>\n    <log_format>syslog</log
 
 before(async () => { srv = await fake.start({ writer: WRITER }); });
 after(async () => { await srv.stop(); });
-beforeEach(() => { srv.state.groups.set('default', BASE_DEFAULT); srv.state.groups.set('linux', ''); srv.state.groupWrites.length = 0; srv.state.rejectConf = null; srv.state.mode = null; srv.state.requests.length = 0; });
+beforeEach(() => { srv.state.groups.set('default', BASE_DEFAULT); srv.state.groups.set('linux', ''); srv.state.groupWrites.length = 0; srv.state.rejectConf = null; srv.state.reindentConf = false; srv.state.mode = null; srv.state.requests.length = 0; });
 
 describe('the writer is a separate user with its own token', () => {
   it('lists groups with their machine counts', async () => {
@@ -93,6 +93,18 @@ describe('apply', () => {
   it('the same list again is "nothing to change": no write, no history row', async () => {
     const ctx = makeCtx(); const a = await service.apply(ctx, 'default', [L('/a')], { baseSha: gc.sha256(BASE_DEFAULT) });
     const b = await service.apply(ctx, 'default', [L('/a')], { baseSha: a.sha256 }); assert.ok(b.ok); assert.strictEqual(b.changed, false); assert.strictEqual(writes().length, 1); assert.strictEqual(ctx.rows.length, 1);
+  });
+  it('a manager that re-indents the file (a real 4.14.9 one does) still shows the block as ASIX\u2019s, applies again, and removes it cleanly', async () => {
+    const ctx = makeCtx(); srv.state.reindentConf = true;
+    try {
+      const a = await service.apply(ctx, 'default', [L('/home/asix/asix-watch-test')], { baseSha: gc.sha256(BASE_DEFAULT) }); assert.ok(a.ok, JSON.stringify(a)); assert.strictEqual(ctx.rows[0].result, 'applied');
+      const held = srv.state.groups.get('default'); assert.notStrictEqual(held.indexOf('\n      <directories>/home/asix/asix-watch-test</directories>'), -1, 'the stand-in did re-indent the file');
+      const d = await service.describe(ctx, 'default'); assert.strictEqual(d.state, 'ok'); assert.deepStrictEqual(d.entries, [L('/home/asix/asix-watch-test')]);
+      const b = await service.apply(ctx, 'default', [L('/home/asix/asix-watch-test'), L('/srv/data', true)], { baseSha: d.sha256 }); assert.ok(b.ok, JSON.stringify(b));
+      const c = await service.apply(ctx, 'default', [], { baseSha: b.sha256 }); assert.ok(c.ok, JSON.stringify(c)); assert.ok(!/ASIX:monitored/.test(srv.state.groups.get('default')), 'the block is gone');
+      // a hand edit of the block (an extra tag inside it) is still caught
+      srv.state.groups.set('default', held.replace('<syscheck>', '<syscheck>\n      <ignore>/x</ignore>')); assert.strictEqual((await service.describe(ctx, 'default')).state, 'edited');
+    } finally { srv.state.reindentConf = false; }
   });
   it('the manager refusing the file leaves the group as it was, says why, and settles the history as failed', async () => {
     const ctx = makeCtx(); srv.state.rejectConf = () => 'Wazuh syntax error: bad option';

@@ -101,7 +101,10 @@ function find(xml) {
     pos = re.lastIndex;
   }
   const v = validate(entries);
-  if (!v.ok || blockText(v.entries) !== text) return { state: 'edited', entries: [], start, end, text: raw };   // what we would write is not what is there: somebody changed it
+  // The manager re-indents what it is given (a real 4.14.9 manager pretty-prints the file: every line gets the indentation of its depth, one level more than sent, and blank lines go),
+  // so the block is compared by its words, line by line, not by its spaces. A changed path, a changed attribute or an extra tag still counts as edited.
+  const words = (t) => t.split('\n').map((l) => l.trim()).filter(Boolean).join('\n');
+  if (!v.ok || words(blockText(v.entries)) !== words(text)) return { state: 'edited', entries: [], start, end, text: raw };   // what we would write is not what is there: somebody changed it
   return { state: 'ok', entries: v.entries, start, end, text: raw };
 }
 
@@ -118,12 +121,12 @@ function compose(xml, entries) {
   if (!v.entries.length) {
     if (f.state === 'none') return { ok: true, xml: cur, changed: false };
     // The reverse of adding: take away the block, the newline after it and the one blank line that adding put before it, so add then remove gives back the same file.
-    let a = cur.slice(0, f.start), b = cur.slice(f.end);
+    let a = cur.slice(0, f.start).replace(/[ \t]+$/, ''), b = cur.slice(f.end);   // the manager may have indented the marker line: that indent goes with the block
     b = b.replace(/^\r?\n/, ''); if (/\n\n$/.test(a)) a = a.slice(0, -1);
     out = a + b;
   } else if (f.state === 'none') {
     out = cur + (cur.length && !/\n$/.test(cur) ? '\n' : '') + (cur.trim().length ? '\n' : '') + blockText(v.entries) + '\n';
-  } else out = cur.slice(0, f.start) + blockText(v.entries) + cur.slice(f.end);
+  } else out = cur.slice(0, f.start).replace(/[ \t]+$/, '') + blockText(v.entries) + cur.slice(f.end);
   if (Buffer.byteLength(out, 'utf8') > MAX_FILE_BYTES) return { ok: false, code: 'TOO_LARGE', message: 'The result would be larger than ' + MAX_FILE_BYTES / 1024 + ' kB' };
   return { ok: true, xml: out, changed: out !== cur };
 }

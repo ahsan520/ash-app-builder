@@ -138,7 +138,11 @@ async function start({ user = 'asix-readonly', password = 'Str0ng-pw!', cn = 'wa
           if (stack.length) ok = false;
           const why = state.rejectConf ? state.rejectConf(xml) : (ok ? null : 'Wazuh syntax error: not well formed');
           if (why) return send(200, { data: { affected_items: [], total_affected_items: 0, total_failed_items: 1, failed_items: [{ error: { code: 1114, message: why }, id: [gname] }] }, message: 'Could not update', error: 1 });
-          state.groups.set(gname, xml); return send(200, items([gname]));
+          // Opt-in (state.reindentConf): what a real 4.14.9 manager does to every file it is given, as seen in the lab: it pretty-prints it, so each line is trimmed, blank lines go and every line is
+          // indented by its depth plus one level (the file is parsed inside a <root> element). One tag per line is all the tests need.
+          let stored = xml;
+          if (state.reindentConf) { let depth = 1; stored = xml.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const closes = /^<\//.test(l); if (closes) depth--; const out = '  '.repeat(depth) + l; if (!closes && /^<[A-Za-z_]/.test(l) && !/\/>$/.test(l) && !/<\/[^>]+>$/.test(l)) depth++; return out; }).join('\n') + '\n'; }
+          state.groups.set(gname, stored); return send(200, { message: 'Agent configuration was successfully updated', error: 0 });   // the shape a real 4.14.9 manager sends: no `data` part
         });
       }
     }
