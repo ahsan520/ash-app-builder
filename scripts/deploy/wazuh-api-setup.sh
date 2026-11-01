@@ -115,6 +115,9 @@ api() {
 }
 # jq-less JSON reading
 jpy() { python3 -c "$1" 2>/dev/null; }
+# A user who may not read something is refused with HTTP 403, or (what a real manager does for a list) answered 200 with an EMPTY list: the API filters out what the user may not see.
+# The manager's own agent 000 always exists, so an empty agent list means "not allowed", not "nothing there". A 200 that returns items is a user who can do too much.
+refused() { [ "$HTTP" = "403" ] && return 0; [ "$HTTP" = "200" ] || return 1; printf '%s' "$BODY" | jpy 'import sys,json; d=json.load(sys.stdin)["data"]; sys.exit(0 if not d.get("affected_items") and not d.get("total_affected_items") else 1)'; }
 sign_in() {   # sign_in USER PASS -> token on stdout, or nothing
   api POST "/security/user/authenticate?raw=true" "" "basic:$1:$2"
   [ "$HTTP" = "200" ] && [[ "$BODY" =~ ^[A-Za-z0-9._-]{20,4096}$ ]] && printf '%s' "$BODY" || true
@@ -273,10 +276,10 @@ if [ "$GROUP_WRITER" -eq 1 ]; then
   api GET "/groups?limit=1" "" "token:$GW_TOKEN"; [ "$HTTP" = "200" ] || die "'$GW_USER' cannot list groups (HTTP $HTTP): its role does not allow it."
   say "listed groups"
   api GET "/agents?limit=1" "" "token:$GW_TOKEN"
-  [ "$HTTP" = "403" ] || die "'$GW_USER' could list agents (HTTP $HTTP): it can do more than it should. Nothing was written for ASIX; check the roles of '$GW_USER' on the manager."
+  refused || die "'$GW_USER' could list agents (HTTP $HTTP): it can do more than it should. Nothing was written for ASIX; check the roles of '$GW_USER' on the manager."
   say "refused when it asked for agents (as it should be)"
   api GET "/security/users?limit=1" "" "token:$GW_TOKEN"
-  [ "$HTTP" = "403" ] || die "'$GW_USER' could read the API's users (HTTP $HTTP): it can do more than it should."
+  refused || die "'$GW_USER' could read the API's users (HTTP $HTTP): it can do more than it should."
   say "refused when it asked for users (as it should be)"
   mkdir -p "$OUT_DIR"; GREG="$OUT_DIR/asix-wazuh-writer-registration.json"
   ( umask 077; U="$GW_USER" P="$GW_PASS" python3 - > "$GREG.new" <<'PY'
