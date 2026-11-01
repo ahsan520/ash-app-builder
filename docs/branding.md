@@ -50,5 +50,3 @@ The wording to read is the output of `bash asix-endpoint-install.sh --notices` (
 - [x] The wording changes requested are made in `src/endpoints/notices.js` only.
 - [x] `REVIEWED` in `src/endpoints/notices.js` is set to `true` and the status line at the top of this page is changed to "Lawyer read: **done**, 2026-10-31".
 - [x] `npm test` passes, and the installer was run once on a real Linux machine and a real Windows machine with `--notices` / `-Notices` and without.
-two disagree).
-- [ ] `npm test` passes, and the installer was run once on a real Linux machine and a real Windows machine with `--notices` / `-Notices` and without.
