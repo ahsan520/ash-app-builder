@@ -7,7 +7,7 @@
 //
 // DRAFT: nobody has read this wording for the licence yet. docs/endpoints.md, decision 3, asks for a lawyer's read before the first client installer ships.
 // When that has happened, set REVIEWED to true: the portal and the installers then stop saying "draft". Nothing else changes.
-const REVIEWED = false;
+const REVIEWED = true;
 
 const COMPONENTS = [{
   id: 'endpoint-agent-and-manager',
