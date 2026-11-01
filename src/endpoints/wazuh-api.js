@@ -383,7 +383,9 @@ async function putGroupAgentConf(m, w, group, xml) {
   const g = checkGroup(group); if (typeof xml !== 'string' || Buffer.byteLength(xml, 'utf8') > 262144) throw new WazuhApiError('BAD_BODY', 'The configuration must be text of at most 256 kB');
   const r = await request(asWriter(m, w), { method: 'PUT', path: '/groups/' + g + '/configuration', body: xml, contentType: 'application/xml' });
   const j = parseJson(r);
-  if (r.status === 200 && j && j.error === 0 && j.data && j.data.total_failed_items === 0) return true;
+  // A real manager (4.14.9) answers a successful write with only {"message": "Agent configuration was successfully updated", "error": 0}: no `data` part at all.
+  // A refusal carries `data.failed_items`. So: success is error 0 and no failed items reported (an absent `data` is not a failure).
+  if (r.status === 200 && j && j.error === 0 && (!j.data || !j.data.total_failed_items)) return true;
   const failed = j && j.data && Array.isArray(j.data.failed_items) && j.data.failed_items[0] && j.data.failed_items[0].error ? txt(j.data.failed_items[0].error.message, 300) : null;
   throw new WazuhApiError('REJECTED', 'The manager did not accept the configuration' + (failed ? ': ' + failed : (j && j.detail ? ': ' + txt(j.detail, 300) : ' (HTTP ' + r.status + ')')), r.status);
 }
