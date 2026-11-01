@@ -16,6 +16,15 @@ spec:
     spec:
       # Time for a clean (fast) shutdown: flushes WAL and checkpoints, so the next start needs no crash recovery.
       terminationGracePeriodSeconds: 120
+      # Start as the image's own `postgres` user (uid 70 on postgres:16-alpine) instead of root. As root the
+      # image's entrypoint runs `gosu postgres ...` to drop privileges, and on asix1 after the move to kernel
+      # 7.0.0-42 (arm64, k3s v1.36) that gosu process spun at 100% CPU in sched_yield and PostgreSQL never
+      # started (2026-11-01, everything behind it returned 502). Starting as uid 70 skips gosu entirely. The
+      # data directory (pgdata) already belongs to uid 70, so nothing on the volume changes. If the image is
+      # ever changed to one with another postgres uid, change both numbers: see docs/postgres-gosu-hang.md.
+      securityContext:
+        runAsUser: 70
+        runAsGroup: 70
       containers:
         - name: postgresql
           image: postgres:16-alpine
