@@ -362,6 +362,50 @@ const BUILTIN_RULES = [
       xql: String.raw`alert_level < 8 and file_path ~= "^(/etc/(passwd|shadow|group|gshadow|sudoers|ld\\.so\\.preload|crontab)|/etc/(sudoers\\.d|cron\\.[a-z]+)/.+|/root/\\.ssh/.+|/home/[^/]+/\\.ssh/authorized_keys|/var/spool/cron/.+)$|\\\\Start Menu\\\\Programs\\\\Startup\\\\|\\\\drivers\\\\etc\\\\hosts$"`,
     },
   },
+  // ---- The findings store (E6i): the indexer VM behind the Vulnerabilities tab reports its disk and health with scripts/deploy/install-indexer-health.sh ----
+  // One event per report, source type indexer-health, fields disk_used_pct, cluster_status and write_blocked_indices (deploy/indexer/asix-indexer-health.sh). Nothing fires until a
+  // machine reports. Grouped by host, so two indexer VMs are separate alerts. The bands do not overlap on the disk number: 80 to under 90, then 90 and over; the third rule
+  // looks at what the indexer itself did (it makes indices read-only at 95%), so it can fire next to the second.
+  {
+    key: 'indexer-disk-filling', kind: 'bioc', category: 'Endpoint Security', name: 'Endpoint findings store disk filling',
+    description: 'The disk of the machine that keeps the vulnerability findings is 80% to under 90% full. At 85% the store stops placing new data, at 95% it refuses writes: free space or grow the disk.',
+    severity: 'medium', mitre: [],
+    definition: {
+      source_type: 'indexer-health', group_by: 'host', threshold: 1, window_minutes: 15, run_every_minutes: 1, mode: 'realtime',
+      suppression: { enabled: true, minutes: 1440 },
+      xql: 'disk_used_pct >= 80 and disk_used_pct < 90',
+    },
+  },
+  {
+    key: 'indexer-disk-nearly-full', kind: 'bioc', category: 'Endpoint Security', name: 'Endpoint findings store disk nearly full',
+    description: 'The disk of the machine that keeps the vulnerability findings is 90% full or more. At 95% the store makes its indices read-only and new findings are refused.',
+    severity: 'high', mitre: [],
+    definition: {
+      source_type: 'indexer-health', group_by: 'host', threshold: 1, window_minutes: 15, run_every_minutes: 1, mode: 'realtime',
+      suppression: { enabled: true, minutes: 360 },
+      xql: 'disk_used_pct >= 90',
+    },
+  },
+  {
+    key: 'indexer-writes-refused', kind: 'bioc', category: 'Endpoint Security', name: 'Endpoint findings store refusing writes',
+    description: 'The store that keeps the vulnerability findings has switched at least one index to read-only because its disk is too full. The Vulnerabilities tab goes stale until space is freed and the block is lifted.',
+    severity: 'critical', mitre: [],
+    definition: {
+      source_type: 'indexer-health', group_by: 'host', threshold: 1, window_minutes: 15, run_every_minutes: 1, mode: 'realtime',
+      suppression: { enabled: true, minutes: 120 },
+      xql: 'write_blocked_indices > 0',
+    },
+  },
+  {
+    key: 'indexer-unhealthy', kind: 'bioc', category: 'Endpoint Security', name: 'Endpoint findings store unhealthy',
+    description: 'The store that keeps the vulnerability findings said it is red, or did not answer, in two reports within 15 minutes (a restart of a minute or two does not count). Yellow is normal for one machine and is not reported.',
+    severity: 'high', mitre: [],
+    definition: {
+      source_type: 'indexer-health', group_by: 'host', threshold: 2, window_minutes: 15, run_every_minutes: 1, mode: 'realtime',
+      suppression: { enabled: true, minutes: 60 },
+      xql: 'cluster_status = "red" or cluster_status = "unreachable"',
+    },
+  },
 ];
 
 // Built-in rules whose shipped query changed after installs had already stored the old one. ensureBuiltinRules inserts once and

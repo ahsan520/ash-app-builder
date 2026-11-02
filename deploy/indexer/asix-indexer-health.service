@@ -1,0 +1,13 @@
+[Unit]
+Description=Report the findings indexer's disk and health to ASIX
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/asix-indexer/health.env
+ExecStart=/usr/local/lib/asix-indexer/asix-indexer-health.sh
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
