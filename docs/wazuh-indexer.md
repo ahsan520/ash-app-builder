@@ -76,6 +76,15 @@ The indexer makes its indices read-only at 95% disk, and the Vulnerabilities tab
 
 **Alerts** (Detections page, on by default, grouped by host): disk filling 80% to under 90% (medium); disk nearly full 90% and over (high); refusing writes, any index read-only (critical); unhealthy, red or unreachable twice in 15 minutes (high). **To free space** when it fires: purge old kernels on the agents (their findings leave the index), remove indices of managers that no longer exist, or grow the disk; after freeing space lift the block with `PUT /_all/_settings {"index.blocks.read_only_allow_delete": null}` as admin (OpenSearch lifts it itself below the high watermark in current versions, check). **Not verified** against a real indexer VM yet; the data path is `/var/lib/wazuh-indexer` (`--data-path`). Tests: `tests/indexer-health-rules.test.js`, `tests/indexer-health-script.test.js`.
 
+## Removing the indices of removed managers (E6j, built 2026-11-03)
+
+A manager that is deleted or renamed leaves `wazuh-states-vulnerabilities-<its name>` on the indexer's disk. Clean it up in two steps, always preview first:
+
+1. On the ASIX machine make the keep list (every index registered for a tenant): `kubectl -n asix-platform exec deploy/asix-api -- node src/endpoints/wazuh-indexer-cli.js indices > keep.txt`, and copy `keep.txt` to the indexer machine.
+2. On the indexer machine, as root: `sudo ./scripts/deploy/wazuh-indexer-prune.sh --keep-file keep.txt` shows each index as `keep`, `skip` (younger than `--min-age-days`, default 7) or `ORPHAN`, with documents, size and age, and changes nothing. If the ORPHAN lines are right, run it again with `--delete`.
+
+It refuses an empty keep file, a keep file none of whose names exists here (wrong file or wrong indexer), a line that is not an exact index name, and more than `--max-delete` (default 5) removals. Each delete names one exact index. A manager that is installed but not yet registered in ASIX is protected only by `--min-age-days`: register it first, or read the preview. A deleted index is not recoverable; a manager that still runs writes a new one on its next scan (not verified against a real indexer). The admin password is read from `/etc/wazuh-indexer/asix-admin.pass` and never put on a command line. Tests: `tests/wazuh-indexer-prune.test.js`, `tests/wazuh-indexer-db.test.js`.
+
 ## Lab: the broker VM as the indexer
 
 **Possible for the lab, not for production** (decision 2 above stands: the broker VM stays small and is the client's, and a second Java service on it competes with the Wazuh manager for memory). To try the tab with the one VM that already runs the Wazuh manager (E4b):

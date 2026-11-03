@@ -7,6 +7,10 @@
 //   kubectl -n asix-platform exec    deploy/asix-api -- node src/endpoints/wazuh-indexer-cli.js show     --tenant "Acme Corp"
 //   kubectl -n asix-platform exec    deploy/asix-api -- node src/endpoints/wazuh-indexer-cli.js check    --tenant "Acme Corp"
 //   kubectl -n asix-platform exec    deploy/asix-api -- node src/endpoints/wazuh-indexer-cli.js remove   --tenant "Acme Corp"
+//   kubectl -n asix-platform exec    deploy/asix-api -- node src/endpoints/wazuh-indexer-cli.js indices > keep.txt
+//
+// `indices` needs no --tenant: it prints the index name registered for EVERY tenant, one per line and nothing else on standard output, the KEEP LIST for
+// scripts/deploy/wazuh-indexer-prune.sh (which removes the indices of managers that no longer exist, from the indexer machine; docs/wazuh-indexer.md). It prints names only: no address, user or password.
 //
 // --tenant is the tenant's name or its id. The registration is JSON on STANDARD INPUT, never on the command line (a password in an argument shows in the process list):
 //   { "url": "https://wazuh-indexer.internal:9200", "user": "asix-vuln-acme", "password": "...", "ca_pem": "-----BEGIN CERTIFICATE-----...", "index": "wazuh-states-vulnerabilities-acme-mgr", "label": "Acme" }
@@ -17,7 +21,7 @@ const store = require('./wazuh-indexer-store');
 const indexer = require('./wazuh-indexer');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const USAGE = 'usage:\n  wazuh-indexer-cli.js register --tenant <name|id> [--no-check] < indexer-registration.json\n  wazuh-indexer-cli.js show     --tenant <name|id>\n  wazuh-indexer-cli.js check    --tenant <name|id>\n  wazuh-indexer-cli.js remove   --tenant <name|id>';
+const USAGE = 'usage:\n  wazuh-indexer-cli.js register --tenant <name|id> [--no-check] < indexer-registration.json\n  wazuh-indexer-cli.js show     --tenant <name|id>\n  wazuh-indexer-cli.js check    --tenant <name|id>\n  wazuh-indexer-cli.js remove   --tenant <name|id>\n  wazuh-indexer-cli.js indices';
 
 function parseArgs(argv) {
   const [cmd, ...rest] = argv; const o = { cmd, tenant: null, noCheck: false };
@@ -26,8 +30,9 @@ function parseArgs(argv) {
     else if (rest[i] === '--no-check') o.noCheck = true;
     else return { error: 'Unknown or incomplete option: ' + rest[i] };
   }
-  if (!['register', 'show', 'check', 'remove'].includes(cmd)) return { error: 'Unknown command' };
-  if (!o.tenant) return { error: '--tenant is required' };
+  if (!['register', 'show', 'check', 'remove', 'indices'].includes(cmd)) return { error: 'Unknown command' };
+  if (cmd === 'indices' && o.tenant) return { error: '`indices` lists every tenant: it does not take --tenant' };
+  if (cmd !== 'indices' && !o.tenant) return { error: '--tenant is required' };
   if (o.noCheck && cmd !== 'register') return { error: '--no-check only goes with register' };
   return o;
 }
@@ -49,6 +54,21 @@ async function probe(m) {
 async function run(argv, io) {
   const o = parseArgs(argv);
   if (o.error) { io.err(o.error + '\n' + USAGE); return 2; }
+  if (o.cmd === 'indices') {
+    try {
+      const names = new Set();
+      for (const row of (await db.query('SELECT id FROM tenants ORDER BY id')).rows) {
+        const r = await db.withTenant(row.id, (c) => store.readRow(c, row.id));
+        if (r && r.index_name) names.add(r.index_name);
+      }
+      for (const n of [...names].sort()) io.out(n);
+      if (!names.size) io.err('No tenant has an indexer registered: the list is empty (the prune script refuses an empty list).');
+      return 0;
+    } catch (e) {
+      if (store.isMissingTable(e)) { io.err('The database has no wazuh_indexers table yet: run the schema job (a normal deploy does)'); return 1; }
+      io.err('Failed: ' + e.message); return 1;
+    }
+  }
   let t;
   try { t = await tenantId(o.tenant); } catch (e) { io.err(e.message); return 1; }
   if (!t) { io.err('No tenant "' + o.tenant + '"'); return 1; }

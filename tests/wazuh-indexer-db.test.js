@@ -114,6 +114,15 @@ async function main() {
     x = await runCli(['remove', '--tenant', A]); assert.match(x.out, /had no indexer registered/);
     x = await runCli(['show', '--tenant', 'no-such-tenant-' + stamp]); assert.strictEqual(x.code, 1);
     x = await runCli(['frobnicate', '--tenant', A]); assert.strictEqual(x.code, 2); x = await runCli(['show']); assert.strictEqual(x.code, 2); x = await runCli(['show', '--tenant', A, '--no-check']); assert.strictEqual(x.code, 2);
+    // E6j: `indices` prints the registered index name of EVERY tenant (the keep list of scripts/deploy/wazuh-indexer-prune.sh): names only, sorted, once each, nothing secret, no --tenant
+    x = await runCli(['register', '--tenant', A], reg(X)); assert.strictEqual(x.code, 0, x.err);
+    x = await runCli(['register', '--tenant', B], reg(X, { index: IB })); assert.strictEqual(x.code, 0, x.err);
+    x = await runCli(['indices']); assert.strictEqual(x.code, 0, x.err); const lines = x.out.split('\n').filter(Boolean);
+    assert.ok(lines.includes(IA) && lines.includes(IB), 'both tenants\' indices are listed'); assert.deepStrictEqual(lines, [...new Set(lines)].sort(), 'sorted, once each');
+    assert.ok(lines.every((l) => /^wazuh-states-vulnerabilities-[a-z0-9][a-z0-9._-]*$/.test(l)), 'nothing but index names on standard output'); assert.ok(!x.out.includes(X.url) && !x.out.includes('Idx-Passw0rd') && !x.out.includes('asix-vuln'), 'no address, password or user');
+    x = await runCli(['indices', '--tenant', A]); assert.strictEqual(x.code, 2);
+    await runCli(['remove', '--tenant', B]); x = await runCli(['indices']); assert.ok(!x.out.split('\n').includes(IB), 'a removed registration leaves the list'); assert.ok(x.out.split('\n').includes(IA));
+    await runCli(['remove', '--tenant', A]);
     const keep2 = process.env.NOTIFY_ENCRYPTION_KEY; delete process.env.NOTIFY_ENCRYPTION_KEY;
     x = await runCli(['register', '--tenant', A], reg(X)); assert.strictEqual(x.code, 1); assert.match(x.err, /NOTIFY_ENCRYPTION_KEY/); process.env.NOTIFY_ENCRYPTION_KEY = keep2;
     console.log('wazuh-indexer-db: ok');
