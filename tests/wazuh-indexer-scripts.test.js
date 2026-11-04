@@ -28,13 +28,15 @@ describe('install-wazuh-indexer.sh (system commands stood in)', { skip: have ? f
   const mem = (mb) => put('mem', `MemTotal:        ${mb * 1024} kB\n`);
   beforeEach(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'idx-')); bin = path.join(tmp, 'bin'); log = path.join(tmp, 'calls.log'); fs.mkdirSync(bin);
-    for (const f of ['installed', 'listening', 'busy']) put(f, ''); put('nproc', '4'); mem(16384); put('disk', '120'); put('repo-rc', '0'); put('start-rc', '0'); put('health', 'green'); put('hash', HASH); put('init-rc', '0');
+    for (const f of ['installed', 'listening', 'busy', 'loopback-fails']) put(f, ''); put('nproc', '4'); mem(16384); put('disk', '120'); put('repo-rc', '0'); put('start-rc', '0'); put('health', 'green'); put('hash', HASH); put('init-rc', '0');
     sh('id', 'if [ "$1" = "-u" ]; then echo 0; else exit 1; fi');
     sh('nproc', `cat '${tmp}/nproc'`);
     sh('hostname', 'echo idx-vm');
     sh('df', `printf 'Filesystem 1G-blocks Used Available Capacity Mounted\\n/dev/x 200G 80G %sG 40%% /\\n' "$(cat '${tmp}/disk')"`);
     sh('curl', `echo "curl $*" >> '${log}'; out=""; p=""; for a in "$@"; do [ "$p" = "-o" ] && out="$a"; p="$a"; done
 case "$*" in *InRelease*) exit $(cat '${tmp}/repo-rc');; *GPG-KEY*) echo "fake key" > "$out"; exit 0;; esac
+k=""; p=""; for a in "$@"; do [ "$p" = "-K" ] && k="$a"; p="$a"; done
+if [ -n "$k" ]; then cfg="$(cat "$k")"; echo "health-url $(printf '%s' "$cfg" | sed -n 's/^url = "\\(.*\\)"$/\\1/p')" >> '${log}'; case "$cfg" in *127.0.0.1*) [ -s '${tmp}/loopback-fails' ] && exit 60;; esac; fi
 echo "{\\"status\\":\\"$(cat '${tmp}/health')\\"}"`);
     sh('gpg', `echo "gpg $*" >> '${log}'; case "$*" in *--show-keys*) echo "fpr:::::::::${FPR}:";; *--dearmor*) cat;; esac`);
     sh('dpkg-query', `v=$(cat '${tmp}/installed'); [ -n "$v" ] && printf '%s' "$v" || exit 1`);
@@ -99,6 +101,51 @@ case "$*" in *install*) v="\${@: -1}"; v="\${v#wazuh-indexer=}"; mkdir -p '${tmp
     assert.ok(logged(/^init$/).length === 1, 'security initialisation ran'); assert.strictEqual(logged(/^systemctl restart wazuh-indexer/).length, 1);
     assert.ok(!r.stdout.includes(pw) && !r.stderr.includes(pw), 'the password is not printed'); assert.deepStrictEqual(logged(/./).filter((l) => l.includes(pw)), ['-p ' + pw], 'the password is on NO command line except the hasher\'s own -p (the security plugin\'s hash.sh takes it no other way; see the script header)');
     assert.match(r.stdout, /answers on https:\/\/10\.20\.30\.40:9200 with status green/); assert.match(r.stdout, /wazuh-indexer-tenant\.sh --tenant-name/);
+  });
+  // E6n: the closing check on a certificate set that does not name 127.0.0.1 (found on the lab 2026-11-04: certificates made by Wazuh's own tool named only the VM's address)
+  const putCerts = (san) => {
+    fs.mkdirSync(conf('certs'), { recursive: true });
+    const o = (a) => spawnSync('openssl', a, { encoding: 'utf8', cwd: tmp });
+    o(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', path.join(tmp, 'ca-key.pem'), '-out', conf('certs/root-ca.pem'), '-days', '30', '-subj', '/CN=root-ca']);
+    o(['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', conf('certs/indexer-key.pem'), '-out', path.join(tmp, 'n.csr'), '-subj', '/CN=asix-indexer-1']);
+    put('san.ext', 'subjectAltName=' + san + '\n');
+    o(['x509', '-req', '-in', path.join(tmp, 'n.csr'), '-CA', conf('certs/root-ca.pem'), '-CAkey', path.join(tmp, 'ca-key.pem'), '-CAcreateserial', '-out', conf('certs/indexer.pem'), '-days', '30', '-extfile', path.join(tmp, 'san.ext')]);
+    fs.copyFileSync(conf('certs/indexer.pem'), conf('certs/admin.pem'));
+    assert.ok(fs.statSync(conf('certs/indexer.pem')).size > 0, 'the test certificate was made');
+  };
+  const healthUrls = () => logged(/^health-url /).map((l) => l.slice('health-url '.length));
+  it('certificates made by the script name 127.0.0.1: no warning, and the closing check is made on loopback', () => {
+    const r = run('--address', '10.20.30.40'); assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    assert.ok(!/does not name 127\.0\.0\.1/.test(r.stderr + r.stdout), 'no warning');
+    assert.deepStrictEqual(healthUrls(), ['https://127.0.0.1:9200/_cluster/health']);
+  });
+  it('certificates that were already there and do not name 127.0.0.1: a warning, and the closing check falls back to --address, so a healthy indexer is not called broken', () => {
+    putCerts('IP:10.20.30.40,DNS:idx-vm'); put('loopback-fails', 'x');
+    const r = run('--address', '10.20.30.40'); assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stderr, /warning: the node certificate does not name 127\.0\.0\.1.*https:\/\/10\.20\.30\.40:9200.*--address 10\.20\.30\.40/);
+    assert.deepStrictEqual(healthUrls(), ['https://10.20.30.40:9200/_cluster/health'], 'the address is tried first and answers; loopback is not needed');
+    assert.match(r.stdout, /\(checked at https:\/\/10\.20\.30\.40:9200: the node certificate does not name 127\.0\.0\.1\)/);
+    assert.match(r.stdout, /answers on https:\/\/10\.20\.30\.40:9200 with status green/);
+    assert.ok(text(conf('certs/indexer.pem')).includes('BEGIN CERTIFICATE'), 'the certificates were left as they were');
+  });
+  it('a certificate that names loopback is checked on loopback even if it also names the address (nothing changes for the normal case)', () => {
+    putCerts('IP:10.20.30.40,IP:127.0.0.1'); const r = run('--address', '10.20.30.40'); assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    assert.ok(!/does not name 127\.0\.0\.1/.test(r.stderr)); assert.deepStrictEqual(healthUrls(), ['https://127.0.0.1:9200/_cluster/health']);
+  });
+  it('when the check fails and the certificate does not name loopback, the message says to look at the certificate; when it does, it does not', () => {
+    putCerts('IP:10.20.30.40'); put('health', ''); let r = run('--address', '10.20.30.40'); assert.strictEqual(r.status, 1);
+    assert.match(r.stderr, /last answer: 'none'/); assert.match(r.stderr, /does not name 127\.0\.0\.1, so also check that 10\.20\.30\.40 is in its names/);
+    assert.ok(healthUrls().includes('https://10.20.30.40:9200/_cluster/health') && healthUrls().includes('https://127.0.0.1:9200/_cluster/health'), 'both addresses were tried: ' + healthUrls());
+    fs.rmSync(conf(), { recursive: true, force: true }); put('installed', ''); put('listening', ''); put('health', '');
+    r = run('--address', '10.20.30.40'); assert.strictEqual(r.status, 1); assert.ok(!/also check that/.test(r.stderr), 'no certificate hint when loopback is named');
+  });
+  it('an address chosen with ASIX_INDEXER_BASE is the only one checked (no fallback is added behind the caller\'s back)', () => {
+    putCerts('IP:10.20.30.40'); put('loopback-fails', 'x'); const saved = env.ASIX_INDEXER_BASE; env.ASIX_INDEXER_BASE = 'https://127.0.0.1:9200';
+    try { const r = run('--address', '10.20.30.40'); assert.strictEqual(r.status, 1); assert.deepStrictEqual([...new Set(healthUrls())], ['https://127.0.0.1:9200/_cluster/health']); } finally { if (saved === undefined) delete env.ASIX_INDEXER_BASE; else env.ASIX_INDEXER_BASE = saved; }
+  });
+  it('a 127.0.0.10 name is not taken for 127.0.0.1', () => {
+    putCerts('IP:10.20.30.40,IP:127.0.0.10'); put('loopback-fails', 'x'); const r = run('--address', '10.20.30.40'); assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stderr, /does not name 127\.0\.0\.1/);
   });
   it('the heap: half of the memory (31 at most), a quarter and 8 at most in the lab, or --heap-gb; more than half of the memory is refused', () => {
     const heap = () => text(conf('jvm.options.d/asix-heap.options')).split('\n')[0];

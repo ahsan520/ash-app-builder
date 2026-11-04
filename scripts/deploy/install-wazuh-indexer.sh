@@ -150,6 +150,13 @@ else
   echo "   certificates already there: left as they are"
 fi
 chmod 400 "$CERTS"/*.pem; chmod 750 "$CERTS"
+# A certificate set that was already there (made by Wazuh'"'"'s own tool, say) may name only the machine'"'"'s address. Then a client that checks the certificate
+# cannot use https://127.0.0.1:9200; say so now, and let the closing check below fall back to --address instead of calling a healthy indexer broken.
+LOOPBACK_NAMED=1
+if ! openssl x509 -in "$CERTS/indexer.pem" -noout -ext subjectAltName 2>/dev/null | grep -Eq 'IP Address:127\.0\.0\.1([^0-9]|$)'; then
+  LOOPBACK_NAMED=0
+  warn "the node certificate does not name 127.0.0.1, so a client on this machine must use https://$ADDRESS:9200 (not loopback) when it checks the certificate: pass --address $ADDRESS to wazuh-indexer-tenant.sh and use that address for the manager (E6g)."
+fi
 if id wazuh-indexer >/dev/null 2>&1; then chown -R wazuh-indexer:wazuh-indexer "$CERTS"; fi
 
 echo "== 5. opensearch.yml =="
@@ -229,14 +236,21 @@ INIT="$SHARE/bin/indexer-security-init.sh"
 if [ -x "$INIT" ]; then "$INIT" >/dev/null 2>&1 || { echo "indexer-security-init.sh failed: run it by hand and read its output." >&2; exit 1; }
 elif [ -x "$SEC" ]; then echo "   (no indexer-security-init.sh; $SEC is there, run it by hand as in docs/wazuh-indexer.md)" >&2
 else echo "   warning: no security initialisation script found under $SHARE." >&2; fi
-CFG="$(printf 'silent\nmax-time = 20\nuser = "admin:%s"\nurl = "%s/_cluster/health"\n' "$(cat "$PW")" "$BASE")"
-status=""
+ADMIN_PW="$(cat "$PW")"
+cfg_for() { printf 'silent\nmax-time = 20\nuser = "admin:%s"\nurl = "%s/_cluster/health"\n' "$ADMIN_PW" "$1"; }
+CHECK_URLS=("$BASE")
+# only when the caller did not choose the address to check (ASIX_INDEXER_BASE is for the tests) and the certificate does not name loopback
+if [ -z "${ASIX_INDEXER_BASE:-}" ] && [ "$LOOPBACK_NAMED" -eq 0 ]; then CHECK_URLS=("https://$ADDRESS:9200" "$BASE"); fi
+status=""; CHECKED_AT=""
 for _ in $(seq 1 "${ASIX_INDEXER_WAIT_S:-90}"); do
-  status="$(curl -K <(printf '%s\n' "$CFG") --cacert "$CERTS/root-ca.pem" 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
-  case "$status" in green|yellow) break;; esac
+  for u in "${CHECK_URLS[@]}"; do
+    status="$(curl -K <(cfg_for "$u") --cacert "$CERTS/root-ca.pem" 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
+    case "$status" in green|yellow) CHECKED_AT="$u"; break 2;; esac
+  done
   sleep 2
 done
-case "$status" in green|yellow) :;; *) echo "The indexer is listening but does not answer as admin with a green or yellow status (last answer: '${status:-none}'). Look: tail -n 50 /var/log/wazuh-indexer/asix-indexer.log" >&2; exit 1;; esac
+case "$status" in green|yellow) :;; *) echo "The indexer is listening but does not answer as admin with a green or yellow status (last answer: '${status:-none}'). Look: tail -n 50 /var/log/wazuh-indexer/asix-indexer.log$([ "$LOOPBACK_NAMED" -eq 1 ] || echo "; the node certificate does not name 127.0.0.1, so also check that $ADDRESS is in its names (openssl x509 -in $CERTS/indexer.pem -noout -ext subjectAltName)")" >&2; exit 1;; esac
+[ "$CHECKED_AT" = "$BASE" ] || echo "   (checked at $CHECKED_AT: the node certificate does not name 127.0.0.1)"
 
 echo
 echo "Done. Wazuh indexer $VERSION (one node, heap ${HEAP} GB) answers on https://$ADDRESS:9200 with status $status."
