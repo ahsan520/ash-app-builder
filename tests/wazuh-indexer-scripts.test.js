@@ -147,6 +147,25 @@ case "$*" in *install*) v="\${@: -1}"; v="\${v#wazuh-indexer=}"; mkdir -p '${tmp
     putCerts('IP:10.20.30.40,IP:127.0.0.10'); put('loopback-fails', 'x'); const r = run('--address', '10.20.30.40'); assert.strictEqual(r.status, 0, r.stdout + r.stderr);
     assert.match(r.stderr, /does not name 127\.0\.0\.1/);
   });
+  // E6o: a re-run must not reload the security configuration (that deletes every role and user made through the security API: found on the lab 2026-11-04, the manager's writer vanished)
+  it('a re-run does NOT load the security configuration again when the admin already signs in; the first run did', () => {
+    let r = run('--address', '10.20.30.40'); assert.strictEqual(r.status, 0, r.stdout + r.stderr); assert.strictEqual(logged(/^init$/).length, 1); assert.match(r.stdout, /loading the security configuration \(a new admin password was made\)/);
+    r = run('--address', '10.20.30.40'); assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    assert.strictEqual(logged(/^init$/).length, 1, 'no second load'); assert.match(r.stdout, /security configuration NOT reloaded/); assert.match(r.stdout, /--reload-security/);
+    assert.match(r.stdout, /answers on https:\/\/10\.20\.30\.40:9200 with status green/);
+  });
+  it('--reload-security loads it again on a re-run, and says why', () => {
+    assert.strictEqual(run('--address', '10.20.30.40').status, 0); const r = run('--address', '10.20.30.40', '--reload-security'); assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    assert.strictEqual(logged(/^init$/).length, 2); assert.match(r.stdout, /loading the security configuration \(--reload-security was given\)/);
+  });
+  it('a re-run where the admin cannot sign in yet (a first run that stopped before the load) loads it', () => {
+    assert.strictEqual(run('--address', '10.20.30.40').status, 0); assert.strictEqual(logged(/^init$/).length, 1);
+    put('health', ''); const r = run('--address', '10.20.30.40'); assert.strictEqual(r.status, 1, 'the closing check still fails with no answer');
+    assert.strictEqual(logged(/^init$/).length, 2, 'loaded because the admin could not sign in'); assert.match(r.stdout, /the admin cannot sign in with the stored password yet/);
+  });
+  it('--reload-security is accepted by --check and named in the usage', () => {
+    assert.strictEqual(run('--check', '--reload-security').status, 0); assert.match(text(INSTALL), /--reload-security\s+load the security configuration/);
+  });
   it('the heap: half of the memory (31 at most), a quarter and 8 at most in the lab, or --heap-gb; more than half of the memory is refused', () => {
     const heap = () => text(conf('jvm.options.d/asix-heap.options')).split('\n')[0];
     const fresh = () => { fs.rmSync(conf(), { recursive: true, force: true }); put('installed', ''); put('listening', ''); };
@@ -179,7 +198,7 @@ case "$*" in *install*) v="\${@: -1}"; v="\${v#wazuh-indexer=}"; mkdir -p '${tmp
   });
   it('an indexer that never listens, a failing security initialisation and a cluster that is not green or yellow each stop it with a message', () => {
     put('start-rc', '1'); let r = run(); assert.strictEqual(r.status, 1);
-    put('start-rc', '0'); put('init-rc', '1'); r = run(); assert.strictEqual(r.status, 1); assert.match(r.stderr, /indexer-security-init\.sh failed/);
+    put('start-rc', '0'); put('init-rc', '1'); put('health', ''); /* the admin cannot sign in yet, so the load is tried */ r = run(); assert.strictEqual(r.status, 1); assert.match(r.stderr, /indexer-security-init\.sh failed/);
     put('init-rc', '0'); put('health', 'red'); r = run(); assert.strictEqual(r.status, 1); assert.match(r.stderr, /last answer: 'red'/);
     put('health', 'yellow'); r = run(); assert.strictEqual(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /status yellow/);
   });

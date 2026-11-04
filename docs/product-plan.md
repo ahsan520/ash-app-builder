@@ -745,6 +745,9 @@ A broker's heartbeat now says how many CPUs and how much memory its VM has and h
 ### Indexer installer and certificates without loopback (E6n, built 2026-11-04)
 The installer for the central indexer VM warns when the certificate already on the machine does not name `127.0.0.1` and checks the indexer at `--address` first, so a healthy indexer is no longer reported as broken. Script only; see `docs/endpoints.md`, "E6n as built".
 
+### Indexer installer keeps users and roles on a re-run (E6o, built 2026-11-04)
+A re-run of the indexer installer used to reload the security configuration and delete every role and user made through the security API (the managers' writers and the tenants' read users). It now reloads only for a new admin password or with `--reload-security`. See `docs/endpoints.md`, "E6o as built".
+
 ### Daily vulnerability findings summary (E6k, built 2026-11-03)
 Once a UTC day (from `ASIX_VULN_SUMMARY_HOUR`, default 3), a tenant with a registered central indexer gets ONE `vuln-summary` event in the event store: totals by severity, machines, different vulnerabilities, the findings first detected since the previous summary, and the change against it. It gives the Vulnerabilities tab a **Trend** card (last 14 days; `GET /v1/endpoints/vulnerabilities/trend?days=N`, `capacity:read`) and a built-in rule, **New critical vulnerabilities on endpoints** (high, one alert a day, on `new_critical > 0`). The indexer holds current findings only, so this is the only history; it lasts as long as the tenant's retention. A failed read writes nothing and is retried after 15 minutes; `ASIX_VULN_SUMMARY=false` turns it off. No schema, permission, role or broker change; deploy ASIX only. **Not checked:** a real indexer (the `detected_at` range query), PostgreSQL and ClickHouse with this event, a browser. A manager that re-creates its index makes one day's \"new\" figure large. Details and tests: `docs/endpoints.md`, \"E6k as built\".
 

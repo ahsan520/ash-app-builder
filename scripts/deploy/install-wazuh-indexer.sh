@@ -4,7 +4,7 @@
 #
 # Usage (as root):
 #   ./scripts/deploy/install-wazuh-indexer.sh --check                       # look only: resources, ports, repository; changes nothing
-#   ./scripts/deploy/install-wazuh-indexer.sh [--version 4.14.9-1] [--address ADDR] [--node-name N] [--heap-gb N] [--lab] [--key-fingerprint F] [--force] [--upgrade]
+#   ./scripts/deploy/install-wazuh-indexer.sh [--version 4.14.9-1] [--address ADDR] [--node-name N] [--heap-gb N] [--lab] [--key-fingerprint F] [--force] [--upgrade] [--reload-security]
 #
 #   --version V          package version (default WAZUH_VERSION below, the same number as the manager). Held back from `apt upgrade` afterwards.
 #   --address ADDR       the address or name the managers and ASIX will use (written into the node certificate's names). Default: this machine's host name.
@@ -14,6 +14,9 @@
 #   --key-fingerprint F  refuse the repository key unless its fingerprint is F (40 hex characters). The script prints it always.
 #   --force              go on although memory, CPU or disk is under the minimum.
 #   --upgrade            allow replacing an installed indexer of a different version.
+#   --reload-security    load the security configuration from the yml files again even on a re-run. A re-run does NOT do this by itself: loading replaces everything in the
+#                        security index, which DELETES every role, user and mapping made through the security API (wazuh-indexer-tenant.sh makes all of its). If you use this,
+#                        run wazuh-indexer-tenant.sh again afterwards (for the manager's writer too: --writer).
 #
 # What it changes, in order (each step is safe to repeat):
 #   1. checks (root, apt, systemd, openssl, CPU, memory, disk, ports 9200 and 9300 free, the Wazuh repository reachable)
@@ -22,7 +25,7 @@
 #   4. certificates in /etc/wazuh-indexer/certs, made ONCE and never overwritten: a root CA, the node certificate (names: --address, the host name, 127.0.0.1), an admin certificate
 #   5. opensearch.yml: one node, listening on all addresses, the certificates above (the original is kept as opensearch.yml.before-asix)
 #   6. the admin password: random, kept readable by root only in /etc/wazuh-indexer/asix-admin.pass, hashed into the security plugin's users file, then the security
-#      configuration is loaded (indexer-security-init.sh)
+#      configuration is loaded (indexer-security-init.sh) ONLY when a new password was made, when --reload-security is given, or when the admin cannot sign in yet
 #   7. starts the indexer and waits until it answers as `admin` with a cluster status of green or yellow
 # One exception to "no password on a command line": the security plugin's own hash.sh takes the password only as `-p PASSWORD` (it needs a terminal otherwise), so for the
 # moment it runs the password of the NEW admin is visible to other users of this machine. Run this on a machine only administrators can sign in to (it is the indexer's own VM).
@@ -32,7 +35,7 @@
 set -euo pipefail
 
 WAZUH_VERSION="4.14.9-1"
-VERSION="$WAZUH_VERSION"; ADDRESS=""; NODE="asix-indexer-1"; HEAP=""; LAB=0; KEY_FPR=""; CHECK=0; FORCE=0; UPGRADE=0
+VERSION="$WAZUH_VERSION"; ADDRESS=""; NODE="asix-indexer-1"; HEAP=""; LAB=0; KEY_FPR=""; CHECK=0; FORCE=0; UPGRADE=0; RELOAD_SEC=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --version) VERSION="$2"; shift 2;;
@@ -40,6 +43,7 @@ while [ $# -gt 0 ]; do
     --node-name) NODE="$2"; shift 2;;
     --heap-gb) HEAP="$2"; shift 2;;
     --lab) LAB=1; shift;;
+    --reload-security) RELOAD_SEC=1; shift;;
     --key-fingerprint) KEY_FPR="$(printf '%s' "$2" | tr -d ' ' | tr 'a-f' 'A-F')"; shift 2;;
     --check) CHECK=1; shift;;
     --force) FORCE=1; shift;;
@@ -231,16 +235,32 @@ for _ in $(seq 1 "${ASIX_INDEXER_WAIT_S:-90}"); do
   sleep 1
 done
 [ "$ok" -eq 1 ] || { echo "The indexer did not start listening on 9200 in time: systemctl status wazuh-indexer; tail -n 50 /var/log/wazuh-indexer/asix-indexer.log" >&2; exit 1; }
-SEC="$SHARE/plugins/opensearch-security/tools/securityadmin.sh"
-INIT="$SHARE/bin/indexer-security-init.sh"
-if [ -x "$INIT" ]; then "$INIT" >/dev/null 2>&1 || { echo "indexer-security-init.sh failed: run it by hand and read its output." >&2; exit 1; }
-elif [ -x "$SEC" ]; then echo "   (no indexer-security-init.sh; $SEC is there, run it by hand as in docs/wazuh-indexer.md)" >&2
-else echo "   warning: no security initialisation script found under $SHARE." >&2; fi
 ADMIN_PW="$(cat "$PW")"
 cfg_for() { printf 'silent\nmax-time = 20\nuser = "admin:%s"\nurl = "%s/_cluster/health"\n' "$ADMIN_PW" "$1"; }
 CHECK_URLS=("$BASE")
 # only when the caller did not choose the address to check (ASIX_INDEXER_BASE is for the tests) and the certificate does not name loopback
 if [ -z "${ASIX_INDEXER_BASE:-}" ] && [ "$LOOPBACK_NAMED" -eq 0 ]; then CHECK_URLS=("https://$ADDRESS:9200" "$BASE"); fi
+SEC="$SHARE/plugins/opensearch-security/tools/securityadmin.sh"
+INIT="$SHARE/bin/indexer-security-init.sh"
+# Loading the security configuration REPLACES the security index with what the yml files say, which deletes every role, user and mapping made through the API (the
+# tenants' read users and the managers' writers). So it is done only when it is needed: a new admin password was just hashed into the file, --reload-security was given,
+# or the admin cannot sign in with the stored password (a first run that stopped before the load).
+DO_INIT=0; WHY=""
+if [ "$NEW_PW" -eq 1 ]; then DO_INIT=1; WHY="a new admin password was made"
+elif [ "$RELOAD_SEC" -eq 1 ]; then DO_INIT=1; WHY="--reload-security was given"
+else
+  ok_admin=0
+  for u in "${CHECK_URLS[@]}"; do
+    s="$(curl -K <(cfg_for "$u") --cacert "$CERTS/root-ca.pem" 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
+    case "$s" in green|yellow|red) ok_admin=1; break;; esac
+  done
+  if [ "$ok_admin" -eq 0 ]; then DO_INIT=1; WHY="the admin cannot sign in with the stored password yet"; fi
+fi
+if [ "$DO_INIT" -eq 0 ]; then
+  echo "   security configuration NOT reloaded: the admin already signs in, and a reload would delete the roles and users made through the security API (--reload-security forces it)"
+elif [ -x "$INIT" ]; then echo "   loading the security configuration ($WHY)"; "$INIT" >/dev/null 2>&1 || { echo "indexer-security-init.sh failed: run it by hand and read its output." >&2; exit 1; }
+elif [ -x "$SEC" ]; then echo "   (no indexer-security-init.sh; $SEC is there, run it by hand as in docs/wazuh-indexer.md)" >&2
+else echo "   warning: no security initialisation script found under $SHARE." >&2; fi
 status=""; CHECKED_AT=""
 for _ in $(seq 1 "${ASIX_INDEXER_WAIT_S:-90}"); do
   for u in "${CHECK_URLS[@]}"; do
