@@ -58,7 +58,8 @@ describe('the Trend card of the Vulnerabilities tab', () => {
     const p = await open({ success: true, points: [pt('2026-12-01', { total_change: null, critical_change: null }), pt('2026-12-02', { total_change: -3 }), pt('2026-12-03', { new_critical: 2, total_change: 5 })] });
     assert.ok(p.calls.includes('/v1/endpoints/vulnerabilities/trend?days=14'));
     const t = p.text(); assert.match(t, /Trend \(one summary a day\)/);
-    assert.ok(t.indexOf('2026-12-03') < t.indexOf('2026-12-02') && t.indexOf('2026-12-02') < t.indexOf('2026-12-01'), 'newest first');
+    const days = walk(p.tree).filter((n) => n && n.tag === 'tr').map((r) => (r.kids[0] && r.kids[0].textContent) || '').filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));   // the table's rows (the chart above it also prints its first and last day)
+    assert.deepStrictEqual(days, ['2026-12-03', '2026-12-02', '2026-12-01'], 'newest first');
     assert.match(t, /\+5/); assert.match(t, /-3/); assert.match(t, /-1/);
     const rows = walk(p.tree).filter((n) => n && n.tag === 'tr' && texts(n).includes('2026-12-01'));
     assert.match(texts(rows[0]), /2026-12-01 \| 100 \| - \|/, 'no previous summary: a dash, not 0');

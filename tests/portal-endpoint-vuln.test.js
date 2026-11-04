@@ -92,7 +92,7 @@ describe('the Vulnerabilities tab', () => {
     assert.ok(!/javascript:/.test(JSON.stringify(walk(p.tree).filter((n) => n && n.tag === 'a').map((a) => a.href))), 'no javascript: link');
   });
   it('is wired as a tab after Configuration checks, and writes nothing into the page as HTML', () => {
-    assert.match(html, /\['config', 'Configuration checks', \(\) => alertsView\('config'\)\], \['vuln', 'Vulnerabilities', vulnerabilitiesView\]/);
+    assert.match(html, /\['config', 'Configuration checks', \(\) => alertsView\('config'\)\], \['vuln', 'Vulnerabilities', \(\) => vulnerabilitiesView\(vulnFocus\)\]/);
     assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write/.test(source), 'the tab uses textContent and el() only');
     assert.ok(html.indexOf('function vulnerabilitiesView') < html.indexOf('async function pgEndpoints'));
   });
