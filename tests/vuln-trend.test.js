@@ -67,6 +67,35 @@ describe('GET /v1/endpoints/vulnerabilities/trend', () => {
       assert.deepStrictEqual([p.critical, p.findings_total, p.high], [null, null, 7]);
     } finally { who = TENANT; }
   });
+  describe('machines that got worse', () => {
+    const list = (rows) => JSON.stringify(rows);
+    const seed = async (older, newer, extraNewer = {}, olderDaysAgo = 2) => { const t = crypto.randomUUID(); who = t; await store.insertBatch(t, [mk(t, olderDaysAgo, {}, { machines_json: older }), mk(t, 1, {}, { machines_json: newer, ...extraNewer })]); return t; };
+    const m = async (q = '?days=7') => { try { return (await get(q)).body.machines; } finally { who = TENANT; } };
+    it('lists the machines whose critical or high count rose, worst first, with the change, and new machines as new', async () => {
+      await seed(list([['001', 'a', 10, 1, 5], ['002', 'b', 10, 2, 2], ['003', 'c', 10, 4, 4]]), list([['001', 'a', 12, 1, 8], ['002', 'b', 9, 4, 1], ['003', 'c', 8, 3, 3], ['004', 'd', 3, 1, 0]]));
+      const r = await m();
+      assert.deepStrictEqual(r.worse.map((x) => [x.agent_id, x.critical_change, x.high_change, x.is_new]), [['002', 2, -1, false], ['004', 1, 0, true], ['001', 0, 3, false]]);
+      assert.deepStrictEqual([r.since_day < r.day, r.complete, r.worse_count], [true, true, 3]);
+    });
+    it('a machine that improved or stayed the same is not listed; nobody worse is an empty list, not null', async () => {
+      await seed(list([['001', 'a', 10, 3, 5]]), list([['001', 'a', 5, 1, 2]])); const r = await m(); assert.deepStrictEqual([r.worse, r.worse_count], [[], 0]);
+    });
+    it('when the earlier list was cut at 50, a machine missing from it is not called new', async () => {
+      const big = Array.from({ length: 50 }, (_, i) => [String(100 + i), 'm' + i, 5, 0, 1]);
+      await seed(list(big), list(big.concat([['900', 'late', 9, 5, 5]]))); const r = await m(); assert.strictEqual(r.complete, false); assert.deepStrictEqual(r.worse, []);
+    });
+    it('is null with one summary, with no machine list, or with a list that is not JSON of the expected shape', async () => {
+      const t = crypto.randomUUID(); who = t; await store.insertBatch(t, [mk(t, 1, {}, { machines_json: list([['001', 'a', 1, 1, 1]]) })]); assert.strictEqual(await m(), null);
+      await seed(list([['001', 'a', 1, 1, 1]]), 'not json'); assert.strictEqual(await m(), null);
+      await seed(list([['001', 'a', 1, 1, 1]]), '{"a":1}'); assert.strictEqual(await m(), null);
+      await seed(list([['001', 'a', 1, 1, 1]]), 'x'.repeat(30000)); assert.strictEqual(await m(), null);
+      await seed(list([['001', 'a', 1, 1, 1]]), list(Array.from({ length: 1500 }, () => ['001', 'a', 1, 1, 1]))); assert.strictEqual(await m(), null, 'valid JSON, but far longer than 50 machines can be');
+    });
+    it('works with days=1, and passes on only the allow-listed numbers and the name cut to 60', async () => {
+      await seed(list([['001', 'a', 1, 0, 0]]), list([['001', 'n'.repeat(200), 'x', 7, 'drop']]), {}, 3); const r = await m('?days=1');   // the earlier summary is 3 days back, outside the 1 day shown, but still the one to compare with
+      assert.strictEqual(r.worse[0].name.length, 60); assert.deepStrictEqual([r.worse[0].total, r.worse[0].critical, r.worse[0].high], [null, 7, null]);
+    });
+  });
   it('refuses unknown parameters and bad day counts before reading anything', async () => {
     for (const q of ['?days=0', '?days=366', '?days=-1', '?days=abc', '?days=1.5', '?days=1&days=2', '?limit=5', '?source_type=syslog']) { const r = await get(q); assert.strictEqual(r.status, 400, q); assert.strictEqual(r.body.error.code || r.body.code, 'INVALID_VULN_TREND', q); }
   });

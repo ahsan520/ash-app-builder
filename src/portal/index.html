@@ -1890,11 +1890,17 @@ function vulnerabilitiesView() {
   const loadTrend = async () => {
     try {
       const r = await api('/v1/endpoints/vulnerabilities/trend?days=14'), pts = r.points.slice().reverse();
+      const wm = r.machines, mc = (v) => (v === null || v === undefined ? '-' : v);
+      const worse = !wm ? card('Machines that got worse', el('div', { className: 'mute', textContent: 'Needs two daily summaries with a machine list (the second one comes the next day).' }))
+        : card('Machines that got worse (' + wm.since_day + ' to ' + wm.day + ')', wm.worse.length ? table([
+          { h: 'Machine', f: (d) => (d.name || d.agent_id) + ' (' + d.agent_id + ')' }, { h: 'Critical', f: (d) => mc(d.critical) + ' (+' + d.critical_change + ')' }, { h: 'High', f: (d) => mc(d.high) + ' (' + (d.high_change > 0 ? '+' : '') + d.high_change + ')' },
+          { h: 'Findings', f: (d) => mc(d.total) }, { h: '', f: (d) => (d.is_new ? 'new in the list' : '') },
+        ], wm.worse) : el('div', { className: 'mute', textContent: 'No machine has more critical or high findings than in the previous summary.' }));
       trend.replaceChildren(card('Trend (one summary a day)', pts.length ? table([
         { h: 'Day (UTC)', f: (d) => d.day }, { h: 'Findings', f: (d) => (d.findings_total === null ? '-' : d.findings_total) }, { h: 'Change', f: (d) => chg(d.total_change) },
         { h: 'Critical', f: (d) => (d.critical === null ? '-' : d.critical) }, { h: 'Critical change', f: (d) => chg(d.critical_change) }, { h: 'High', f: (d) => (d.high === null ? '-' : d.high) },
         { h: 'New critical', f: (d) => (d.new_critical === null ? '-' : d.new_critical) }, { h: 'New in all', f: (d) => (d.new_total === null ? '-' : d.new_total) }, { h: 'Machines', f: (d) => (d.machines === null ? '-' : d.machines) },
-      ], pts) : el('div', { className: 'mute', textContent: 'No summary yet. ASIX records one a day, from 03:00 UTC (ASIX_VULN_SUMMARY_HOUR), so the first appears after the next watchdog cycle past that hour. \u201CNew\u201D means first detected by the manager since the previous summary.' })));
+      ], pts) : el('div', { className: 'mute', textContent: 'No summary yet. ASIX records one a day, from 03:00 UTC (ASIX_VULN_SUMMARY_HOUR), so the first appears after the next watchdog cycle past that hour. \u201CNew\u201D means first detected by the manager since the previous summary.' })), worse);
     } catch (e) { trend.replaceChildren(card('Trend', el('div', { className: 'err', textContent: e.message }))); }
   };
   const showOne = (f) => detail.replaceChildren(card('Finding ' + f.cve,

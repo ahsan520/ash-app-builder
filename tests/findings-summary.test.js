@@ -88,12 +88,44 @@ describe('the indexer call for "new since" (against the stand-in)', () => {
     assert.strictEqual(last.body.size, 0);
     assert.deepStrictEqual((await ix.detectedSince(m(), '2026-12-01T00:00:00Z')).total, 0);
   });
+  it('lists the findings per machine and severity, the biggest first, with the name', async () => {
+    const r = await ix.machineSeverities(m());
+    assert.deepStrictEqual(r.map((x) => x.agent_id).sort(), ['001', '002']);
+    const a = r.find((x) => x.agent_id === '001'), b = r.find((x) => x.agent_id === '002');
+    assert.deepStrictEqual([a.name, a.total, a.critical, a.high, a.medium, a.low], ['WIN-DC01', 3, 1, 1, 1, 0]);
+    assert.deepStrictEqual([b.name, b.total, b.critical, b.high, b.medium, b.low], ['web1', 3, 1, 1, 0, 1]);
+    const last = srv.state.requests[srv.state.requests.length - 1];
+    assert.strictEqual(last.body.size, 0); assert.strictEqual(last.body.aggs.agents.terms.field, 'agent.id'); assert.strictEqual(last.body.aggs.agents.terms.size, 200);
+  });
+  it('the machine limit is a whole number from 1 to 500, else 200 (nothing a caller sends goes further)', async () => {
+    for (const [lim, want] of [[5, 5], [500, 500], [0, 200], [501, 200], ['5', 200], [1.5, 200], [undefined, 200]]) {
+      await ix.machineSeverities(m(), lim); assert.strictEqual(srv.state.requests[srv.state.requests.length - 1].body.aggs.agents.terms.size, want, String(lim));
+    }
+  });
   it('refuses a time that is not a plain ISO UTC time before any request is made', async () => {
     const before = srv.state.requests.length;
     for (const bad of ['2026-10-30', 'yesterday', '2026-10-30T00:00:00+02:00', '2026-13-45T00:00:00Z', '2026-10-30T00:00:00Z"} , "x', '', null, 5]) {
       await assert.rejects(ix.detectedSince(m(), bad), (e) => e.code === 'BAD_REQUEST', String(bad));
     }
     assert.strictEqual(srv.state.requests.length, before);
+  });
+});
+
+describe('the machine list in the event', () => {
+  const S = { total: 1, machines: 1, severity: {} }, N = {};
+  const mach = (i, c, h, t = 10) => ({ agent_id: String(i).padStart(3, '0'), name: 'pc' + i, total: t, critical: c, high: h, medium: 0, low: 0, unknown: 0 });
+  it('keeps the worst 50, critical first, then high, then findings, as [id, name, total, critical, high]', () => {
+    const list = [mach(1, 0, 5), mach(2, 3, 0), mach(3, 3, 2), mach(4, 0, 5, 99)]; for (let i = 5; i < 70; i++) list.push(mach(i, 0, 0, 1));
+    const p = fs.buildEvent(T, S, N, null, 's', at('2026-11-03T03:05:00Z'), list).parsed;
+    const out = JSON.parse(p.machines_json); assert.strictEqual(out.length, 50); assert.strictEqual(p.machines_listed, 50);
+    assert.deepStrictEqual(out.slice(0, 4), [['003', 'pc3', 10, 3, 2], ['002', 'pc2', 10, 3, 0], ['004', 'pc4', 99, 0, 5], ['001', 'pc1', 10, 0, 5]]);
+  });
+  it('no list (the call failed or the index is empty) leaves the field out', () => {
+    for (const m of [null, [], undefined]) assert.ok(!('machines_json' in fs.buildEvent(T, S, N, null, 's', at('2026-11-03T03:05:00Z'), m).parsed));
+  });
+  it('a long name is cut, and the event still passes the envelope check', () => {
+    const e = fs.buildEvent(T, S, N, null, 's', at('2026-11-03T03:05:00Z'), [{ ...mach(1, 1, 1), name: 'x'.repeat(500) }]); makeEnvelope(e);
+    assert.strictEqual(JSON.parse(e.parsed.machines_json)[0][1].length, 60);
   });
 });
 
@@ -116,6 +148,15 @@ describe('runTenant: one summary a day, and nothing changed when the indexer fai
     assert.deepStrictEqual([e.parsed.summary_day, e.parsed.findings_total, e.parsed.machines, e.parsed.critical, e.parsed.high, e.parsed.medium, e.parsed.low], ['2026-11-03', 6, 2, 2, 2, 1, 1]);
     assert.strictEqual(e.parsed.new_since, '2026-11-02T03:10:00Z');
     assert.strictEqual(e.parsed.new_total, 0, 'every finding of the stand-in was detected before that day');
+  });
+  it('the event carries the machines of the stand-in index', async () => {
+    const t = tenant(); await run(t, '2026-11-03T03:10:00Z');
+    const [e] = await stored(t); assert.deepStrictEqual(JSON.parse(e.parsed.machines_json).map((x) => x[0]).sort(), ['001', '002']); assert.strictEqual(e.parsed.machines_listed, 2);
+  });
+  it('if only the machine call fails the summary is still written, without the list', async () => {
+    const t = tenant(); const idx = { ...ix, machineSeverities: async () => { throw new Error('boom'); } };
+    assert.strictEqual((await run(t, '2026-11-03T03:10:00Z', { idx })).recorded, 1);
+    const [e] = await stored(t); assert.strictEqual(e.parsed.findings_total, 6); assert.ok(!('machines_json' in e.parsed));
   });
   it('a second cycle the same day does not read the indexer or write again', async () => {
     const t = tenant();

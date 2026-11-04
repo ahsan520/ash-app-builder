@@ -51,7 +51,14 @@ function sinceFor(prevAtMs, now = Date.now()) {
 
 const n0 = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
 // One event. `summary` = indexer.summary() result, `fresh` = indexer.detectedSince() result, `prev` = parsed fields of the previous summary or null.
-function buildEvent(tenantId, summary, fresh, prev, since, now = Date.now()) {
+// E6l: `machines` = indexer.machineSeverities() (or null/[] when that call failed). The worst TOP_MACHINES go into the event as the text field `machines_json`, a JSON list of
+// [agent_id, name, total, critical, high] (critical first, then high, then total), so the trend route can say which machines got worse between two summaries.
+const TOP_MACHINES = 50;
+function machinesJson(machines) {
+  const list = (Array.isArray(machines) ? machines : []).slice().sort((a, b) => (b.critical - a.critical) || (b.high - a.high) || (b.total - a.total) || (a.agent_id < b.agent_id ? -1 : 1)).slice(0, TOP_MACHINES);
+  return JSON.stringify(list.map((x) => [String(x.agent_id), String(x.name || '').slice(0, 60), n0(x.total), n0(x.critical), n0(x.high)]));
+}
+function buildEvent(tenantId, summary, fresh, prev, since, now = Date.now(), machines = null) {
   const day = dayOf(now), sv = summary.severity || {};
   const p = {
     summary_day: day, findings_total: n0(summary.total), machines: n0(summary.machines), distinct_cves: n0(summary.distinct_cves),
@@ -59,6 +66,7 @@ function buildEvent(tenantId, summary, fresh, prev, since, now = Date.now()) {
     new_total: n0(fresh.total), new_critical: n0(fresh.critical), new_high: n0(fresh.high), new_medium: n0(fresh.medium), new_low: n0(fresh.low),
     new_since: since,
   };
+  if (Array.isArray(machines) && machines.length) { p.machines_json = machinesJson(machines); p.machines_listed = Math.min(machines.length, TOP_MACHINES); }
   if (prev && Number.isFinite(Number(prev.findings_total))) {
     p.total_change = p.findings_total - Number(prev.findings_total);
     p.critical_change = p.critical - n0(Number(prev.critical));
@@ -100,7 +108,9 @@ async function runTenant(tenantId, { now = Date.now(), raiseAllowed = true, cfg 
     const since = sinceFor(prevEv ? Date.parse(prevEv.event_time || prevEv.received_at) : NaN, now);
     const summary = await idx.summary(m, {});
     const fresh = await idx.detectedSince(m, since);
-    await store.insertBatch(tenantId, [buildEvent(tenantId, summary, fresh, prevEv && prevEv.parsed, since, now)]);
+    // The per-machine part is an extra: if only that call fails the summary is still written, without it.
+    let machines = null; try { machines = await idx.machineSeverities(m); } catch (_) { machines = null; }
+    await store.insertBatch(tenantId, [buildEvent(tenantId, summary, fresh, prevEv && prevEv.parsed, since, now, machines)]);
     lastProblem.delete(tenantId); nextTry.delete(tenantId);
     return { raised: 0, closed: 0, recorded: 1 };
   } catch (e) {
@@ -110,4 +120,4 @@ async function runTenant(tenantId, { now = Date.now(), raiseAllowed = true, cfg 
   }
 }
 
-module.exports = { SOURCE_TYPE, COLLECTOR_ID, RETRY_MIN, SEVS, config, dayOf, plan, sinceFor, buildEvent, recent, runTenant };
+module.exports = { SOURCE_TYPE, COLLECTOR_ID, RETRY_MIN, SEVS, config, dayOf, plan, sinceFor, buildEvent, machinesJson, TOP_MACHINES, recent, runTenant };

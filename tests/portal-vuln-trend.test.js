@@ -38,6 +38,21 @@ async function open(trend) {
   return { tree, calls, text: () => texts(tree) };
 }
 
+describe('the "Machines that got worse" card', () => {
+  const W = { day: '2026-12-03', since_day: '2026-12-02', complete: true, worse_count: 2, worse: [
+    { agent_id: '002', name: 'web1', total: 9, critical: 4, high: 1, critical_change: 2, high_change: -1, is_new: false },
+    { agent_id: '004', name: '', total: 3, critical: 1, high: 0, critical_change: 1, high_change: 0, is_new: true }] };
+  it('shows each machine with its counts and signed changes, and marks a machine new in the list', async () => {
+    const p = await open({ success: true, points: [pt('2026-12-03')], machines: W }), t = p.text();
+    assert.match(t, /Machines that got worse \(2026-12-02 to 2026-12-03\)/); assert.match(t, /web1 \(002\) \| 4 \(\+2\) \| 1 \(-1\) \| 9 \| /);
+    assert.match(t, /004 \(004\) \| 1 \(\+1\) \| 0 \(0\) \| 3 \| new in the list/, 'a machine without a name falls back to its id');
+  });
+  it('nobody worse says so; no comparison yet says what is needed', async () => {
+    assert.match((await open({ success: true, points: [pt('2026-12-03')], machines: { ...W, worse: [], worse_count: 0 } })).text(), /No machine has more critical or high findings/);
+    assert.match((await open({ success: true, points: [pt('2026-12-03')], machines: null })).text(), /Needs two daily summaries with a machine list/);
+  });
+});
+
 describe('the Trend card of the Vulnerabilities tab', () => {
   it('asks for 14 days and shows them newest first, with the changes signed', async () => {
     const p = await open({ success: true, points: [pt('2026-12-01', { total_change: null, critical_change: null }), pt('2026-12-02', { total_change: -3 }), pt('2026-12-03', { new_critical: 2, total_change: 5 })] });
