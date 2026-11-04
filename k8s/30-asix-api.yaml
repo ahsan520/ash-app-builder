@@ -109,6 +109,13 @@ spec:
             # (0 = off for it); "Follow the server setting" there makes this value apply again (docs/endpoints.md, E4m).
             - name: ASIX_AGENT_WATCH_MIN
               value: "0"
+            # Daily vulnerability findings summary (src/endpoints/findings-summary.js, docs/endpoints.md E6k): once a UTC day, from this hour on, a tenant with a registered
+            # central indexer gets ONE `vuln-summary` event (totals by severity, findings first detected since the last summary). Feeds the Trend card on the Vulnerabilities
+            # tab and the rule "New critical vulnerabilities on endpoints". "false" = off. Tenants without an indexer are never touched.
+            - name: ASIX_VULN_SUMMARY
+              value: "true"
+            - name: ASIX_VULN_SUMMARY_HOUR
+              value: "3"
             # Group configuration (src/gateway/routes/group-config.js, docs/endpoints.md E10): "true" lets the portal change the monitored folders of an agent group on the endpoint manager
             # (one block of the group's agent.conf, through the separate group configuration user an operator registered, with a history and an undo). "false" = the Endpoints page can
             # look and preview but every change is refused. A deploy never turns this on.

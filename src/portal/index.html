@@ -1864,7 +1864,7 @@ const vulnLink = (u) => (/^https?:\/\//i.test(u || '') ? el('div', {}, el('a', {
 function vulnerabilitiesView() {
   const F = { severity: '', q: '', agent: '', sort: '-score', offset: 0 };
   const box = el('div', {}, el('div', { className: 'mute', textContent: 'Loading the vulnerability source...' }));
-  const cards = el('div', {}), out = el('div', {}), detail = el('div', {});
+  const cards = el('div', {}), out = el('div', {}), detail = el('div', {}), trend = el('div', {});
   const sev = el('select', {}, el('option', { value: '', textContent: 'Any severity' }), ...EP_VULN_SEVS.map((s) => el('option', { value: s, textContent: s[0].toUpperCase() + s.slice(1) })));
   const sort = el('select', {}, ...EP_VULN_SORTS.map(([v, t]) => el('option', { value: v, textContent: t })));
   const text = el('input', { placeholder: 'Package, vulnerability id or machine', style: 'min-width:260px' });
@@ -1884,6 +1884,18 @@ function vulnerabilitiesView() {
           card('Most common packages', s.top_packages.length ? table([{ h: 'Package', f: (r) => el('span', { style: 'cursor:pointer;text-decoration:underline', textContent: r.key, onclick: () => pickFilter('q', r.key) }) }, { h: 'Findings', f: (r) => r.count }], s.top_packages) : el('div', { className: 'mute', textContent: 'Nothing yet.' })),
           card('Most common vulnerabilities', s.top_cves.length ? table([{ h: 'Vulnerability', f: (r) => el('span', { style: 'cursor:pointer;text-decoration:underline', textContent: r.key, onclick: () => pickFilter('q', r.key) }) }, { h: 'Machines', f: (r) => r.count }], s.top_cves) : el('div', { className: 'mute', textContent: 'Nothing yet.' }))));
     } catch (e) { cards.replaceChildren(el('div', { className: 'err', textContent: e.message })); }
+  };
+  // E6k: the daily summaries (GET /v1/endpoints/vulnerabilities/trend): the last 14 days, newest first. No summary yet = a note, not an error.
+  const chg = (v) => (v === null || v === undefined ? '-' : (v > 0 ? '+' : '') + v);
+  const loadTrend = async () => {
+    try {
+      const r = await api('/v1/endpoints/vulnerabilities/trend?days=14'), pts = r.points.slice().reverse();
+      trend.replaceChildren(card('Trend (one summary a day)', pts.length ? table([
+        { h: 'Day (UTC)', f: (d) => d.day }, { h: 'Findings', f: (d) => (d.findings_total === null ? '-' : d.findings_total) }, { h: 'Change', f: (d) => chg(d.total_change) },
+        { h: 'Critical', f: (d) => (d.critical === null ? '-' : d.critical) }, { h: 'Critical change', f: (d) => chg(d.critical_change) }, { h: 'High', f: (d) => (d.high === null ? '-' : d.high) },
+        { h: 'New critical', f: (d) => (d.new_critical === null ? '-' : d.new_critical) }, { h: 'New in all', f: (d) => (d.new_total === null ? '-' : d.new_total) }, { h: 'Machines', f: (d) => (d.machines === null ? '-' : d.machines) },
+      ], pts) : el('div', { className: 'mute', textContent: 'No summary yet. ASIX records one a day, from 03:00 UTC (ASIX_VULN_SUMMARY_HOUR), so the first appears after the next watchdog cycle past that hour. \u201CNew\u201D means first detected by the manager since the previous summary.' })));
+    } catch (e) { trend.replaceChildren(card('Trend', el('div', { className: 'err', textContent: e.message }))); }
   };
   const showOne = (f) => detail.replaceChildren(card('Finding ' + f.cve,
     el('div', { style: 'margin-bottom:8px' }, vulnSevPill(f.severity), f.under_evaluation ? el('span', { className: 'mute', style: 'margin-left:8px', textContent: 'Still being evaluated by the vendor feed' }) : ''),
@@ -1925,8 +1937,8 @@ function vulnerabilitiesView() {
       kv({ Label: s.label, Address: s.host + ':' + s.port, 'Index': s.index, 'Indexer user': s.index_user, 'Findings stored': st.reachable ? st.count : '-', 'Pinned certificate (SHA-256)': s.cert_sha256, 'Registered or changed (UTC)': when(s.updated_at) }));
     if (!st.reachable) { box.replaceChildren(head); return; }
     if (!st.count) { box.replaceChildren(head, card('', el('div', { className: 'mute', textContent: 'The source answers but holds no findings yet. They appear after the manager has been switched to send to the indexer and has scanned a machine\u2019s installed software.' }))); return; }
-    box.replaceChildren(head, el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin:12px 0' }, sev, sort, text, agent, el('button', { className: 'btn pri', textContent: 'Search', onclick: apply })), cards, card('', out), detail);
-    loadCards(); loadList();
+    box.replaceChildren(head, el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin:12px 0' }, sev, sort, text, agent, el('button', { className: 'btn pri', textContent: 'Search', onclick: apply })), trend, cards, card('', out), detail);
+    loadTrend(); loadCards(); loadList();
   })();
   return [box];
 }

@@ -103,6 +103,7 @@ async function runOnce(opts = {}) {
     const pauseWatch = require('./pause-watch');
     const parseWatch = require('../ingestion/parse-watch');
     const agentWatch = require('../endpoints/agent-watch');
+    const findingsSummary = require('../endpoints/findings-summary');
     for (const t of (await lock.query("SELECT id FROM tenants WHERE status = 'active'")).rows) {
       try { const r = await runTenant(t.id, opts); total.tenants += 1; total.raised += r.raised; total.closed += r.closed; }
       catch (e) { total.errors += 1; console.error(`[watchdog] tenant ${t.id} failed: ${e.message}`); }
@@ -124,6 +125,9 @@ async function runOnce(opts = {}) {
       // Endpoint agents the manager reports Disconnected for too long (off until ASIX_AGENT_WATCH_MIN is set). Separate, so an unreachable manager never stops the alerts above.
       try { const r = await agentWatch.runTenant(t.id, opts); total.raised += r.raised; total.closed += r.closed; }
       catch (e) { total.errors += 1; console.error(`[watchdog] endpoint agent check for tenant ${t.id} failed: ${e.message}`); }
+      // The daily vulnerability findings summary (E6k): one event a day per tenant with a registered indexer. Separate, so an unreachable indexer never stops the alerts above.
+      try { await findingsSummary.runTenant(t.id, opts); }
+      catch (e) { total.errors += 1; console.error(`[watchdog] findings summary for tenant ${t.id} failed: ${e.message}`); }
     }
     return total;
   } finally {

@@ -68,6 +68,7 @@ async function start({ user = 'asix-vuln-a', password = 'Idx-Passw0rd!x', cn = '
       let hits = docs.slice();
       for (const f of ((body.query && body.query.bool && body.query.bool.filter) || [])) {
         if (f.term) { const [k, v] = Object.entries(f.term)[0]; hits = hits.filter((d) => String(get(d, k)) === String(v)); }
+        else if (f.range) { const [k, o] = Object.entries(f.range)[0]; hits = hits.filter((d) => { const v = get(d, k); return v !== undefined && (o.gte === undefined || String(v) >= o.gte); }); }
         else if (f.bool && f.bool.should) {
           const ws = f.bool.should.map((s) => { const [k, o] = Object.entries(s.wildcard)[0]; return { k, re: wildcard(o.value, o.case_insensitive) }; });
           hits = hits.filter((d) => ws.some((w) => w.re.test(String(get(d, w.k) ?? ''))));

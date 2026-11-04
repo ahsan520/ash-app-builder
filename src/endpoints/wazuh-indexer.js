@@ -220,6 +220,19 @@ async function summary(m, p) {
     top_agents: buckets(a.agents).slice(0, 10).map((b) => ({ agent_id: txt(b.key, 20), name: txt(buckets(b.name)[0] && buckets(b.name)[0].key, 100), count: num(b.doc_count) || 0 })).filter((b) => b.agent_id),
   };
 }
+// E6k: how many findings were first detected at or after `sinceIso`, by severity. A fixed body (a range on the detection time and one terms aggregation); the time is checked
+// here as a strict ISO-8601 UTC text, so nothing a caller sends reaches the query. { total, critical, high, medium, low, unknown }
+const SINCE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+function detectedSinceBody(sinceIso) {
+  if (typeof sinceIso !== 'string' || !SINCE_RE.test(sinceIso) || Number.isNaN(Date.parse(sinceIso))) throw new WazuhIndexerError('BAD_REQUEST', 'since must be an ISO-8601 UTC time such as 2026-11-03T03:00:00Z');
+  return { size: 0, track_total_hits: true, query: { bool: { filter: [{ range: { 'vulnerability.detected_at': { gte: sinceIso } } }] } }, aggs: { severity: { terms: { field: 'vulnerability.severity', size: 10 } } } };
+}
+async function detectedSince(m, sinceIso) {
+  const j = await call(m, 'search', detectedSinceBody(sinceIso)), a = j.aggregations;
+  if (!a || typeof a !== 'object') throw bad();
+  const by = {}; for (const b of buckets(a.severity)) { const k = sev(b.key); if (k) by[k] = (by[k] || 0) + (num(b.doc_count) || 0); }
+  return { total: total(j) ?? 0, critical: by.critical || 0, high: by.high || 0, medium: by.medium || 0, low: by.low || 0, unknown: by.unknown || 0 };
+}
 // How many findings the index holds (the reachability check and the registration check): { count }
 async function count(m) {
   const j = await call(m, 'count');
@@ -227,4 +240,4 @@ async function count(m) {
   return { count: c };
 }
 
-module.exports = { WazuhIndexerError, checkUrl, checkIndexName, parseQuery, buildFilter, listBody, summaryBody, shapeFinding, listFindings, summary, count, SEVERITIES, SORTS, LIMIT_MAX, LIMIT_DEFAULT, WINDOW_MAX, INDEX_RE, AGENT_ID_RE };
+module.exports = { WazuhIndexerError, checkUrl, checkIndexName, parseQuery, buildFilter, listBody, summaryBody, shapeFinding, listFindings, summary, count, detectedSince, detectedSinceBody, SEVERITIES, SORTS, LIMIT_MAX, LIMIT_DEFAULT, WINDOW_MAX, INDEX_RE, AGENT_ID_RE };

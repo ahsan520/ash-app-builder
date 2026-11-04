@@ -85,6 +85,10 @@ A manager that is deleted or renamed leaves `wazuh-states-vulnerabilities-<its n
 
 It refuses an empty keep file, a keep file none of whose names exists here (wrong file or wrong indexer), a line that is not an exact index name, and more than `--max-delete` (default 5) removals. Each delete names one exact index. A manager that is installed but not yet registered in ASIX is protected only by `--min-age-days`: register it first, or read the preview. A deleted index is not recoverable; a manager that still runs writes a new one on its next scan (not verified against a real indexer). The admin password is read from `/etc/wazuh-indexer/asix-admin.pass` and never put on a command line. Tests: `tests/wazuh-indexer-prune.test.js`, `tests/wazuh-indexer-db.test.js`.
 
+## The daily summary of findings (E6k, built 2026-11-03)
+
+The indexer keeps the current findings only (a fixed package takes its findings away), so ASIX writes one small `vuln-summary` event a day per tenant into its event store (ClickHouse or PostgreSQL) with the totals by severity and the findings first detected since the last summary. It uses the same read-only indexer user and two fixed calls (the totals, and a count of findings whose `vulnerability.detected_at` is at or after a time); nothing is written to the indexer and nothing changes on the indexer VM. The Vulnerabilities tab shows the trend and the rule **New critical vulnerabilities on endpoints** alerts on it. `ASIX_VULN_SUMMARY=false` turns it off, `ASIX_VULN_SUMMARY_HOUR` (0 to 23, UTC, default 3) moves it. Deleting an index (E6j) or a manager that re-creates its index makes the next day look like a day of new findings. See `docs/endpoints.md`, \"E6k as built\".
+
 ## Lab: the broker VM as the indexer
 
 **Possible for the lab, not for production** (decision 2 above stands: the broker VM stays small and is the client's, and a second Java service on it competes with the Wazuh manager for memory). To try the tab with the one VM that already runs the Wazuh manager (E4b):

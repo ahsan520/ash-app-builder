@@ -406,6 +406,17 @@ const BUILTIN_RULES = [
       xql: 'cluster_status = "red" or cluster_status = "unreachable"',
     },
   },
+  // ---- E6k: the daily findings summary (src/endpoints/findings-summary.js) writes one `vuln-summary` event a day; this rule reads its fields ----
+  {
+    key: 'vuln-new-critical', kind: 'bioc', category: 'Endpoint Security', name: 'New critical vulnerabilities on endpoints',
+    description: 'The daily summary of vulnerability findings says the endpoint manager detected at least one new critical finding since the previous summary. Open Endpoints, Vulnerabilities, severity critical, sorted newest first. One alert a day at most.',
+    severity: 'high', mitre: [],
+    definition: {
+      source_type: 'vuln-summary', group_by: 'field:summary_day', threshold: 1, window_minutes: 1500, run_every_minutes: 5, mode: 'realtime',
+      suppression: { enabled: true, minutes: 1440 },
+      xql: 'new_critical > 0',
+    },
+  },
 ];
 
 // Built-in rules whose shipped query changed after installs had already stored the old one. ensureBuiltinRules inserts once and

@@ -52,7 +52,7 @@ describe('the Vulnerabilities tab', () => {
   it('asks for the source first and shows the findings: cards, severity counts, top lists and a table', async () => {
     const p = await open();
     assert.strictEqual(p.calls[0], '/v1/endpoints/vulnerabilities/status');
-    assert.deepStrictEqual(p.calls.slice(1).sort(), ['/v1/endpoints/vulnerabilities/summary?', '/v1/endpoints/vulnerabilities?limit=50&offset=0&sort=-score'].sort());
+    assert.deepStrictEqual(p.calls.slice(1).sort(), ['/v1/endpoints/vulnerabilities/summary?', '/v1/endpoints/vulnerabilities/trend?days=14', '/v1/endpoints/vulnerabilities?limit=50&offset=0&sort=-score'].sort());
     const t = p.text(); assert.match(t, /Reachable/); assert.match(t, /idx\.internal:9200/); assert.match(t, /wazuh-states-vulnerabilities-acme/); assert.match(t, /Findings stored \| 6/);
     assert.match(t, /5 different vulnerabilities on 2 machines/); assert.match(t, /critical {2}2/); assert.match(t, /Most affected machines/); assert.match(t, /WIN-DC01 \(001\)/); assert.match(t, /Most common packages/); assert.match(t, /openssl/);
     assert.match(t, /CVE-2026-1001/); assert.match(t, /9\.8/); assert.match(t, /1 to 2 of 120/);
