@@ -197,7 +197,7 @@ describe('Endpoints page, Alerts tab', () => {
   });
   it('the other tabs and an unreachable manager are unchanged: no alert call is made for them', async () => {
     const p = await open({}, { ...MANAGER, status: { reachable: false, code: 'TIMEOUT', message: 'no answer' } }); assert.match(p.text(), /Not reachable/); await p.click('Agents');
-    assert.ok(!p.calls.some((c) => c.p.includes('/alerts')));
+    assert.ok(!p.calls.some((c) => c.p.includes('/alerts') && !c.p.startsWith('/v1/endpoints/alerts/by-machine')), 'the Agents tab reads only the per-machine count (E6t), never the alert list or summary');
   });
   it('the breadcrumb follows the open tab, and the pills and times do not wrap', async () => {
     const crumb = el('div', {}); global.document = { getElementById: (id) => (id === 'crumb' ? crumb : null) };

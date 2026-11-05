@@ -70,7 +70,7 @@ describe('Endpoints page', () => {
     for (const { f, route, methods } of fns) { assert.ok(methods.every((m) => f.includes("method: '" + m + "'"))); assert.ok((f.match(/method:/g) || []).length === methods.map((m) => (f.match(new RegExp("method: '" + m + "'", 'g')) || []).length).reduce((a, b) => a + b, 0)); assert.ok((f.match(/api\('([^']*)'/g) || []).every((x) => x.startsWith(route.slice(0, -1)))); assert.ok(!/innerHTML|insertAdjacentHTML|outerHTML|document\.write/.test(f)); }
     assert.ok(!/innerHTML|insertAdjacentHTML|method:/.test(rest));
     const p = await open(); await p.click('Agents');
-    assert.ok(p.calls.length >= 3 && p.calls.every((c) => c.method === 'GET' && /^\/v1\/endpoints\/(manager|agents|agent-alert)/.test(c.p)));
+    assert.ok(p.calls.length >= 3 && p.calls.every((c) => c.method === 'GET' && /^\/v1\/endpoints\/(manager|agents|agent-alert|alerts\/by-machine)/.test(c.p)));
   });
   it('database not ready: says so and calls nothing else', async () => {
     const p = await open({ available: false, registered: false, status: null });

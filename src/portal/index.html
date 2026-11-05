@@ -1929,7 +1929,7 @@ function vulnerabilitiesView(focusAgent) {
       if (r.points.length) drawChart();
       // E6s: the indexer VM's disk and health (r.indexer_disk, from the reporter of E6i). Absent from an older server = no card.
       const dk = r.indexer_disk, gb = (v) => (v === null || v === undefined ? '-' : v + ' GB');
-      const diskCard = dk === undefined ? '' : !dk ? card('Findings indexer disk', el('div', { className: 'mute', textContent: 'No report from the indexer VM in the last 6 hours. Install the reporter there with scripts/deploy/install-indexer-health.sh (docs/wazuh-indexer.md); it reports every 5 minutes.' }))
+      const diskCard = dk === undefined ? '' : !dk ? card('Findings indexer disk', el('div', { className: 'mute', textContent: 'No report from the indexer VM in the last 6 hours. Install the reporter there with scripts/deploy/install-indexer-health.sh; it reports every 5 minutes.' }))
         : card('Findings indexer disk', table([
           { h: 'Indexer VM', f: (d) => d.host },
           { h: 'Disk used', f: (d) => (d.disk_used_pct === null ? pill('Not measured', 'off') : pill(d.disk_used_pct + '%' + (d.disk_used_pct >= 90 ? ' full' : d.disk_used_pct >= 80 ? ' getting full' : ''), d.disk_used_pct >= 90 ? 'bad' : d.disk_used_pct >= 80 ? 'off' : 'ok')) },
@@ -2049,6 +2049,7 @@ async function pgEndpoints() {
           el('div', { style: 'margin-top:10px' }, agentConfigCard(a.id))));
       } catch (e) { detail.replaceChildren(el('div', { className: 'err', textContent: e.message })); }
     };
+    let alertCounts = null;   // E6t: { map: name -> alerts in 24h, truncated } or null
     const cols = [
       { h: 'ID', f: (a) => el('span', { style: 'cursor:pointer;text-decoration:underline', textContent: a.id, onclick: () => showOne(a.id) }) },
       { h: 'Name', f: (a) => a.name }, { h: 'Address', f: (a) => a.ip }, { h: 'Status', f: (a) => { const s = EP_STATUS[a.status] || [a.status || '-', 'off']; return pill(s[0], s[1]); } },
@@ -2056,7 +2057,7 @@ async function pgEndpoints() {
       { h: 'OS', f: (a) => [a.os && a.os.name, a.os && a.os.version].filter(Boolean).join(' ') || (a.os && a.os.platform) || '-' },
       { h: 'Last seen (UTC)', f: (a) => when(a.last_keep_alive) }, { h: 'Registered (UTC)', f: (a) => when(a.date_added) },
       { h: 'Findings', f: (a) => el('span', { style: 'cursor:pointer;text-decoration:underline', title: 'Open the vulnerabilities of this machine', textContent: 'Vulnerabilities', onclick: () => openFindings(a.id) }) },
-      { h: 'Alerts', f: (a) => (a.name ? el('span', { style: 'cursor:pointer;text-decoration:underline', title: 'Open the alerts of this machine', textContent: 'Alerts', onclick: () => openAlerts(a.name) }) : '-') },
+      { h: 'Alerts', f: (a) => (a.name ? el('span', { style: 'cursor:pointer;text-decoration:underline', title: 'Open the alerts of this machine', textContent: alertCounts && !(alertCounts.truncated && !alertCounts.map.has(a.name)) ? 'Alerts (' + (alertCounts.map.get(a.name) || 0) + ')' : 'Alerts', onclick: () => openAlerts(a.name) }) : '-') },
     ];
     const load = async () => {
       out.replaceChildren(el('div', { className: 'mute', textContent: 'Loading...' }));
@@ -2064,7 +2065,10 @@ async function pgEndpoints() {
       if (q.search.trim()) p.set('search', q.search.trim());
       if (q.status) p.set('status', q.status);
       try {
+        // E6t: the alerts of the last 24 hours per machine name (the window the link opens), asked for at the same time as the agents. A person without the permission, or any failure, leaves the plain link.
+        const counting = api('/v1/endpoints/alerts/by-machine?window=24h').then((c) => (c && Array.isArray(c.machines) ? { map: new Map(c.machines.map((m) => [m.name, m.count])), truncated: !!c.truncated } : null), () => null);
         const r = await api('/v1/endpoints/agents?' + p.toString()), to = q.offset + r.agents.length;
+        alertCounts = await counting;
         const prev = el('button', { className: 'btn', textContent: 'Previous', onclick: () => { q.offset = Math.max(0, q.offset - EP_LIMIT); load(); } });
         const next = el('button', { className: 'btn', textContent: 'Next', onclick: () => { q.offset += EP_LIMIT; load(); } });
         prev.disabled = q.offset === 0; next.disabled = to >= r.total;

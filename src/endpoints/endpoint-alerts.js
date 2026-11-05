@@ -86,6 +86,23 @@ function listPlan(f) { return { v: 1, from: f.from, to: null, stages: stages(f, 
 function severityPlan(f) {
   return { v: 1, from: f.from, to: null, stages: [...stages(f, { withSeverity: false }), { op: 'comp', aggs: [{ fn: 'count', field: null, alias: 'n' }], by: ['alert_severity'] }], mode: 'comp', limit: 20, columns: ['alert_severity', 'n'] };
 }
+// E6t: exact number of alerts per machine name in the window (the Agents tab's "Alerts (n)" link). Only the window counts: no other filter, so the number is what the link opens (the link
+// clears every other filter). One comp over the parsed agent name; MACHINE_ROWS is the most names counted, and `truncated` says the store had more.
+const MACHINE_ROWS = 5000;
+function machinePlan(f) {
+  return { v: 1, from: f.from, to: null, stages: [{ op: 'dataset', names: [SOURCE_TYPE], list: false }, { op: 'comp', aggs: [{ fn: 'count', field: null, alias: 'n' }], by: ['agent_name'] }], mode: 'comp', limit: MACHINE_ROWS, columns: ['agent_name', 'n'] };
+}
+// comp rows -> [{ name, count }], most alerts first. A row without a name (an alert the manager sent with no agent name) or with a bad count is left out; the name is cut to the 200 characters the filter takes.
+function machineCounts(rows) {
+  const by = new Map();
+  for (const r of rows || []) {
+    const n = Number(r.n), name = typeof r.agent_name === 'string' ? r.agent_name.slice(0, 200) : '';
+    if (!name || !Number.isInteger(n) || n < 0) continue;
+    by.set(name, (by.get(name) || 0) + n);
+  }
+  return [...by].map(([name, count]) => ({ name, count })).sort((a, b) => (b.count - a.count) || (a.name < b.name ? -1 : 1));
+}
+
 function samplePlan(f) { return { v: 1, from: f.from, to: null, stages: stages(f, { withSeverity: false }), mode: 'raw', limit: SAMPLE, columns: null }; }
 
 // ---- shaping -------------------------------------------------------------------------------------------------------------------------------------
@@ -225,4 +242,4 @@ async function mitreForGroups(store, tenantId, rows) {
 
 module.exports = {
   KINDS, FILE_EVENTS, CHECK_RESULTS, mitreOfEvents, mitreView, mitreForGroups, MAX_ALERT_TECHNIQUES, MAX_ALERT_TACTICS, SOURCE_TYPE, SEVERITIES, BANDS, WINDOWS, DEFAULT_WINDOW, MAX_LIMIT, DEFAULT_LIMIT, MAX_OFFSET, MAX_EXCLUDE, SAMPLE, QUERY_KEYS, MITRE_RE,
-  parseQuery, listPlan, severityPlan, samplePlan, shape, mitreOf, mitreUrl, topLists, severityCounts };
+  parseQuery, listPlan, severityPlan, samplePlan, machinePlan, machineCounts, MACHINE_ROWS, shape, mitreOf, mitreUrl, topLists, severityCounts };

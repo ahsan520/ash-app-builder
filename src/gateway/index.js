@@ -79,6 +79,7 @@ app.use(require('./routes/wazuh-manager'));
 app.use(require('./routes/wazuh-indexer'));
 app.use(require('./routes/agent-alert'));
 app.use(require('./routes/vuln-trend'));
+app.use(require('./routes/alert-machines'));   // E6t: before endpoint-alerts, whose /alerts/:id would otherwise take "by-machine"
 app.use(require('./routes/endpoint-alerts'));
 app.use(require('./routes/endpoint-checks'));
 app.use(require('./routes/score-alert'));
