@@ -162,7 +162,7 @@ describe('a machine opens its findings', () => {
   });
 });
 
-describe('the Agents tab links to the findings', () => {
+describe('the Agents tab links to the findings and the alerts', () => {
   const agent = (id, name) => ({ id, name, ip: '10.0.0.' + Number(id), register_ip: 'any', status: 'active', version: 'v4.14.9', groups: ['default'], last_keep_alive: '2026-10-25T19:00:00Z', date_added: '2026-10-20T10:00:00Z', node: 'n', manager: 'm', os: { name: 'Ubuntu', version: '24.04', platform: 'ubuntu', arch: 'x86_64' } });
   const LIST = { total: 2, limit: 50, offset: 0, agents: [agent('001', 'web01'), agent('002', 'db01')] };
   const MANAGER = { available: true, registered: true, label: 'lab', host: '192.168.68.54', port: 55000, api_user: 'u', cert_sha256: 'x', updated_at: '2026-10-25T18:49:08Z', status: { reachable: true, version: 'v4.14.9', max_agents: 'unlimited', timezone: 'UTC' } };
@@ -178,6 +178,8 @@ describe('the Agents tab links to the findings', () => {
       if (p.startsWith('/v1/endpoints/vulnerabilities/summary')) return { success: true, summary: SUMMARY };
       if (p.startsWith('/v1/endpoints/vulnerabilities/trend')) return { success: true, points: [] };
       if (p.startsWith('/v1/endpoints/vulnerabilities?')) return { success: true, total: 0, limit: 50, offset: 0, findings: [] };
+      if (p.startsWith('/v1/endpoints/alerts/summary')) return { success: true, window: '24h', since: 'x', severity: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0, total: 0 }, top: { rules: [], agents: [], techniques: [], tactics: [] }, sampled: { events: 0, truncated: false } };
+      if (p.startsWith('/v1/endpoints/alerts?')) return { success: true, alerts: [], count: 0, offset: 0, limit: 50, more: false, window: '24h', since: 'x' };
       throw new Error('unexpected call ' + p);
     };
     const fn = new Function('el', 'card', 'pill', 'table', 'kv', 'when', 'api', 'route', 'copyBtn', pageSource + '\nreturn pgEndpoints;')(el, card, pill, table, kv, when, api, () => {}, () => el('button'));
@@ -213,6 +215,46 @@ describe('the Agents tab links to the findings', () => {
     const from = p.calls.length; await (nodes(p.tree).find((n) => n.attrs.title === 'Open the vulnerabilities of this machine')).attrs.onclick(); await tick();
     assert.ok(p.calls.slice(from).every((c) => c.startsWith('/v1/endpoints/vulnerabilities')));
     assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write/.test(cut('async function pgEndpoints')));
+  });
+  // E6r: from a machine to its alerts (the Alerts tab filters by the machine's name).
+  const alertCalls = (p, from) => p.calls.slice(from).filter((c) => c.startsWith('/v1/endpoints/alerts'));
+  it('each machine row has an Alerts link that opens the Alerts tab on that machine, by name, with every other filter cleared', async () => {
+    const p = await page(); await p.click(tabByLabel('Agents'));
+    const links = nodes(p.tree).filter((n) => n.attrs.title === 'Open the alerts of this machine'); assert.strictEqual(links.length, 2);
+    const from = p.calls.length; await links[1].attrs.onclick(); await tick();
+    const a = alertCalls(p, from); assert.ok(a.length >= 2, a.join('\n')); assert.ok(a.every((c) => new URLSearchParams(c.split('?')[1]).get('agent') === 'db01'), a.join('\n'));
+    assert.ok(a.every((c) => { const q = new URLSearchParams(c.split('?')[1]); return q.get('window') === '24h' && !q.has('mitre') && !q.has('q') && !q.has('rule') && !q.has('exclude_rule'); }), 'nothing else is filtered');
+    assert.ok(nodes(p.tree).some((n) => n.attrs.placeholder === 'Machine name' && n.value === 'db01'), 'the Machine name box shows the filter');
+    assert.ok(nodes(p.tree).some((n) => /xtab/.test(n.attrs.className || '') && /on/.test(n.attrs.className) && n.attrs.textContent === 'Alerts'));
+  });
+  it('earlier filters on the Alerts tab (ATT&CK id, severity, search text) are replaced, not added to', async () => {
+    const p = await page(); await p.click(tabByLabel('Alerts'));
+    const box = (ph) => nodes(p.tree).find((n) => n.attrs.placeholder === ph), sevSel = () => nodes(p.tree).find((n) => n.tag === 'select' && n.kids.some((o) => o.attrs && o.attrs.textContent === 'Any severity'));
+    box('ATT&CK id, e.g. T1110').value = 'T1110'; sevSel().value = 'high'; box('Search description, user, address or file').value = 'sshd';
+    await p.click((n) => n.attrs.textContent === 'Search' && typeof n.attrs.onclick === 'function');
+    const typed = alertCalls(p, 0).pop(); assert.ok(/mitre=T1110/.test(typed) || alertCalls(p, 0).some((c) => /mitre=T1110/.test(c)), 'the filters were really committed first');
+    await p.click(tabByLabel('Agents')); const from = p.calls.length; await (nodes(p.tree).filter((n) => n.attrs.title === 'Open the alerts of this machine')[0]).attrs.onclick(); await tick();
+    const a = alertCalls(p, from); assert.ok(a.length >= 2); assert.ok(a.every((c) => { const q = new URLSearchParams(c.split('?')[1]); return !q.has('mitre') && !q.has('q') && !q.has('severity') && q.get('agent') === 'web01'; }), a.join('\n'));
+    assert.strictEqual(box('ATT&CK id, e.g. T1110').value, ''); assert.strictEqual(sevSel().value, '');
+  });
+  it('an agent\'s detail has a Show its alerts button that does the same', async () => {
+    const p = await page(); await p.click(tabByLabel('Agents'));
+    await p.click((n) => typeof n.attrs.onclick === 'function' && n.attrs.textContent === '001' && n.attrs.style && /underline/.test(n.attrs.style));
+    const from = p.calls.length; await p.click((n) => n.attrs.textContent === 'Show its alerts');
+    const a = alertCalls(p, from); assert.ok(a.length >= 2); assert.ok(a.every((c) => new URLSearchParams(c.split('?')[1]).get('agent') === 'web01'));
+  });
+  it('a machine with no name has no Alerts link (a dash), and the name is cut to the 200 characters the server takes', async () => {
+    const saved = LIST.agents[1].name; LIST.agents[1].name = '';
+    try { const p = await page(); await p.click(tabByLabel('Agents')); assert.strictEqual(nodes(p.tree).filter((n) => n.attrs.title === 'Open the alerts of this machine').length, 1); } finally { LIST.agents[1].name = saved; }
+    LIST.agents[0].name = 'n'.repeat(300);
+    try { const p = await page(); await p.click(tabByLabel('Agents')); const from = p.calls.length; await (nodes(p.tree).find((n) => n.attrs.title === 'Open the alerts of this machine')).attrs.onclick(); await tick();
+      assert.ok(alertCalls(p, from).every((c) => new URLSearchParams(c.split('?')[1]).get('agent').length === 200)); } finally { LIST.agents[0].name = 'web01'; }
+  });
+  it('the Alerts link only switches tabs and reads the two alert routes; the machine name is a query value, not markup', async () => {
+    LIST.agents[0].name = 'x&agent=evil<img>'; 
+    try { const p = await page(); await p.click(tabByLabel('Agents')); const from = p.calls.length; await (nodes(p.tree).find((n) => n.attrs.title === 'Open the alerts of this machine')).attrs.onclick(); await tick();
+      const c = p.calls.slice(from); assert.ok(c.length >= 2 && c.every((x) => x.startsWith('/v1/endpoints/alerts')), c.join('\n'));
+      const qv = new URLSearchParams(c[0].split('?')[1]); assert.strictEqual(qv.get('agent'), 'x&agent=evil<img>'); assert.strictEqual(qv.getAll('agent').length, 1); } finally { LIST.agents[0].name = 'web01'; }
   });
   it('is wired: the tab entry passes the focus and a tab click clears it', () => {
     assert.match(html, /\['vuln', 'Vulnerabilities', \(\) => vulnerabilitiesView\(vulnFocus\)\]/);

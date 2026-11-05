@@ -2002,6 +2002,9 @@ async function pgEndpoints() {
   const af = { window: '24h', severity: '', q: '', agent: '', mitre: '', rule: '', exclude: [], file_event: '', check_result: '', policy: '', offset: 0 };
   const ff = { window: '24h', severity: '', q: '', agent: '', mitre: '', rule: '', exclude: [], file_event: '', check_result: '', policy: '', offset: 0 };   // the File integrity tab keeps its own filters
   const cf = { window: '24h', severity: '', q: '', agent: '', mitre: '', rule: '', exclude: [], file_event: '', check_result: '', policy: '', offset: 0 };   // so does the Configuration checks tab (E6d)
+  // E6r: from a machine to its alerts. The Alerts tab filters by the machine's NAME (the alert's agent name), so the name is what is passed; every other filter of that tab is cleared,
+  // so the list is that machine's alerts in the last 24 hours and nothing else. The tab keeps the filter afterwards, as it keeps all of its filters; the Machine name box shows it.
+  const openAlerts = (name) => { Object.assign(af, { window: '24h', severity: '', q: '', agent: String(name || '').slice(0, 200), mitre: '', rule: '', exclude: [], offset: 0 }); tab = 'alerts'; draw(); };
   const tabs = el('div', {}), body = el('div', {});
 
   const overview = () => [
@@ -2030,7 +2033,7 @@ async function pgEndpoints() {
         detail.replaceChildren(card('Agent ' + a.id, kv({ Name: a.name, Status: (EP_STATUS[a.status] || [a.status])[0], Address: a.ip, 'Registered from': a.register_ip, Version: a.version, Groups: (a.groups || []).join(', '),
           OS: [o.name, o.version, o.arch].filter(Boolean).join(' '), Platform: o.platform, 'Last seen (UTC)': when(a.last_keep_alive), 'Registered (UTC)': when(a.date_added), Node: a.node, Manager: a.manager }),
           aa && aa.available ? el('div', { style: 'margin-top:10px' }, agentSkipButton(aa, a.id, (x) => { aa = x; draw(); showOne(id); })) : '',
-          el('div', { style: 'margin-top:10px' }, el('button', { className: 'btn', textContent: 'Show its vulnerabilities', onclick: () => openFindings(a.id) })),
+          el('div', { style: 'margin-top:10px;display:flex;gap:8px;flex-wrap:wrap' }, el('button', { className: 'btn', textContent: 'Show its vulnerabilities', onclick: () => openFindings(a.id) }), a.name ? el('button', { className: 'btn', textContent: 'Show its alerts', onclick: () => openAlerts(a.name) }) : ''),
           el('div', { style: 'margin-top:10px' }, agentChecksCard(a.id)),
           el('div', { style: 'margin-top:10px' }, agentConfigCard(a.id))));
       } catch (e) { detail.replaceChildren(el('div', { className: 'err', textContent: e.message })); }
@@ -2042,6 +2045,7 @@ async function pgEndpoints() {
       { h: 'OS', f: (a) => [a.os && a.os.name, a.os && a.os.version].filter(Boolean).join(' ') || (a.os && a.os.platform) || '-' },
       { h: 'Last seen (UTC)', f: (a) => when(a.last_keep_alive) }, { h: 'Registered (UTC)', f: (a) => when(a.date_added) },
       { h: 'Findings', f: (a) => el('span', { style: 'cursor:pointer;text-decoration:underline', title: 'Open the vulnerabilities of this machine', textContent: 'Vulnerabilities', onclick: () => openFindings(a.id) }) },
+      { h: 'Alerts', f: (a) => (a.name ? el('span', { style: 'cursor:pointer;text-decoration:underline', title: 'Open the alerts of this machine', textContent: 'Alerts', onclick: () => openAlerts(a.name) }) : '-') },
     ];
     const load = async () => {
       out.replaceChildren(el('div', { className: 'mute', textContent: 'Loading...' }));

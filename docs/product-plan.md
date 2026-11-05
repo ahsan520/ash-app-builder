@@ -745,6 +745,9 @@ A broker's heartbeat now says how many CPUs and how much memory its VM has and h
 ### Indexer installer and certificates without loopback (E6n, built 2026-11-04)
 The installer for the central indexer VM warns when the certificate already on the machine does not name `127.0.0.1` and checks the indexer at `--address` first, so a healthy indexer is no longer reported as broken. Script only; see `docs/endpoints.md`, "E6n as built".
 
+### Alerts per machine (E6r, built 2026-11-04)
+From a machine on the Agents tab, one click opens the Alerts tab on that machine. See `docs/endpoints.md`, "E6r as built".
+
 ### A not rated filter on the Vulnerabilities tab (E6q, built 2026-11-04)
 The not rated pill and a Not rated choice in the severity dropdown list the findings the source gives no severity. See `docs/endpoints.md`, "E6q as built".
 
