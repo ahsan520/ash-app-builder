@@ -43,6 +43,14 @@ describe('the search body is built here, never taken from the request', () => {
     for (const s of w.should) { const o = Object.values(s.wildcard)[0]; assert.strictEqual(o.value, '*a\\*b\\?c\\\\d*'); assert.strictEqual(o.case_insensitive, true); }
     assert.deepStrictEqual(ix.buildFilter(q({})), { bool: { filter: [] } });
   });
+  it('severity=unknown (not rated, E6q) is everything that is not critical, high, medium or low, built here as a fixed must_not; the four named severities stay exact terms', () => {
+    assert.strictEqual(ix.parseQuery({ severity: 'unknown' }).severity, 'unknown'); assert.strictEqual(ix.parseQuery({ severity: 'UNKNOWN' }).severity, 'unknown');
+    assert.deepStrictEqual(ix.buildFilter(q({ severity: 'unknown', agent: '002' })).bool.filter, [{ bool: { must_not: [{ terms: { 'vulnerability.severity': ['Critical', 'High', 'Medium', 'Low'] } }] } }, { term: { 'agent.id': '002' } }]);
+    assert.deepStrictEqual(ix.buildFilter(q({ severity: 'low' })).bool.filter, [{ term: { 'vulnerability.severity': 'Low' } }]);
+    assert.match(ix.parseQuery({ severity: 'urgent' }).error, /critical, high, medium, low, unknown/);
+    assert.ok(ix.parseQuery({ severity: 'unknown; drop' }).error && ix.parseQuery({ severity: 'unknown*' }).error, 'nothing but the word');
+    assert.deepStrictEqual(ix.summaryBody(q({ severity: 'unknown' })).query, ix.buildFilter(q({ severity: 'unknown' })), 'the cards follow the filter too');
+  });
   it('the list body has fixed size, source fields and sort; the summary body has fixed aggregations and no hits', () => {
     const b = ix.listBody(q({ limit: '10', offset: '20' })); assert.deepStrictEqual([b.size, b.from, b.track_total_hits], [10, 20, true]);
     assert.ok(Array.isArray(b._source) && !b._source.includes('agent.groups') && b._source.includes('vulnerability.id'));

@@ -28,6 +28,7 @@ const LIMIT_DEFAULT = 50, LIMIT_MAX = 100;
 const WINDOW_MAX = 10000;                           // OpenSearch's default index.max_result_window: from + size may not pass it
 const INDEX_RE = /^wazuh-states-vulnerabilities-[a-z0-9][a-z0-9._-]{0,100}$/;
 const SEVERITIES = ['critical', 'high', 'medium', 'low'];
+const NOT_RATED = 'unknown';
 const SORTS = { score: 'vulnerability.score.base', detected: 'vulnerability.detected_at', package: 'package.name', agent: 'agent.name', cve: 'vulnerability.id', severity: 'vulnerability.severity' };
 const AGENT_ID_RE = /^[0-9]{3,8}$/;
 const CVE_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,59}$/;
@@ -134,8 +135,9 @@ function parseQuery(q, { list = true } = {}) {
   }
   if (has('severity')) {
     const s = String(q.severity).toLowerCase();
-    if (!SEVERITIES.includes(s)) return { error: 'severity must be one of ' + SEVERITIES.join(', ') };
-    out.severity = s[0].toUpperCase() + s.slice(1);
+    // E6q: 'unknown' is "not rated": the findings the source gives no severity (Wazuh writes "-"), the same group the summary counts as `unknown`.
+    if (!SEVERITIES.includes(s) && s !== NOT_RATED) return { error: 'severity must be one of ' + SEVERITIES.concat(NOT_RATED).join(', ') };
+    out.severity = s === NOT_RATED ? NOT_RATED : s[0].toUpperCase() + s.slice(1);
   }
   if (has('agent')) { if (!AGENT_ID_RE.test(String(q.agent))) return { error: 'agent must be an agent id of 3 to 8 digits' }; out.agent = String(q.agent); }
   if (has('cve')) { if (!CVE_RE.test(String(q.cve))) return { error: 'cve must be a vulnerability id such as CVE-2024-12345' }; out.cve = String(q.cve); }
@@ -149,7 +151,8 @@ function parseQuery(q, { list = true } = {}) {
 // The query part of the body: exact filters, and the text search as a case-insensitive wildcard over three keyword fields (wildcard characters in the text are escaped).
 function buildFilter(p) {
   const filter = [];
-  if (p.severity) filter.push({ term: { 'vulnerability.severity': p.severity } });
+  if (p.severity === NOT_RATED) filter.push({ bool: { must_not: [{ terms: { 'vulnerability.severity': SEVERITIES.map((s) => s[0].toUpperCase() + s.slice(1)) } }] } });
+  else if (p.severity) filter.push({ term: { 'vulnerability.severity': p.severity } });
   if (p.agent) filter.push({ term: { 'agent.id': p.agent } });
   if (p.cve) filter.push({ term: { 'vulnerability.id': p.cve } });
   if (p.q) {

@@ -129,8 +129,11 @@ describe('the chart on the Trend card', () => {
   it('the By severity card shows findings with no severity as a \"not rated\" pill with a plain explanation, not as \"no usable severity\" and not as low', async () => {
     SUMMARY.severity.unknown = 3240;
     try { const p = await openTab({ success: true, points: [] }), t = p.text(); assert.match(t, /not rated {2}3240/); assert.match(t, /Not rated: the vulnerability source gave these no severity/); assert.ok(!/no usable severity/.test(t));
-      const pillNode = nodes(p.tree).find((n) => /^not rated/.test(n.attrs.textContent || '')); assert.match(pillNode.attrs.style, /#4b5563/); assert.ok(typeof pillNode.attrs.onclick !== 'function' && !nodes(p.tree).some((n) => typeof n.attrs.onclick === 'function' && /not rated/.test(texts(n))), 'not a filter: the server has no such filter value'); } finally { SUMMARY.severity.unknown = 0; }
-    const none = await openTab({ success: true, points: [] }); assert.ok(!/not rated/i.test(none.text()), 'nothing about it when there are none');
+      const pillNode = nodes(p.tree).find((n) => /^not rated/.test(n.attrs.textContent || '')); assert.match(pillNode.attrs.style, /#4b5563/); const click = nodes(p.tree).find((n) => typeof n.attrs.onclick === 'function' && /not rated/.test(texts(n))); assert.ok(click, 'the pill is a filter since E6q');
+      const before = p.calls.length; click.attrs.onclick(); await tick(); const after = p.calls.slice(before);
+      assert.ok(after.some((c) => c.startsWith('/v1/endpoints/vulnerabilities?') && /severity=unknown/.test(c)), 'the list is asked for severity=unknown'); assert.ok(after.some((c) => c.startsWith('/v1/endpoints/vulnerabilities/summary') && /severity=unknown/.test(c)));
+      const sel = nodes(p.tree).find((n) => n.tag === 'select' && n.kids.some((o) => o.attrs && o.attrs.value === 'unknown')); assert.ok(sel && sel.value === 'unknown', 'the dropdown follows: Not rated'); } finally { SUMMARY.severity.unknown = 0; }
+    const none = await openTab({ success: true, points: [] }); assert.ok(!/Not rated: the vulnerability source/.test(none.text()) && !nodes(none.tree).some((n) => /^not rated/.test(n.attrs.textContent || '')), 'no pill and no explanation when there are none (the dropdown still offers Not rated)');
   });
   it('no summary yet shows no chart and no buttons; a failed read shows the message and no chart', async () => {
     const none = await openTab({ success: true, points: [] }); assert.strictEqual(bars(none.tree).length, 0); assert.ok(!/All severities/.test(none.text())); assert.match(none.text(), /No summary yet/);

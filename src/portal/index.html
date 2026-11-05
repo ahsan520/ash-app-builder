@@ -1893,7 +1893,7 @@ function vulnerabilitiesView(focusAgent) {
   const F = { severity: '', q: '', agent: focusAgent ? String(focusAgent).slice(0, 20) : '', sort: '-score', offset: 0 };
   const box = el('div', {}, el('div', { className: 'mute', textContent: 'Loading the vulnerability source...' }));
   const cards = el('div', {}), out = el('div', {}), detail = el('div', {}), trend = el('div', {});
-  const sev = el('select', {}, el('option', { value: '', textContent: 'Any severity' }), ...EP_VULN_SEVS.map((s) => el('option', { value: s, textContent: s[0].toUpperCase() + s.slice(1) })));
+  const sev = el('select', {}, el('option', { value: '', textContent: 'Any severity' }), ...EP_VULN_SEVS.map((s) => el('option', { value: s, textContent: s[0].toUpperCase() + s.slice(1) })), el('option', { value: 'unknown', textContent: 'Not rated' }));
   const sort = el('select', {}, ...EP_VULN_SORTS.map(([v, t]) => el('option', { value: v, textContent: t })));
   const text = el('input', { placeholder: 'Package, vulnerability id or machine', style: 'min-width:260px' });
   const agent = el('input', { placeholder: 'Agent id', value: F.agent, style: 'width:110px' });
@@ -1906,7 +1906,7 @@ function vulnerabilitiesView(focusAgent) {
       cards.replaceChildren(
         el('div', { className: 'grid' },
           card('Findings', el('div', { className: 'stat' }, String(s.total), el('small', { textContent: s.distinct_cves + ' different vulnerabilities on ' + s.machines + ' machine' + (s.machines === 1 ? '' : 's') }))),
-          card('By severity', el('div', {}, ...EP_VULN_SEVS.map((k) => el('span', { style: 'cursor:pointer', title: 'Show only ' + k, onclick: () => pickFilter('severity', k) }, vulnSevPill(k, s.severity[k])))), s.severity.unknown ? el('div', { style: 'margin-top:6px' }, vulnSevPill('unknown', s.severity.unknown), el('div', { className: 'mute', textContent: 'Not rated: the vulnerability source gave these no severity, so they are not counted as critical, high, medium or low.' })) : '')),
+          card('By severity', el('div', {}, ...EP_VULN_SEVS.map((k) => el('span', { style: 'cursor:pointer', title: 'Show only ' + k, onclick: () => pickFilter('severity', k) }, vulnSevPill(k, s.severity[k])))), s.severity.unknown ? el('div', { style: 'margin-top:6px' }, el('span', { style: 'cursor:pointer', title: 'Show only the findings that are not rated', onclick: () => pickFilter('severity', 'unknown') }, vulnSevPill('unknown', s.severity.unknown)), el('div', { className: 'mute', textContent: 'Not rated: the vulnerability source gave these no severity, so they are not counted as critical, high, medium or low. Click the pill to list them.' })) : '')),
         el('div', { className: 'grid' },
           card('Most affected machines', s.top_agents.length ? table([{ h: 'Machine', f: (r) => el('span', { style: 'cursor:pointer;text-decoration:underline', textContent: (r.name || r.agent_id) + ' (' + r.agent_id + ')', onclick: () => pickFilter('agent', r.agent_id) }) }, { h: 'Findings', f: (r) => r.count }], s.top_agents) : el('div', { className: 'mute', textContent: 'Nothing yet.' })),
           card('Most common packages', s.top_packages.length ? table([{ h: 'Package', f: (r) => el('span', { style: 'cursor:pointer;text-decoration:underline', textContent: r.key, onclick: () => pickFilter('q', r.key) }) }, { h: 'Findings', f: (r) => r.count }], s.top_packages) : el('div', { className: 'mute', textContent: 'Nothing yet.' })),
