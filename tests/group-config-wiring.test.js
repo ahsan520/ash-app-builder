@@ -9,7 +9,8 @@ const read = (p) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
 const store = require('../src/endpoints/group-config-store');
 
 describe('deployment', () => {
-  it('the server switch is in the manifest and OFF', () => { assert.match(read('k8s/30-asix-api.yaml'), /- name: ASIX_ENDPOINT_CONFIG_WRITE\n\s+value: "false"/); });
+  // The switch is ON in the repo since the lab try (2026-11-01: a folder applied to the Linux group from the portal); it was "false" until then. Changing it is one line here and in the manifest.
+  it('the server switch is in the manifest and ON (the lab uses Group settings)', () => { assert.match(read('k8s/30-asix-api.yaml'), /- name: ASIX_ENDPOINT_CONFIG_WRITE\n\s+value: "true"/); });
   it('the new permission is in portal-admin, in both the insert and the update list', () => { assert.strictEqual((read('scripts/deploy/bootstrap-portal.sh').match(/'modules:read', 'endpoints:config:write'\]/g) || []).length, 2); });
   it('the route is mounted before the readiness route', () => { const g = read('src/gateway/index.js'); const m = g.indexOf("require('./routes/group-config')"); assert.ok(m > 0 && m < g.indexOf("app.get('/v1/health/ready'")); });
   it('the schema has both tables with row security and a policy per tenant, and the history can only say apply, remove or undo', () => {
