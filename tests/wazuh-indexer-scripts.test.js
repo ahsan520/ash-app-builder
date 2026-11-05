@@ -28,7 +28,7 @@ describe('install-wazuh-indexer.sh (system commands stood in)', { skip: have ? f
   const mem = (mb) => put('mem', `MemTotal:        ${mb * 1024} kB\n`);
   beforeEach(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'idx-')); bin = path.join(tmp, 'bin'); log = path.join(tmp, 'calls.log'); fs.mkdirSync(bin);
-    for (const f of ['installed', 'listening', 'busy', 'loopback-fails']) put(f, ''); put('nproc', '4'); mem(16384); put('disk', '120'); put('repo-rc', '0'); put('start-rc', '0'); put('health', 'green'); put('hash', HASH); put('init-rc', '0');
+    for (const f of ['installed', 'listening', 'busy', 'loopback-fails', 'not-ready']) put(f, ''); put('nproc', '4'); mem(16384); put('disk', '120'); put('repo-rc', '0'); put('start-rc', '0'); put('health', 'green'); put('hash', HASH); put('init-rc', '0');
     sh('id', 'if [ "$1" = "-u" ]; then echo 0; else exit 1; fi');
     sh('nproc', `cat '${tmp}/nproc'`);
     sh('hostname', 'echo idx-vm');
@@ -36,7 +36,7 @@ describe('install-wazuh-indexer.sh (system commands stood in)', { skip: have ? f
     sh('curl', `echo "curl $*" >> '${log}'; out=""; p=""; for a in "$@"; do [ "$p" = "-o" ] && out="$a"; p="$a"; done
 case "$*" in *InRelease*) exit $(cat '${tmp}/repo-rc');; *GPG-KEY*) echo "fake key" > "$out"; exit 0;; esac
 k=""; p=""; for a in "$@"; do [ "$p" = "-K" ] && k="$a"; p="$a"; done
-if [ -n "$k" ]; then cfg="$(cat "$k")"; echo "health-url $(printf '%s' "$cfg" | sed -n 's/^url = "\\(.*\\)"$/\\1/p')" >> '${log}'; case "$cfg" in *127.0.0.1*) [ -s '${tmp}/loopback-fails' ] && exit 60;; esac; fi
+if [ -n "$k" ]; then cfg="$(cat "$k")"; n=$(cat '${tmp}/not-ready' 2>/dev/null); if [ -n "$n" ] && [ "$n" -gt 0 ]; then echo $((n - 1)) > '${tmp}/not-ready'; echo "health-wait" >> '${log}'; exit 22; fi; echo "health-url $(printf '%s' "$cfg" | sed -n 's/^url = "\\(.*\\)"$/\\1/p')" >> '${log}'; case "$cfg" in *127.0.0.1*) [ -s '${tmp}/loopback-fails' ] && exit 60;; esac; fi
 echo "{\\"status\\":\\"$(cat '${tmp}/health')\\"}"`);
     sh('gpg', `echo "gpg $*" >> '${log}'; case "$*" in *--show-keys*) echo "fpr:::::::::${FPR}:";; *--dearmor*) cat;; esac`);
     sh('dpkg-query', `v=$(cat '${tmp}/installed'); [ -n "$v" ] && printf '%s' "$v" || exit 1`);
@@ -154,6 +154,12 @@ case "$*" in *install*) v="\${@: -1}"; v="\${v#wazuh-indexer=}"; mkdir -p '${tmp
     assert.strictEqual(logged(/^init$/).length, 1, 'no second load'); assert.match(r.stdout, /security configuration NOT reloaded/); assert.match(r.stdout, /--reload-security/);
     assert.match(r.stdout, /answers on https:\/\/10\.20\.30\.40:9200 with status green/);
   });
+  it('security not answering for the first seconds after the start (the lab, 2026-11-04) is waited out: no load, so the writer survives', () => {
+    assert.strictEqual(run('--address', '10.20.30.40').status, 0); assert.strictEqual(logged(/^init$/).length, 1);
+    env.ASIX_INDEXER_WAIT_S = '4'; put('not-ready', '2');
+    try { const r = run('--address', '10.20.30.40'); assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+      assert.strictEqual(logged(/^health-wait$/).length, 2, 'two looks found it not ready'); assert.strictEqual(logged(/^init$/).length, 1, 'still no second load'); assert.match(r.stdout, /security configuration NOT reloaded/); } finally { env.ASIX_INDEXER_WAIT_S = '2'; }
+  });
   it('--reload-security loads it again on a re-run, and says why', () => {
     assert.strictEqual(run('--address', '10.20.30.40').status, 0); const r = run('--address', '10.20.30.40', '--reload-security'); assert.strictEqual(r.status, 0, r.stdout + r.stderr);
     assert.strictEqual(logged(/^init$/).length, 2); assert.match(r.stdout, /loading the security configuration \(--reload-security was given\)/);
@@ -161,7 +167,7 @@ case "$*" in *install*) v="\${@: -1}"; v="\${v#wazuh-indexer=}"; mkdir -p '${tmp
   it('a re-run where the admin cannot sign in yet (a first run that stopped before the load) loads it', () => {
     assert.strictEqual(run('--address', '10.20.30.40').status, 0); assert.strictEqual(logged(/^init$/).length, 1);
     put('health', ''); const r = run('--address', '10.20.30.40'); assert.strictEqual(r.status, 1, 'the closing check still fails with no answer');
-    assert.strictEqual(logged(/^init$/).length, 2, 'loaded because the admin could not sign in'); assert.match(r.stdout, /the admin cannot sign in with the stored password yet/);
+    assert.strictEqual(logged(/^init$/).length, 2, 'loaded because the admin could not sign in'); assert.match(r.stdout, /the admin could not sign in with the stored password within the wait/);
   });
   it('--reload-security is accepted by --check and named in the usage', () => {
     assert.strictEqual(run('--check', '--reload-security').status, 0); assert.match(text(INSTALL), /--reload-security\s+load the security configuration/);

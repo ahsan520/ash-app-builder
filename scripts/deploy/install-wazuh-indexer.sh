@@ -249,12 +249,17 @@ DO_INIT=0; WHY=""
 if [ "$NEW_PW" -eq 1 ]; then DO_INIT=1; WHY="a new admin password was made"
 elif [ "$RELOAD_SEC" -eq 1 ]; then DO_INIT=1; WHY="--reload-security was given"
 else
+  # The port opens a few seconds before the security layer answers, so ONE look right after the start proves nothing (the first version of this check did that, found
+  # the admin "unable to sign in" on a healthy lab indexer, reloaded, and deleted the manager's writer again). Wait as long as the closing check waits.
   ok_admin=0
-  for u in "${CHECK_URLS[@]}"; do
-    s="$(curl -K <(cfg_for "$u") --cacert "$CERTS/root-ca.pem" 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
-    case "$s" in green|yellow|red) ok_admin=1; break;; esac
+  for _ in $(seq 1 "${ASIX_INDEXER_WAIT_S:-90}"); do
+    for u in "${CHECK_URLS[@]}"; do
+      s="$(curl -K <(cfg_for "$u") --cacert "$CERTS/root-ca.pem" 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
+      case "$s" in green|yellow|red) ok_admin=1; break 2;; esac
+    done
+    sleep 2
   done
-  if [ "$ok_admin" -eq 0 ]; then DO_INIT=1; WHY="the admin cannot sign in with the stored password yet"; fi
+  if [ "$ok_admin" -eq 0 ]; then DO_INIT=1; WHY="the admin could not sign in with the stored password within the wait"; fi
 fi
 if [ "$DO_INIT" -eq 0 ]; then
   echo "   security configuration NOT reloaded: the admin already signs in, and a reload would delete the roles and users made through the security API (--reload-security forces it)"
