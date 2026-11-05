@@ -48,19 +48,19 @@ async function openTab(trend, focus) {
 }
 
 describe('the severity chart model', () => {
-  it('stacks critical, high, medium and low in that order and finds the tallest day', () => {
+  it('stacks critical, high, medium, low and not rated in that order and finds the tallest day', () => {
     const m = pure.vulnChartModel([pt('2026-12-01', { critical: 1, high: 2, medium: 3, low: 4 }), pt('2026-12-02', { critical: 0, high: 0, medium: 0, low: 9 })], 'all');
-    assert.deepStrictEqual(m.sevs, ['critical', 'high', 'medium', 'low']);
-    assert.deepStrictEqual(m.cols[0].segs.map((s) => s.n), [1, 2, 3, 4]); assert.strictEqual(m.cols[0].total, 10); assert.strictEqual(m.cols[1].total, 9); assert.strictEqual(m.max, 10);
+    assert.deepStrictEqual(m.sevs, ['critical', 'high', 'medium', 'low', 'unknown']);
+    assert.deepStrictEqual(m.cols[0].segs.map((s) => s.n), [1, 2, 3, 4, 0]); assert.strictEqual(m.cols[0].total, 10); assert.strictEqual(m.cols[1].total, 9); assert.strictEqual(m.max, 10);
   });
   it('"critical and high" leaves medium and low out of the bars and the scale', () => {
     const m = pure.vulnChartModel([pt('2026-12-01', { critical: 1, high: 2, medium: 300, low: 400 })], 'ch');
     assert.deepStrictEqual(m.sevs, ['critical', 'high']); assert.strictEqual(m.cols[0].total, 3); assert.strictEqual(m.max, 3);
   });
-  it('an unknown mode falls back to all severities', () => assert.strictEqual(pure.vulnChartModel([pt('2026-12-01')], 'x').sevs.length, 4));
+  it('an unknown mode falls back to all severities', () => assert.strictEqual(pure.vulnChartModel([pt('2026-12-01')], 'x').sevs.length, 5));
   it('a missing, negative or fractional number counts as 0; a day with none of them is marked as having no figures', () => {
     const m = pure.vulnChartModel([{ day: '2026-12-01', critical: null, high: -3, medium: 2.5, low: 7 }, { day: '2026-12-02' }], 'all');
-    assert.deepStrictEqual(m.cols[0].segs.map((s) => s.n), [0, 0, 0, 7]); assert.strictEqual(m.cols[0].known, true);
+    assert.deepStrictEqual(m.cols[0].segs.map((s) => s.n), [0, 0, 0, 7, 0]); assert.strictEqual(m.cols[0].known, true);
     assert.strictEqual(m.cols[1].total, 0); assert.strictEqual(m.cols[1].known, false); assert.strictEqual(m.max, 7);
   });
   it('anything that is not a list gives an empty model, and the input is not changed', () => {
@@ -97,6 +97,13 @@ describe('the severity chart', () => {
     assert.match(all, /critical/); assert.match(all, /medium/); assert.match(all, /low/); assert.match(ch, /critical/); assert.match(ch, /high/); assert.ok(!/medium|low/.test(ch));
     assert.match(all, /tallest day: 100/); assert.match(ch, /tallest day: 14/);
   });
+  it('findings with no severity (the lab\'s kernel images, 3240 of 8958) are drawn on top as \"not rated\" in their own colour, are in the tooltip only when there are some, and \"critical and high\" leaves them out', () => {
+    const c = pure.vulnChart([pt('2026-12-01', { critical: 1, high: 2, medium: 3, low: 4, unknown: 6 }), pt('2026-12-02')], 'all'), b = bars(c);
+    assert.strictEqual(b[0].attrs.title, '2026-12-01: critical 1, high 2, medium 3, low 4, not rated 6 (16)'); assert.ok(!/not rated/.test(b[1].attrs.title), 'no \"not rated 0\" noise');
+    const segs = b[0].kids[0].kids; assert.strictEqual(segs.length, 5); assert.match(segs[4].attrs.style, /flex:6 /); assert.match(segs[4].attrs.style, /#4b5563/); assert.ok(!/#6b7fa3/.test(segs[4].attrs.style), 'not the colour of low');
+    assert.match(texts(c), /not rated/); assert.ok(!/unknown/.test(texts(c)));
+    const ch = pure.vulnChart([pt('2026-12-01', { unknown: 6 })], 'ch'); assert.ok(!/not rated/.test(texts(ch)) && !/not rated/.test(bars(ch)[0].attrs.title));
+  });
   it('no summaries draws nothing, and the chart writes no HTML', () => {
     assert.strictEqual(pure.vulnChart([], 'all').kids.length, 0);
     const body = vulnSource.slice(vulnSource.indexOf('function vulnChartModel'), vulnSource.indexOf('function vulnerabilitiesView'));
@@ -118,6 +125,12 @@ describe('the chart on the Trend card', () => {
     assert.match(btn('Critical and high').attrs.className, /pri/); assert.ok(!/pri/.test(btn('All severities').attrs.className));
     btn('All severities').attrs.onclick(); assert.match(bars(p.tree)[0].attrs.title, /medium 30/);
     assert.strictEqual(p.calls.length, before, 'switching the chart reads nothing');
+  });
+  it('the By severity card shows findings with no severity as a \"not rated\" pill with a plain explanation, not as \"no usable severity\" and not as low', async () => {
+    SUMMARY.severity.unknown = 3240;
+    try { const p = await openTab({ success: true, points: [] }), t = p.text(); assert.match(t, /not rated {2}3240/); assert.match(t, /Not rated: the vulnerability source gave these no severity/); assert.ok(!/no usable severity/.test(t));
+      const pillNode = nodes(p.tree).find((n) => /^not rated/.test(n.attrs.textContent || '')); assert.match(pillNode.attrs.style, /#4b5563/); assert.ok(typeof pillNode.attrs.onclick !== 'function' && !nodes(p.tree).some((n) => typeof n.attrs.onclick === 'function' && /not rated/.test(texts(n))), 'not a filter: the server has no such filter value'); } finally { SUMMARY.severity.unknown = 0; }
+    const none = await openTab({ success: true, points: [] }); assert.ok(!/not rated/i.test(none.text()), 'nothing about it when there are none');
   });
   it('no summary yet shows no chart and no buttons; a failed read shows the message and no chart', async () => {
     const none = await openTab({ success: true, points: [] }); assert.strictEqual(bars(none.tree).length, 0); assert.ok(!/All severities/.test(none.text())); assert.match(none.text(), /No summary yet/);

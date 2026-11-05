@@ -1855,15 +1855,17 @@ function agentChecksCard(agentId) {
 // ---- Vulnerabilities tab (E6e) ----
 // Reads GET /v1/endpoints/vulnerabilities/status, /summary and the list (src/endpoints/wazuh-indexer.js, docs/wazuh-indexer.md): the findings the endpoint manager keeps in the central
 // indexer, one row per machine, package and vulnerability id. Read only. Nothing here chooses an address or an index: the server reads the one registered for this tenant.
-const EP_VULN_COL = { critical: '#e5484d', high: '#f08a24', medium: '#e6c229', low: '#6b7fa3', unknown: '#6b7fa3' };
+const EP_VULN_COL = { critical: '#e5484d', high: '#f08a24', medium: '#e6c229', low: '#6b7fa3', unknown: '#4b5563' };
+// E6n (portal): findings the source gives no severity for (Wazuh writes "-", the lab's kernel images) are NOT low: they are shown as "not rated", in their own colour.
+const EP_VULN_NAME = (s) => (s === 'unknown' ? 'not rated' : s);
 const EP_VULN_SEVS = ['critical', 'high', 'medium', 'low'];
 const EP_VULN_LIMIT = 50;
 const EP_VULN_SORTS = [['-score', 'Highest score first'], ['-detected', 'Newest first'], ['cve', 'Vulnerability id'], ['agent', 'Machine'], ['package', 'Package']];
-const vulnSevPill = (s, n) => el('span', { className: 'pill', style: 'white-space:nowrap;background:' + (EP_VULN_COL[s] || EP_VULN_COL.unknown) + '26;color:' + (EP_VULN_COL[s] || EP_VULN_COL.unknown) + ';font-weight:600', textContent: (s || 'unknown') + (n !== undefined ? '  ' + n : '') });
+const vulnSevPill = (s, n) => el('span', { className: 'pill', style: 'white-space:nowrap;background:' + (EP_VULN_COL[s] || EP_VULN_COL.unknown) + '26;color:' + (EP_VULN_COL[s] || EP_VULN_COL.unknown) + ';font-weight:600', textContent: EP_VULN_NAME(s || 'unknown') + (n !== undefined ? '  ' + n : '') });
 const vulnLink = (u) => (/^https?:\/\//i.test(u || '') ? el('div', {}, el('a', { href: u, target: '_blank', rel: 'noopener noreferrer', textContent: u })) : el('div', { textContent: String(u || '') }));
 // E6m: the severity chart of the Trend card. vulnChartModel() is pure: the daily summaries (oldest first) in, one stacked bar per day out. 'all' stacks critical, high, medium and low
 // (bottom to top); 'ch' only critical and high, because the medium and low counts usually dwarf them. A missing number counts as 0 in the bar and says so in the tooltip.
-const EP_VULN_CHART_MODES = [['all', 'All severities', ['critical', 'high', 'medium', 'low']], ['ch', 'Critical and high', ['critical', 'high']]];
+const EP_VULN_CHART_MODES = [['all', 'All severities', ['critical', 'high', 'medium', 'low', 'unknown']], ['ch', 'Critical and high', ['critical', 'high']]];
 function vulnChartModel(points, mode) {
   const sevs = (EP_VULN_CHART_MODES.find((m) => m[0] === mode) || EP_VULN_CHART_MODES[0])[2];
   const cols = (Array.isArray(points) ? points : []).map((p) => {
@@ -1875,13 +1877,13 @@ function vulnChartModel(points, mode) {
 function vulnChart(points, mode) {
   const m = vulnChartModel(points, mode);
   if (!m.cols.length) return el('div');
-  const bars = m.cols.map((c) => el('div', { title: c.day + ': ' + (c.known ? c.segs.map((x) => x.sev + ' ' + x.n).join(', ') + ' (' + c.total + ')' : 'no figures'), style: 'flex:1 1 0;min-width:6px;max-width:48px;height:100%;display:flex;align-items:flex-end' },
+  const bars = m.cols.map((c) => el('div', { title: c.day + ': ' + (c.known ? c.segs.filter((x) => x.sev !== 'unknown' || x.n > 0).map((x) => EP_VULN_NAME(x.sev) + ' ' + x.n).join(', ') + ' (' + c.total + ')' : 'no figures'), style: 'flex:1 1 0;min-width:6px;max-width:48px;height:100%;display:flex;align-items:flex-end' },
     el('div', { style: 'width:100%;display:flex;flex-direction:column-reverse;height:' + (c.total ? Math.max(2, Math.round(c.total / m.max * 100)) : 0) + '%' },
       ...c.segs.filter((x) => x.n > 0).map((x) => el('div', { style: 'flex:' + x.n + ' 1 0;background:' + (EP_VULN_COL[x.sev] || EP_VULN_COL.unknown) })))));
   const first = m.cols[0].day, last = m.cols[m.cols.length - 1].day;
   return el('div', { style: 'margin-bottom:12px' },
     el('div', { className: 'mute', style: 'font-size:12px;display:flex;gap:12px;flex-wrap:wrap;margin-bottom:4px' },
-      ...m.sevs.map((s) => el('span', { style: 'white-space:nowrap' }, el('span', { style: 'display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;background:' + EP_VULN_COL[s] }), s)),
+      ...m.sevs.map((s) => el('span', { style: 'white-space:nowrap' }, el('span', { style: 'display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;background:' + EP_VULN_COL[s] }), EP_VULN_NAME(s))),
       el('span', { style: 'margin-left:auto', textContent: 'tallest day: ' + m.max })),
     el('div', { role: 'img', 'aria-label': 'Findings per day by severity, ' + first + ' to ' + last, style: 'display:flex;align-items:flex-end;gap:3px;height:140px;border-bottom:1px solid var(--line)' }, ...bars),
     el('div', { className: 'mute', style: 'font-size:12px;display:flex;justify-content:space-between;margin-top:2px' }, el('span', { textContent: first }), el('span', { textContent: last })));
@@ -1904,7 +1906,7 @@ function vulnerabilitiesView(focusAgent) {
       cards.replaceChildren(
         el('div', { className: 'grid' },
           card('Findings', el('div', { className: 'stat' }, String(s.total), el('small', { textContent: s.distinct_cves + ' different vulnerabilities on ' + s.machines + ' machine' + (s.machines === 1 ? '' : 's') }))),
-          card('By severity', el('div', {}, ...EP_VULN_SEVS.map((k) => el('span', { style: 'cursor:pointer', title: 'Show only ' + k, onclick: () => pickFilter('severity', k) }, vulnSevPill(k, s.severity[k])))), s.severity.unknown ? el('div', { className: 'mute', textContent: s.severity.unknown + ' with no usable severity' }) : '')),
+          card('By severity', el('div', {}, ...EP_VULN_SEVS.map((k) => el('span', { style: 'cursor:pointer', title: 'Show only ' + k, onclick: () => pickFilter('severity', k) }, vulnSevPill(k, s.severity[k])))), s.severity.unknown ? el('div', { style: 'margin-top:6px' }, vulnSevPill('unknown', s.severity.unknown), el('div', { className: 'mute', textContent: 'Not rated: the vulnerability source gave these no severity, so they are not counted as critical, high, medium or low.' })) : '')),
         el('div', { className: 'grid' },
           card('Most affected machines', s.top_agents.length ? table([{ h: 'Machine', f: (r) => el('span', { style: 'cursor:pointer;text-decoration:underline', textContent: (r.name || r.agent_id) + ' (' + r.agent_id + ')', onclick: () => pickFilter('agent', r.agent_id) }) }, { h: 'Findings', f: (r) => r.count }], s.top_agents) : el('div', { className: 'mute', textContent: 'Nothing yet.' })),
           card('Most common packages', s.top_packages.length ? table([{ h: 'Package', f: (r) => el('span', { style: 'cursor:pointer;text-decoration:underline', textContent: r.key, onclick: () => pickFilter('q', r.key) }) }, { h: 'Findings', f: (r) => r.count }], s.top_packages) : el('div', { className: 'mute', textContent: 'Nothing yet.' })),
