@@ -7,6 +7,7 @@ const store = require('../../endpoints/group-config-store');
 const api = require('../../endpoints/wazuh-api');
 const gc = require('../../endpoints/group-config');
 const service = require('../../endpoints/group-config-service');
+const fimWatch = require('../../endpoints/fim-watch');
 
 // ---- Monitored folders of an agent group (docs/endpoints.md, task E10) ---------------------------------------------------------------------------------
 // The ONLY routes that change anything on the endpoint manager. What they can change is narrow on purpose:
@@ -53,6 +54,13 @@ const bodyOk = (req, res, allowed) => {
   const extra = Object.keys(b).filter((k) => !allowed.includes(k)); if (extra.length) { apiError(res, 400, 'GROUP_CONFIG_BAD_BODY', 'Unknown field "' + String(extra[0]).slice(0, 30) + '"'); return null; }
   return b;
 };
+// E10b: after a change the manager holds (or an Apply that had nothing to change), keep the group's alert rule in step with its folders. Best effort: the folder change is already
+// done and must not be reported as failed because the rule could not be written; a failure is logged and the next Apply writes it again.
+async function syncRule(req, r) {
+  if (!r || !r.ok || !Array.isArray(r.entries)) return;
+  try { await db.withTenant(req.tenant_id, (c) => fimWatch.sync(c, req.tenant_id, req.params.group, r.entries)); }
+  catch (e) { console.error('Watched-folder alert rule not written:', e && e.message); }
+}
 const history = (req) => ({
   record: (row) => db.withTenant(req.tenant_id, (c) => store.record(c, req.tenant_id, req.params.group, { ...row, actor: req.user_id ? String(req.user_id) : null })),
   settle: (id, result, sha, note) => db.withTenant(req.tenant_id, (c) => store.settle(c, req.tenant_id, id, result, sha, note)),
@@ -92,7 +100,7 @@ router.put('/v1/endpoints/group-config/:group', ...guarded('endpoints:config:wri
   if (!groupOk(req, res) || !writeGate(req, res)) return; const b = bodyOk(req, res, ['entries', 'base_sha256']); if (!b) return;
   if (!Array.isArray(b.entries)) return apiError(res, 400, 'GROUP_CONFIG_BAD_BODY', 'entries must be a list');
   const l = await load(req, res); if (l.sent) return;
-  try { sendResult(res, await service.apply({ ...l.ctx, hist: history(req) }, req.params.group, b.entries, { baseSha: b.base_sha256, action: b.entries.length ? 'apply' : 'remove' })); } catch (e) { problem(res, e); }
+  try { const r = await service.apply({ ...l.ctx, hist: history(req) }, req.params.group, b.entries, { baseSha: b.base_sha256, action: b.entries.length ? 'apply' : 'remove' }); await syncRule(req, r); sendResult(res, r); } catch (e) { problem(res, e); }
 });
 
 // Undo one earlier change: the ASIX block goes back to the entries it had before that change. Only the block; nothing else in the file is touched.
@@ -103,7 +111,7 @@ router.post('/v1/endpoints/group-config/:group/undo', ...guarded('endpoints:conf
   let row; try { row = await db.withTenant(req.tenant_id, (c) => store.get(c, req.tenant_id, req.params.group, b.history_id)); } catch (e) { return problem(res, e); }
   if (!row) return apiError(res, 404, 'GROUP_CONFIG_NO_HISTORY', 'No such change in this group\u2019s history');
   if (row.result !== 'applied') return apiError(res, 409, 'GROUP_CONFIG_NOT_UNDOABLE', 'Only a change that was applied can be undone');
-  try { sendResult(res, await service.apply({ ...l.ctx, hist: history(req) }, req.params.group, row.entries_before, { baseSha: b.base_sha256, action: 'undo' })); } catch (e) { problem(res, e); }
+  try { const r = await service.apply({ ...l.ctx, hist: history(req) }, req.params.group, row.entries_before, { baseSha: b.base_sha256, action: 'undo' }); await syncRule(req, r); sendResult(res, r); } catch (e) { problem(res, e); }
 });
 
 module.exports = router;
