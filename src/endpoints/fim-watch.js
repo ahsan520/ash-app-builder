@@ -57,4 +57,24 @@ async function sync(client, tenantId, group, entries) {
   return d.xql;
 }
 
-module.exports = { KEY_PREFIX, NO_FOLDERS, ruleKey, pathRegex, queryFor, definition, description, sync };
+// E10c: what the Group settings tab says about the group's rule. `row` is { id, enabled, severity, xql } or null; `entries` the folders the manager holds now (sorted, as group-config.js
+// keeps them). state: none (no rule yet), on, off (an operator switched it off on the Detections page), idle (no folders: the rule is kept and matches nothing) or out_of_step (its query is
+// not the one these folders give: written before a hand change on the manager, or edited on the Detections page). needs_apply: Apply would (re)write the query.
+function view(row, entries) {
+  const list = (entries || []).filter((e) => e && typeof e.path === 'string' && e.path);
+  const out = { state: 'none', folders: list.length, without_real_time: list.filter((e) => !e.realtime).length, rule_id: null, enabled: null, severity: null, needs_apply: list.length > 0 };
+  if (!row) return out;
+  out.rule_id = row.id; out.enabled = !!row.enabled; out.severity = row.severity || null;
+  if (row.xql !== queryFor(list)) { out.state = 'out_of_step'; out.needs_apply = true; return out; }
+  out.needs_apply = false;
+  out.state = !list.length ? 'idle' : (row.enabled ? 'on' : 'off');
+  return out;
+}
+
+// Reads the group's rule (tenant-scoped client) and describes it for `entries`. Read only.
+async function status(client, tenantId, group, entries) {
+  const r = await client.query(`SELECT id, enabled, severity, definition->>'xql' AS xql FROM detection_rules WHERE tenant_id = $1 AND builtin_key = $2`, [tenantId, ruleKey(group)]);
+  return view(r.rows && r.rows[0] ? r.rows[0] : null, entries);
+}
+
+module.exports = { KEY_PREFIX, NO_FOLDERS, ruleKey, pathRegex, queryFor, definition, description, sync, view, status };

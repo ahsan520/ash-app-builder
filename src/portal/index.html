@@ -1733,8 +1733,26 @@ function groupConfigCard() {
           try { await api(GC + '/' + encodeURIComponent(g) + '/undo', { method: 'POST', body: { history_id: h.id, base_sha256: d.sha256 } }); await load(); } catch (e) { alert(e.message); }
         } }) : ''));
       const editable = d.state === 'none' || d.state === 'ok';
+      // E10c: the group's alert rule (written by Apply, E10b). Shown only when the server says (d.watch; an older API or an unreadable rule sends none) and the folders are known.
+      const writeRule = el('button', { className: 'btn', textContent: 'Write the alert rule', title: 'Writes the rule for these folders; the folder list is not changed', onclick: async () => {
+        if (!confirm('Write the alert rule for group "' + g + '"? The folders it watches are not changed.')) return;
+        try { await api(GC + '/' + encodeURIComponent(g), { method: 'PUT', body: { entries: d.entries.map((x) => ({ system: x.system, path: x.path, realtime: !!x.realtime })), base_sha256: d.sha256 } }); await load(); area.prepend(say('ok', 'Done. The alert rule is written.')); }
+        catch (e) { if (/changed since/.test(e.message)) { await load(); area.prepend(say('err', e.message + ' The list below is the one the manager has now.')); } else area.prepend(say('err', e.message)); }
+      } });
+      const watchLine = (() => {
+        const w = d.watch; if (!editable || !w || !w.folders && w.state === 'none') return '';
+        const R = { none: ['No alert rule yet', 'off', 'ASIX raises an alert when a file is added, changed or deleted in these folders, through a rule that is written when a change is applied. This group has none yet.'],
+          on: ['Alert rule on', 'ok', 'A file added, changed or deleted in these folders raises an ASIX alert (severity ' + (w.severity || 'medium') + '; Detections, "Watched folder changed on an endpoint (' + g + ')"). Changes also show on the File integrity tab.'],
+          off: ['Alert rule off', 'off', 'The rule was switched off on the Detections page, so changes in these folders show only on the File integrity tab.'],
+          idle: ['Alert rule idle', 'off', 'No folders are set, so the rule is kept but matches nothing until a folder is added.'],
+          out_of_step: ['Alert rule out of date', 'off', 'The rule\'s query is not the one these folders give (the list was changed on the manager by hand, or the query was edited on the Detections page). Writing the rule puts the query back.'] }[w.state];
+        if (!R) return '';
+        const rt = w.folders > 0 && w.without_real_time > 0 ? el('div', { className: 'mute', style: 'margin-top:4px;font-size:12px', textContent: w.without_real_time + ' of ' + w.folders + ' folders are not in real time: the agent compares them only at its scheduled scan (by default every 12 hours), so a file that is created and removed in between is never seen. Tick real time to see changes at once.' }) : '';
+        return el('div', { style: 'margin-top:8px' }, el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, pill(R[0], R[1]), el('span', { className: 'mute', textContent: R[2] }), w.needs_apply && st.write_enabled ? writeRule : ''), rt);
+      })();
       area.replaceChildren(
         el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, pill(editable ? (d.entries.length ? d.entries.length + ' folders set by ASIX' : 'Nothing set by ASIX') : 'Cannot edit', editable ? 'ok' : 'off'), el('span', { className: 'mute', textContent: d.state_text })),
+        watchLine,
         editable ? el('div', {}, list, el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-top:10px' }, el('button', { className: 'btn', textContent: 'Add a folder', onclick: () => { rows.push({ system: 'linux', path: '', realtime: false }); previewed = null; applyBtn.disabled = true; draw(); } }), previewBtn, applyBtn), out,
           el('div', { className: 'mute', style: 'margin-top:8px;font-size:12px', textContent: 'Folders are added to what each machine already watches. Paths are exact (no wildcards); whole drives, / and system folders are refused. Up to ' + st.limits.max_entries + ' folders, ' + st.limits.max_realtime + ' of them in real time.' }))
           : say('err', d.state === 'broken' ? 'The ASIX markers in this group\'s configuration are damaged. Fix or remove them on the manager before ASIX can edit this group.' : 'The ASIX block in this group\'s configuration was changed by hand, so ASIX will not overwrite it. Remove the block on the manager, or put it back as ASIX wrote it.'),

@@ -80,7 +80,11 @@ router.get('/v1/endpoints/group-config/:group', ...guarded('capacity:read'), asy
   try {
     const d = await service.describe(l.ctx, req.params.group); if (!d.ok) return sendResult(res, d);
     const rows = await db.withTenant(req.tenant_id, (c) => store.list(c, req.tenant_id, req.params.group, 20));
-    res.status(200).json({ success: true, ...d, write_enabled: writeOn(), history: rows.map(shapeHistory) });
+    // E10c: the state of the group's alert rule. Best effort: a failed read leaves `watch` null and the page without that line; it never fails the group.
+    let watch = null;   // also null while the block is damaged or hand-edited: the folders are then unknown, so the rule cannot be compared with them
+    try { if (d.state === 'none' || d.state === 'ok') watch = await db.withTenant(req.tenant_id, (c) => fimWatch.status(c, req.tenant_id, req.params.group, d.entries)); }
+    catch (e) { console.error('Watched-folder alert rule not read:', e && e.message); }
+    res.status(200).json({ success: true, ...d, write_enabled: writeOn(), history: rows.map(shapeHistory), watch });
   } catch (e) { problem(res, e); }
 });
 const shapeHistory = (h) => ({ id: h.id, action: h.action, result: h.result, entries_before: h.entries_before, entries_after: h.entries_after, before_sha256: h.before_sha256, after_sha256: h.after_sha256, note: h.note, by: h.actor_name || null, at: h.created_at });
