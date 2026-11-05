@@ -1927,7 +1927,18 @@ function vulnerabilitiesView(focusAgent) {
       const chartBox = el('div', {}); let mode = 'all';
       const drawChart = () => chartBox.replaceChildren(el('div', { style: 'display:flex;gap:6px;margin-bottom:6px' }, ...EP_VULN_CHART_MODES.map(([k, t]) => el('button', { className: 'btn' + (mode === k ? ' pri' : ''), textContent: t, onclick: () => { mode = k; drawChart(); } }))), vulnChart(r.points, mode));
       if (r.points.length) drawChart();
-      trend.replaceChildren(card('Trend (one summary a day)', chartBox, pts.length ? table([
+      // E6s: the indexer VM's disk and health (r.indexer_disk, from the reporter of E6i). Absent from an older server = no card.
+      const dk = r.indexer_disk, gb = (v) => (v === null || v === undefined ? '-' : v + ' GB');
+      const diskCard = dk === undefined ? '' : !dk ? card('Findings indexer disk', el('div', { className: 'mute', textContent: 'No report from the indexer VM in the last 6 hours. Install the reporter there with scripts/deploy/install-indexer-health.sh (docs/wazuh-indexer.md); it reports every 5 minutes.' }))
+        : card('Findings indexer disk', table([
+          { h: 'Indexer VM', f: (d) => d.host },
+          { h: 'Disk used', f: (d) => (d.disk_used_pct === null ? pill('Not measured', 'off') : pill(d.disk_used_pct + '%' + (d.disk_used_pct >= 90 ? ' full' : d.disk_used_pct >= 80 ? ' getting full' : ''), d.disk_used_pct >= 90 ? 'bad' : d.disk_used_pct >= 80 ? 'off' : 'ok')) },
+          { h: 'Free', f: (d) => gb(d.disk_free_gb) + ' of ' + gb(d.disk_total_gb) },
+          { h: 'Indexer', f: (d) => pill(d.cluster_status, d.cluster_status === 'green' ? 'ok' : d.cluster_status === 'yellow' || d.cluster_status === 'unknown' ? 'off' : 'bad') },
+          { h: 'Indices refusing writes', f: (d) => (d.write_blocked_indices === null ? '-' : d.write_blocked_indices) },
+          { h: 'Last report (UTC)', f: (d) => when(d.reported_at) + (d.stale ? ' (' + d.age_minutes + ' min ago: late)' : '') },
+        ], dk));
+      trend.replaceChildren(diskCard, card('Trend (one summary a day)', chartBox, pts.length ? table([
         { h: 'Day (UTC)', f: (d) => d.day }, { h: 'Findings', f: (d) => (d.findings_total === null ? '-' : d.findings_total) }, { h: 'Change', f: (d) => chg(d.total_change) },
         { h: 'Critical', f: (d) => (d.critical === null ? '-' : d.critical) }, { h: 'Critical change', f: (d) => chg(d.critical_change) }, { h: 'High', f: (d) => (d.high === null ? '-' : d.high) },
         { h: 'New critical', f: (d) => (d.new_critical === null ? '-' : d.new_critical) }, { h: 'New in all', f: (d) => (d.new_total === null ? '-' : d.new_total) }, { h: 'Machines', f: (d) => (d.machines === null ? '-' : d.machines) },

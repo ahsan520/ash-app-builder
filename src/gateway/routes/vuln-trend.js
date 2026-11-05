@@ -53,6 +53,24 @@ function worse(events) {
   return { day: now.day, since_day: before.day, complete, worse: list.slice(0, 20), worse_count: list.length };
 }
 
+// E6s: the disk and health of the findings indexer VM, from the `indexer-health` events its reporter sends every 5 minutes (deploy/indexer/asix-indexer-health.sh, task E6i). The newest report
+// of each host in the last 6 hours, allow-listed and range-checked (the fields are text from the store). null = no report in that time (reporter not installed, or the VM is silent).
+const DISK_WINDOW_H = 6, DISK_STALE_MIN = 15, DISK_HOSTS = 5, HOST_RE = /^[A-Za-z0-9._:-]{1,100}$/, CLUSTER = ['green', 'yellow', 'red', 'unreachable', 'unknown'];
+const num = (v, max) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= max ? Math.round(v * 10) / 10 : null);
+function readDisk(events, now) {
+  const seen = new Map();
+  for (const e of events) {                       // newest first: the first report seen for a host wins
+    const p = e && e.parsed; if (!p || typeof p.host !== 'string' || !HOST_RE.test(p.host) || seen.has(p.host)) continue;
+    const at = Date.parse(e.event_time || e.received_at); if (!Number.isFinite(at)) continue;
+    const age = Math.max(0, Math.round((now - at) / 60000));
+    seen.set(p.host, { host: p.host, disk_used_pct: num(p.disk_used_pct, 100), disk_free_gb: num(p.disk_free_gb, 1e7), disk_total_gb: num(p.disk_total_gb, 1e7),
+      cluster_status: CLUSTER.includes(p.cluster_status) ? p.cluster_status : 'unknown', write_blocked_indices: Number.isInteger(p.write_blocked_indices) && p.write_blocked_indices >= 0 && p.write_blocked_indices < 1e6 ? p.write_blocked_indices : null,
+      reported_at: new Date(at).toISOString(), age_minutes: age, stale: age > DISK_STALE_MIN });
+    if (seen.size === DISK_HOSTS) break;
+  }
+  return seen.size ? [...seen.values()].sort((a, b) => (a.host < b.host ? -1 : 1)) : null;
+}
+
 router.get('/v1/endpoints/vulnerabilities/trend', ...guarded('capacity:read'), async (req, res) => {
   for (const k of Object.keys(req.query || {})) if (k !== 'days') return apiError(res, 400, 'INVALID_VULN_TREND', 'Unknown parameter "' + String(k).slice(0, 40) + '". Allowed: days');
   const raw = req.query.days === undefined || req.query.days === '' ? '30' : req.query.days;
@@ -61,7 +79,9 @@ router.get('/v1/endpoints/vulnerabilities/trend', ...guarded('capacity:read'), a
   try {
     const events = await getEventStore().listEvents(req.tenant_id, { source_type: summary.SOURCE_TYPE, from: new Date(Date.now() - (Math.max(days, 3) + 1) * 86400000).toISOString(), limit: 500 });
     const list = shape(events).slice(-days);
-    res.status(200).json({ success: true, days, points: list, latest: list.length ? list[list.length - 1] : null, machines: worse(events) });
+    let indexer_disk = null;       // a failed read of the health events never hides the trend
+    try { indexer_disk = readDisk(await getEventStore().listEvents(req.tenant_id, { source_type: 'indexer-health', from: new Date(Date.now() - DISK_WINDOW_H * 3600000).toISOString(), limit: 200 }), Date.now()); } catch (e) { console.error('Indexer disk read failed:', e.message); }
+    res.status(200).json({ success: true, days, points: list, latest: list.length ? list[list.length - 1] : null, machines: worse(events), indexer_disk });
   } catch (e) {
     console.error('Vulnerability trend failed:', e.message);
     apiError(res, 500, 'VULN_TREND_ERROR', 'Failed to read the vulnerability summaries');
