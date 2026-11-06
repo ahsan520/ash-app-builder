@@ -1767,6 +1767,86 @@ function groupConfigCard() {
   })();
   return card(title, box);
 }
+// ---- Windows events read by agents, per agent group (E11) ----
+// The second thing the Endpoints page writes to the manager, with the same flow as the folders card above: choose a group, tick channels, Preview (nothing is written), Apply (asks again, sends
+// the hash of the file the preview read), every change can be undone. The query of each channel comes from the Windows event filter policy (Settings, Windows event filter), never from this
+// page; a channel the policy cannot say in XPath is read whole and the broker still filters it. Text only: nothing typed is ever put in as HTML.
+function groupWinlogCard() {
+  const title = 'Windows events read by agents, per agent group';
+  const box = el('div', {}, el('div', { className: 'mute', textContent: 'Loading...' }));
+  const say = (cls, text) => el('div', { className: cls, style: 'margin-top:8px', textContent: text });
+  const GW = '/v1/endpoints/group-winlog', GCF = '/v1/endpoints/group-config';
+  (async () => {
+    let st;
+    try { st = await api(GCF); } catch (e) { box.replaceChildren(say('err', e.message)); return; }
+    if (!st.writer_registered) { box.replaceChildren(say('mute', 'Not set up. This uses the same group configuration user as the folders card above; an operator registers it with register-writer.')); return; }
+    if (st.problem) { box.replaceChildren(say('err', 'The endpoint manager could not be asked for its groups: ' + st.problem.message)); return; }
+    const groupSel = el('select', {}, ...(st.groups || []).map((g) => el('option', { value: g.name, textContent: g.name + (g.agents !== null ? ' (' + g.agents + ' machines)' : '') })));
+    const area = el('div', {});
+    const load = async () => {
+      const g = groupSel.value; area.replaceChildren(el('div', { className: 'mute', textContent: 'Reading the group...' }));
+      let d; try { d = await api(GW + '/' + encodeURIComponent(g)); } catch (e) { area.replaceChildren(say('err', e.message)); return; }
+      const editable = d.state === 'none' || d.state === 'ok';
+      const names = [...d.offered]; for (const c of d.channels) if (!names.some((x) => x.toLowerCase() === c.toLowerCase())) names.push(c);
+      const chosen = new Set(d.channels.map((c) => c.toLowerCase())); let previewed = null, base = d.sha256;
+      const out = el('div', {}), list = el('div', {});
+      const pushOf = (c) => (d.pushes || []).find((p) => p.channel.toLowerCase() === c.toLowerCase());
+      const picked = () => names.filter((c) => chosen.has(c.toLowerCase()));
+      const reset = () => { previewed = null; applyBtn.disabled = true; };
+      const draw = () => {
+        list.replaceChildren(...names.map((c) => {
+          const p = pushOf(c);
+          return el('div', { style: 'margin-top:6px' },
+            el('label', {}, el('input', { type: 'checkbox', checked: chosen.has(c.toLowerCase()), onchange: (ev) => { if (ev.target.checked) chosen.add(c.toLowerCase()); else chosen.delete(c.toLowerCase()); reset(); } }), el('span', { textContent: ' ' + c })),
+            p ? el('div', { className: 'mute', style: 'margin-left:22px;font-size:12px', textContent: p.query ? 'The policy gives this query: ' + p.query : 'No filter at the agent: the whole channel is sent and the broker filters (' + p.reason + ').' }) : '');
+        }));
+      };
+      const applyBtn = el('button', { className: 'btn pri', textContent: 'Apply', disabled: true, title: 'Preview first', onclick: async () => {
+        if (JSON.stringify(picked()) !== previewed) return;
+        if (!confirm('Change the Windows event channels read by group \"' + g + '\"? Windows machines in the group pick it up within a few minutes. You can undo it from the history.')) return;
+        applyBtn.disabled = true; out.replaceChildren(el('div', { className: 'mute', textContent: 'Writing to the manager...' }));
+        try { const r = await api(GW + '/' + encodeURIComponent(g), { method: 'PUT', body: { channels: picked(), base_sha256: base } }); await load(); area.prepend(say('ok', r.changed ? 'Done. The manager holds the new channels.' : 'Nothing to change.')); }
+        catch (e) { if (/changed since/.test(e.message)) { await load(); area.prepend(say('err', e.message + ' The list below is the one the manager has now.')); } else out.replaceChildren(say('err', e.message)); }
+      } });
+      const previewBtn = el('button', { className: 'btn', textContent: 'Preview', title: 'Shows what would change; writes nothing', onclick: async () => {
+        out.replaceChildren(el('div', { className: 'mute', textContent: 'Checking...' })); reset();
+        try {
+          const r = await api(GW + '/' + encodeURIComponent(g) + '/preview', { method: 'POST', body: { channels: picked() } }); base = r.base_sha256; previewed = JSON.stringify(picked());
+          const dl = (head, xs, cls) => (xs.length ? el('div', { style: 'margin-top:6px' }, el('div', { className: 'mute', textContent: head + ' (' + xs.length + ')' }), ...xs.map((x) => el('div', { className: cls, textContent: x }))) : '');
+          out.replaceChildren(r.changed ? el('div', {}, dl('Will be added', r.diff.added, 'ok'), dl('Will be removed', r.diff.removed, 'err'), dl('Query will change', r.diff.changed, ''), el('div', { className: 'mute', style: 'margin-top:6px', textContent: r.diff.same + ' channels stay as they are. Nothing else in the group configuration is touched.' })) : say('mute', 'No change: the manager already has these channels with the queries the policy gives now.'));
+          applyBtn.disabled = !r.changed || !st.write_enabled; applyBtn.title = st.write_enabled ? '' : 'Changes are switched off on this server';
+        } catch (e) { out.replaceChildren(say('err', e.message)); }
+      } });
+      const hist = (d.history || []).map((h) => el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px' },
+        el('span', { className: 'mute', textContent: new Date(h.at).toLocaleString() }), el('span', { textContent: (h.by || 'someone') + ': ' + ({ apply: 'changed the channels', remove: 'removed the channels', undo: 'undid a change' }[h.action] || h.action) + (h.channels_after && h.channels_after.length ? ' (' + h.channels_after.join(', ') + ')' : '') }),
+        pill(h.result === 'applied' ? 'Applied' : h.result === 'rolled_back' ? 'Rolled back' : 'Failed', h.result === 'applied' ? 'ok' : 'off'),
+        h.result === 'applied' && st.write_enabled ? el('button', { className: 'btn', textContent: 'Undo', title: 'Put the channel list back as it was before this change (queries follow the policy as it is now)', onclick: async () => {
+          if (!confirm('Put the channel list of group \"' + g + '\" back as it was before this change? The queries are the ones the policy gives now.')) return;
+          try { await api(GW + '/' + encodeURIComponent(g) + '/undo', { method: 'POST', body: { history_id: h.id, base_sha256: d.sha256 } }); await load(); } catch (e) { alert(e.message); }
+        } }) : ''));
+      const stepLine = d.state === 'ok' ? (d.in_step === false
+        ? el('div', { style: 'margin-top:8px' }, pill('Out of step with the filter policy', 'off'), el('span', { className: 'mute', style: 'margin-left:8px', textContent: 'The Windows event filter policy (revision ' + d.policy_revision + ') gives a different query than the one in this block for: ' + d.rows.filter((r) => !r.same).map((r) => r.channel).join(', ') + '. Preview, then Apply, writes the queries the policy gives now.' }))
+        : el('div', { style: 'margin-top:8px' }, pill('In step with the filter policy', 'ok'))) : '';
+      area.replaceChildren(
+        el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, pill(editable ? (d.channels.length ? d.channels.length + ' channels set by ASIX' : 'Nothing set by ASIX') : 'Cannot edit', editable ? 'ok' : 'off'), el('span', { className: 'mute', textContent: d.state_text })),
+        stepLine,
+        editable ? el('div', {}, list, el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center' },
+          (() => { const add = el('input', { placeholder: 'Another channel, for example Microsoft-Windows-Sysmon/Operational', style: 'width:380px' });
+            return el('span', {}, add, el('button', { className: 'btn', textContent: 'Add a channel', onclick: () => { const v = add.value.trim(); if (v && !names.some((x) => x.toLowerCase() === v.toLowerCase())) { names.push(v); chosen.add(v.toLowerCase()); add.value = ''; reset(); draw(); } } })); })(),
+          previewBtn, applyBtn), out,
+          el('div', { className: 'mute', style: 'margin-top:8px;font-size:12px', textContent: 'Windows machines of the group read each ticked channel with the query the Windows event filter policy gives (events the policy drops are not sent at all, so the manager\'s own Windows rules do not see them either). The broker still applies the whole policy. A channel the agent already reads from its own configuration may be read twice: after Apply, check the machine with Show logs read. Up to ' + 20 + ' channels.' }))
+          : say('err', d.state === 'broken' ? 'The ASIX markers for Windows events in this group\'s configuration are damaged. Fix or remove them on the manager before ASIX can edit this group.' : 'The ASIX block for Windows events in this group\'s configuration was changed by hand, so ASIX will not overwrite it. Remove the block on the manager, or put it back as ASIX wrote it.'),
+        hist.length ? el('div', { style: 'margin-top:14px' }, el('div', { className: 'mute', textContent: 'History' }), ...hist) : '');
+      draw();
+    };
+    groupSel.onchange = load;
+    box.replaceChildren(
+      st.write_enabled ? '' : say('mute', 'Changes are switched off on this server (ASIX_ENDPOINT_CONFIG_WRITE is not \"true\"): you can look and preview, not apply.'),
+      el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px' }, el('span', { textContent: 'Group' }), groupSel), area);
+    if ((st.groups || []).length) await load(); else area.replaceChildren(say('mute', 'The manager has no groups.'));
+  })();
+  return card(title, box);
+}
 // ---- What one machine is configured to monitor (E4q) ----
 // Read only. Two buttons in an agent's detail ask the manager (which asks the agent, so it must be connected) for the folders it watches for file changes and the log files and
 // event channels it reads (GET /v1/endpoints/agents/:id/config/syscheck | logcollector). Nothing is requested until a button is pressed. Every value is shown as text.
@@ -2284,7 +2364,7 @@ async function pgEndpoints() {
     return [card('Third-party notices', box)];
   };
 
-  const TABS = [['overview', 'Overview', overview], ['agents', 'Agents', agentsView], ['alerts', 'Alerts', alertsView], ['fim', 'File integrity', () => alertsView('fim')], ['config', 'Configuration checks', () => alertsView('config')], ['vuln', 'Vulnerabilities', () => vulnerabilitiesView(vulnFocus)], ['groups', 'Group settings', () => [groupConfigCard()]], ['install', 'Add a machine', installView], ['notices', 'Third-party notices', notices]];
+  const TABS = [['overview', 'Overview', overview], ['agents', 'Agents', agentsView], ['alerts', 'Alerts', alertsView], ['fim', 'File integrity', () => alertsView('fim')], ['config', 'Configuration checks', () => alertsView('config')], ['vuln', 'Vulnerabilities', () => vulnerabilitiesView(vulnFocus)], ['groups', 'Group settings', () => [groupConfigCard(), groupWinlogCard()]], ['install', 'Add a machine', installView], ['notices', 'Third-party notices', notices]];
   function draw() {
     tabs.replaceChildren(...TABS.map(([id, label]) => el('div', { className: 'xtab' + (tab === id ? ' on' : ''), textContent: label, onclick: () => { if (id === 'vuln') vulnFocus = ''; tab = id; draw(); } })));
     const cur = TABS.find((t) => t[0] === tab) || TABS[0];

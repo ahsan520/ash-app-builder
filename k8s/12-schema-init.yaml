@@ -670,6 +670,32 @@ data:
         WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
     GRANT SELECT, INSERT, UPDATE, DELETE ON endpoint_group_config_history TO asix_admin;
 
+    -- E11: the history of changes to the ASIX block of Windows event channels in an agent group's agent.conf (docs/endpoints.md). Same idea as endpoint_group_config_history, in its own
+    -- table so the folder undo can never read one of these rows. channels_* are the channel names; policy_revision is the revision of the Windows filter policy the block was made from.
+    CREATE TABLE IF NOT EXISTS endpoint_group_winlog_history (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID NOT NULL REFERENCES tenants(id),
+        group_name VARCHAR(64) NOT NULL,
+        action VARCHAR(20) NOT NULL CHECK (action IN ('apply', 'remove', 'undo')),
+        result VARCHAR(20) NOT NULL CHECK (result IN ('applied', 'rolled_back', 'failed')),
+        channels_before JSONB NOT NULL,
+        channels_after JSONB NOT NULL,
+        policy_revision INTEGER NOT NULL DEFAULT 0,
+        before_sha256 VARCHAR(64) NOT NULL,
+        after_sha256 VARCHAR(64),
+        before_content TEXT NOT NULL,
+        note TEXT,
+        actor TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_group_winlog_history ON endpoint_group_winlog_history (tenant_id, group_name, created_at DESC);
+    ALTER TABLE endpoint_group_winlog_history ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS endpoint_group_winlog_history_tenant_isolation ON endpoint_group_winlog_history;
+    CREATE POLICY endpoint_group_winlog_history_tenant_isolation ON endpoint_group_winlog_history FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+    GRANT SELECT, INSERT, UPDATE, DELETE ON endpoint_group_winlog_history TO asix_admin;
+
     -- The central Wazuh indexer entry of a tenant, for the Vulnerabilities tab (docs/endpoints.md task E6e). ONE indexer is shared; each row holds the exact index of THIS tenant's
     -- manager (wazuh-states-vulnerabilities-<manager name>) and an indexer user whose role reads that index only. Written only by src/endpoints/wazuh-indexer-cli.js, never by a route.
     -- ca_pem is the one trusted certificate when connecting (the indexer's root CA or its own); secret_enc is the password sealed with NOTIFY_ENCRYPTION_KEY.

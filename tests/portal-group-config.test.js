@@ -114,6 +114,6 @@ describe('the card as written', () => {
     assert.deepStrictEqual([...new Set(f.match(/method: '[A-Z]+'/g))].sort(), ["method: 'POST'", "method: 'PUT'"]); assert.match(f, /const GC = '\/v1\/endpoints\/group-config'/);
   });
   it('is a tab of the Endpoints page and does not name the product', () => {
-    assert.match(html, /\['groups', 'Group settings', \(\) => \[groupConfigCard\(\)\]\]/); assert.ok(!/wazuh/i.test(f.replace(/wazuh-manager-cli\.js/, '')), 'only the operator command may name it');
+    assert.match(html, /\['groups', 'Group settings', \(\) => \[groupConfigCard\(\), groupWinlogCard\(\)\]\]/); assert.ok(!/wazuh/i.test(f.replace(/wazuh-manager-cli\.js/, '')), 'only the operator command may name it');
   });
 });
