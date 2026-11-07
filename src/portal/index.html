@@ -1847,6 +1847,76 @@ function groupWinlogCard() {
   })();
   return card(title, box);
 }
+// ---- Linux log files and the journal read by agents, per agent group (E13) ----
+// Same flow as the two cards above: choose a group, list what the Linux machines of the group read (log files or patterns, and the systemd journal), Preview (nothing is written), Apply (asks
+// again, sends the hash of the file the preview read), every change can be undone. Text only: nothing typed is ever put in as HTML. The server refuses system, secret and key paths.
+function groupLinuxlogCard() {
+  const title = 'Linux logs read by agents, per agent group';
+  const box = el('div', {}, el('div', { className: 'mute', textContent: 'Loading...' }));
+  const say = (cls, text) => el('div', { className: cls, style: 'margin-top:8px', textContent: text });
+  const GL = '/v1/endpoints/group-linuxlog', GCF = '/v1/endpoints/group-config';
+  const nameOf = (e) => (e.type === 'journald' ? 'The systemd journal' : e.path);
+  (async () => {
+    let st;
+    try { st = await api(GCF); } catch (e) { box.replaceChildren(say('err', e.message)); return; }
+    if (!st.writer_registered) { box.replaceChildren(say('mute', 'Not set up. This uses the same group configuration user as the folders card above; an operator registers it with register-writer.')); return; }
+    if (st.problem) { box.replaceChildren(say('err', 'The endpoint manager could not be asked for its groups: ' + st.problem.message)); return; }
+    const groupSel = el('select', {}, ...(st.groups || []).map((g) => el('option', { value: g.name, textContent: g.name + (g.agents !== null ? ' (' + g.agents + ' machines)' : '') })));
+    const area = el('div', {});
+    const load = async () => {
+      const g = groupSel.value; area.replaceChildren(el('div', { className: 'mute', textContent: 'Reading the group...' }));
+      let d; try { d = await api(GL + '/' + encodeURIComponent(g)); } catch (e) { area.replaceChildren(say('err', e.message)); return; }
+      const editable = d.state === 'none' || d.state === 'ok';
+      let entries = d.entries.map((e) => ({ ...e })), previewed = null, base = d.sha256;
+      const out = el('div', {}), list = el('div', {});
+      const key = () => JSON.stringify(entries);
+      const reset = () => { previewed = null; applyBtn.disabled = true; };
+      const draw = () => {
+        list.replaceChildren(...(entries.length ? entries.map((e, i) => el('div', { style: 'display:flex;gap:8px;align-items:center;margin-top:4px' }, el('span', { textContent: nameOf(e) }),
+          el('button', { className: 'btn', textContent: 'Remove', onclick: () => { entries.splice(i, 1); reset(); draw(); } }))) : [el('div', { className: 'mute', textContent: 'Nothing is set for this group.' })]));
+      };
+      const applyBtn = el('button', { className: 'btn pri', textContent: 'Apply', disabled: true, title: 'Preview first', onclick: async () => {
+        if (key() !== previewed) return;
+        if (!confirm('Change the Linux logs read by group \"' + g + '\"? Linux machines in the group pick it up within a few minutes. You can undo it from the history.')) return;
+        applyBtn.disabled = true; out.replaceChildren(el('div', { className: 'mute', textContent: 'Writing to the manager...' }));
+        try { const r = await api(GL + '/' + encodeURIComponent(g), { method: 'PUT', body: { entries, base_sha256: base } }); await load(); area.prepend(say('ok', r.changed ? 'Done. The manager holds the new list.' : 'Nothing to change.')); }
+        catch (e) { if (/changed since/.test(e.message)) { await load(); area.prepend(say('err', e.message + ' The list below is the one the manager has now.')); } else out.replaceChildren(say('err', e.message)); }
+      } });
+      const previewBtn = el('button', { className: 'btn', textContent: 'Preview', title: 'Shows what would change; writes nothing', onclick: async () => {
+        out.replaceChildren(el('div', { className: 'mute', textContent: 'Checking...' })); reset();
+        try {
+          const r = await api(GL + '/' + encodeURIComponent(g) + '/preview', { method: 'POST', body: { entries } }); base = r.base_sha256; previewed = key();
+          const dl = (head, xs, cls) => (xs.length ? el('div', { style: 'margin-top:6px' }, el('div', { className: 'mute', textContent: head + ' (' + xs.length + ')' }), ...xs.map((x) => el('div', { className: cls, textContent: x }))) : '');
+          out.replaceChildren(r.changed ? el('div', {}, dl('Will be added', r.diff.added, 'ok'), dl('Will be removed', r.diff.removed, 'err'), el('div', { className: 'mute', style: 'margin-top:6px', textContent: r.diff.same + ' stay as they are. Nothing else in the group configuration is touched.' })) : say('mute', 'No change: the manager already has exactly this list.'));
+          applyBtn.disabled = !r.changed || !st.write_enabled; applyBtn.title = st.write_enabled ? '' : 'Changes are switched off on this server';
+        } catch (e) { out.replaceChildren(say('err', e.message)); }
+      } });
+      const hist = (d.history || []).map((h) => el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px' },
+        el('span', { className: 'mute', textContent: new Date(h.at).toLocaleString() }), el('span', { textContent: (h.by || 'someone') + ': ' + ({ apply: 'changed the list', remove: 'removed the list', undo: 'undid a change' }[h.action] || h.action) + (h.entries_after && h.entries_after.length ? ' (' + h.entries_after.map(nameOf).join(', ') + ')' : '') }),
+        pill(h.result === 'applied' ? 'Applied' : h.result === 'rolled_back' ? 'Rolled back' : 'Failed', h.result === 'applied' ? 'ok' : 'off'),
+        h.result === 'applied' && st.write_enabled ? el('button', { className: 'btn', textContent: 'Undo', title: 'Put the list back as it was before this change', onclick: async () => {
+          if (!confirm('Put the list of group \"' + g + '\" back as it was before this change?')) return;
+          try { await api(GL + '/' + encodeURIComponent(g) + '/undo', { method: 'POST', body: { history_id: h.id, base_sha256: d.sha256 } }); await load(); } catch (e) { alert(e.message); }
+        } }) : ''));
+      const pathIn = el('input', { placeholder: 'A log file or pattern, for example /var/log/app/*.log', style: 'width:380px' });
+      const addFile = () => { const v = pathIn.value.trim(); if (v && !entries.some((e) => e.type === 'file' && e.path === v)) { entries.push({ type: 'file', path: v }); pathIn.value = ''; reset(); draw(); } };
+      const journal = el('label', {}, el('input', { type: 'checkbox', checked: entries.some((e) => e.type === 'journald'), onchange: (ev) => { entries = entries.filter((e) => e.type !== 'journald'); if (ev.target.checked) entries.unshift({ type: 'journald' }); reset(); draw(); } }), el('span', { textContent: ' Also read the systemd journal' }));
+      area.replaceChildren(
+        el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, pill(editable ? (d.entries.length ? d.entries.length + ' set by ASIX' : 'Nothing set by ASIX') : 'Cannot edit', editable ? 'ok' : 'off'), el('span', { className: 'mute', textContent: d.state_text })),
+        editable ? el('div', {}, list, el('div', { style: 'margin-top:8px' }, journal), el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center' }, pathIn, el('button', { className: 'btn', textContent: 'Add a file', onclick: addFile }), previewBtn, applyBtn), out,
+          el('div', { className: 'mute', style: 'margin-top:8px;font-size:12px', textContent: 'Linux machines of the group read each listed file (as plain text lines) and the journal, and send them to the manager, so they reach the broker like any other event. Paths must be absolute; system, secret and key files are refused. A file the agent already reads from its own configuration may be read twice. Up to 20 entries.' }))
+          : say('err', d.state === 'broken' ? 'The ASIX markers for Linux logs in this group\'s configuration are damaged. Fix or remove them on the manager before ASIX can edit this group.' : 'The ASIX block for Linux logs in this group\'s configuration was changed by hand, so ASIX will not overwrite it. Remove the block on the manager, or put it back as ASIX wrote it.'),
+        hist.length ? el('div', { style: 'margin-top:14px' }, el('div', { className: 'mute', textContent: 'History' }), ...hist) : '');
+      draw();
+    };
+    groupSel.onchange = load;
+    box.replaceChildren(
+      st.write_enabled ? '' : say('mute', 'Changes are switched off on this server (ASIX_ENDPOINT_CONFIG_WRITE is not \"true\"): you can look and preview, not apply.'),
+      el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px' }, el('span', { textContent: 'Group' }), groupSel), area);
+    if ((st.groups || []).length) await load(); else area.replaceChildren(say('mute', 'The manager has no groups.'));
+  })();
+  return card(title, box);
+}
 // ---- What one machine is configured to monitor (E4q) ----
 // Read only. Two buttons in an agent's detail ask the manager (which asks the agent, so it must be connected) for the folders it watches for file changes and the log files and
 // event channels it reads (GET /v1/endpoints/agents/:id/config/syscheck | logcollector). Nothing is requested until a button is pressed. Every value is shown as text.
@@ -2364,7 +2434,7 @@ async function pgEndpoints() {
     return [card('Third-party notices', box)];
   };
 
-  const TABS = [['overview', 'Overview', overview], ['agents', 'Agents', agentsView], ['alerts', 'Alerts', alertsView], ['fim', 'File integrity', () => alertsView('fim')], ['config', 'Configuration checks', () => alertsView('config')], ['vuln', 'Vulnerabilities', () => vulnerabilitiesView(vulnFocus)], ['groups', 'Group settings', () => [groupConfigCard(), groupWinlogCard()]], ['install', 'Add a machine', installView], ['notices', 'Third-party notices', notices]];
+  const TABS = [['overview', 'Overview', overview], ['agents', 'Agents', agentsView], ['alerts', 'Alerts', alertsView], ['fim', 'File integrity', () => alertsView('fim')], ['config', 'Configuration checks', () => alertsView('config')], ['vuln', 'Vulnerabilities', () => vulnerabilitiesView(vulnFocus)], ['groups', 'Group settings', () => [groupConfigCard(), groupWinlogCard(), groupLinuxlogCard()]], ['install', 'Add a machine', installView], ['notices', 'Third-party notices', notices]];
   function draw() {
     tabs.replaceChildren(...TABS.map(([id, label]) => el('div', { className: 'xtab' + (tab === id ? ' on' : ''), textContent: label, onclick: () => { if (id === 'vuln') vulnFocus = ''; tab = id; draw(); } })));
     const cur = TABS.find((t) => t[0] === tab) || TABS[0];

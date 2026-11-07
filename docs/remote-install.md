@@ -42,6 +42,7 @@ Anything not given is asked for on the terminal. `--help` on either script lists
 
 ## Things to know
 
+- **The broker script passes `--wazuh-alerts-windows-events drop` by default** (ASIX owns Windows event detection, `docs/endpoints.md` E14: the manager's alerts from Windows event-log events are not sent). Give `--keep-windows-event-alerts` to send them too, or `--no-alerts` for no alerts at all.
 - **A re-run of `bootstrap-broker.sh` forgets any option not given again.** On a VM that is already set up give every option again and add `--no-install` (docs/broker-vm.md says the same).
 - `--writer-address` is what the manager will use to reach the indexer: `127.0.0.1` when both run on one machine (the lab), else the indexer's address.
 - It does **not** open any firewall: 1514/tcp and 1515/tcp on the broker VM for the agents, the syslog ports for the senders; 9200/tcp on the indexer VM from the managers and the ASIX API node only.

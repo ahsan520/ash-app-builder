@@ -44,6 +44,8 @@
 #                  event filter does not apply to alerts. Adds the vector user to the wazuh group when there is one. Installs vector-wazuhalerts.yaml. Re-running without
 #                  --wazuh-alerts turns it off.
 #   --wazuh-alerts-file PATH       With --wazuh-alerts: another alert file. Written as ASIX_WAZUH_ALERTS.
+#   --wazuh-alerts-windows-events keep|drop   With --wazuh-alerts: drop = do not send the alerts the manager raised from Windows event-log events (ASIX's own detection reads those raw; docs/endpoints.md E14);
+#                                  file integrity, vulnerability, configuration and all other alerts are always sent. Default keep. Written as ASIX_WAZUH_ALERT_WINDOWS_EVENTS.
 #   --wazuh-alerts-min-level N     With --wazuh-alerts: send only alerts of rule level N (0 to 15) or higher; default 0 = all the manager wrote. Written as ASIX_WAZUH_ALERT_MIN_LEVEL.
 # --no-install     Vector is already installed (offline or pinned install); skip the package repo.
 # --tls-cert/key   Also accept syslog over TLS (RFC 5425) on --tls-port (default 6514), with this server certificate.
@@ -59,6 +61,7 @@
 
 set -euo pipefail
 
+WAZUH_ALERTS_WIN="keep"; WAZUH_ALERTS_WIN_SET=0
 URL=""; KEY=""; NAME=""; PORT="514"; CA=""; INSTALL=1; TLS_CERT=""; TLS_KEY=""; TLS_PORT="6514"; TLS_CLIENT_CA=""; ACCEPT_CONFIG=0; CONFIG_PUBKEY=""; TIMEZONE="UTC"; FILE_GLOB=""; HTTP_USER=""; HTTP_PW_FILE=""; HTTP_PORT="8088"; HTTP_TLS=0; JOURNALD=0; JOURNALD_PRIORITY="6"; WAZUH=0; WAZUH_ARCHIVES="/var/ossec/logs/archives/archives.json"; WAZUH_ARCHIVES_SET=0; WAZUH_MANAGER=0; WAZUH_KEEP_DAYS="3"; WAZUH_KEEP_SET=0; WAZUH_ALERTS=0; WAZUH_ALERTS_FILE="/var/ossec/logs/alerts/alerts.json"; WAZUH_ALERTS_FILE_SET=0; WAZUH_ALERTS_MIN="0"; WAZUH_ALERTS_MIN_SET=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -89,6 +92,7 @@ while [ $# -gt 0 ]; do
     --wazuh-alerts) WAZUH_ALERTS=1; shift;;
     --wazuh-alerts-file) WAZUH_ALERTS_FILE="$2"; WAZUH_ALERTS_FILE_SET=1; shift 2;;
     --wazuh-alerts-min-level) WAZUH_ALERTS_MIN="$2"; WAZUH_ALERTS_MIN_SET=1; shift 2;;
+    --wazuh-alerts-windows-events) WAZUH_ALERTS_WIN="$2"; WAZUH_ALERTS_WIN_SET=1; shift 2;;
     *) echo "Unknown option: $1" >&2; exit 2;;
   esac
 done
@@ -155,8 +159,9 @@ if [ "$WAZUH_ALERTS" -eq 1 ]; then
   WAZUH_ALERTS_CFG="/etc/vector/vector-wazuhalerts.yaml"
   [[ "$WAZUH_ALERTS_FILE" =~ ^/[A-Za-z0-9._/-]{1,200}$ ]] && [[ "$WAZUH_ALERTS_FILE" != *..* ]] || { echo "--wazuh-alerts-file must be an absolute path of plain characters (letters, digits, . _ - /)." >&2; exit 2; }
   [[ "$WAZUH_ALERTS_MIN" =~ ^[0-9]{1,2}$ ]] && [ "$WAZUH_ALERTS_MIN" -le 15 ] || { echo "--wazuh-alerts-min-level must be a number from 0 to 15." >&2; exit 2; }
-elif [ "$WAZUH_ALERTS_FILE_SET" -eq 1 ] || [ "$WAZUH_ALERTS_MIN_SET" -eq 1 ]; then
-  echo "--wazuh-alerts-file and --wazuh-alerts-min-level only make sense with --wazuh-alerts." >&2; exit 2
+  [ "$WAZUH_ALERTS_WIN" = "keep" ] || [ "$WAZUH_ALERTS_WIN" = "drop" ] || { echo "--wazuh-alerts-windows-events must be keep or drop." >&2; exit 2; }
+elif [ "$WAZUH_ALERTS_FILE_SET" -eq 1 ] || [ "$WAZUH_ALERTS_MIN_SET" -eq 1 ] || [ "$WAZUH_ALERTS_WIN_SET" -eq 1 ]; then
+  echo "--wazuh-alerts-file, --wazuh-alerts-min-level and --wazuh-alerts-windows-events only make sense with --wazuh-alerts." >&2; exit 2
 fi
 # (end of the Wazuh alerts checks)
 
@@ -250,7 +255,7 @@ fi
   [ -z "$FILE_GLOB" ] || echo "ASIX_FILE_GLOB=$(printf '%s\n' "$FILE_GLOB" | paste -sd, -)"   # all globs, comma separated: for reading; vector-file.yaml has them written out
   [ "$JOURNALD" -eq 0 ] || echo "ASIX_JOURNALD_MAX_PRIORITY=$JOURNALD_PRIORITY"
   [ "$WAZUH" -eq 0 ] || echo "ASIX_WAZUH_ARCHIVES=$WAZUH_ARCHIVES"
-  if [ "$WAZUH_ALERTS" -eq 1 ]; then echo "ASIX_WAZUH_ALERTS=$WAZUH_ALERTS_FILE"; echo "ASIX_WAZUH_ALERT_MIN_LEVEL=$WAZUH_ALERTS_MIN"; fi
+  if [ "$WAZUH_ALERTS" -eq 1 ]; then echo "ASIX_WAZUH_ALERTS=$WAZUH_ALERTS_FILE"; echo "ASIX_WAZUH_ALERT_MIN_LEVEL=$WAZUH_ALERTS_MIN"; echo "ASIX_WAZUH_ALERT_WINDOWS_EVENTS=$WAZUH_ALERTS_WIN"; fi
   if [ -n "$HTTP_USER" ]; then
     echo "ASIX_HTTP_USER=$HTTP_USER"
     echo "ASIX_HTTP_PASSWORD=$HTTP_PW"

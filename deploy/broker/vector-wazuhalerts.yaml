@@ -48,6 +48,14 @@ transforms:
       lvl = to_int(.rule.level) ?? 0
       min = to_int("${ASIX_WAZUH_ALERT_MIN_LEVEL:-0}") ?? 0
       if lvl < min { abort }
+      # Who owns Windows event detection (docs/endpoints.md, E14): with ASIX_WAZUH_ALERT_WINDOWS_EVENTS=drop the alerts the manager raised from Windows event-log events (decoder
+      # windows_eventchannel, location EventChannel; Security, System, Sysmon and the rest) are not sent, because ASIX's own detection reads those same events raw. Alerts from file
+      # integrity, vulnerabilities, configuration checks and every other source are never touched. Default keep = send them all, as before.
+      if "${ASIX_WAZUH_ALERT_WINDOWS_EVENTS:-keep}" == "drop" {
+        dn = string(.decoder.name) ?? ""
+        loc = string(.location) ?? ""
+        if dn == "windows_eventchannel" || loc == "EventChannel" { abort }
+      }
 
   # The Wazuh alert -> one ASIX event: a one-line message and every detail as a named field.
   wazuh_alerts_to_event:

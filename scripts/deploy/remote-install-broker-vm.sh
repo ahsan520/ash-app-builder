@@ -8,11 +8,12 @@
 #   ./scripts/deploy/remote-install-broker-vm.sh --check [--host H --user U]            # look only: signs in, runs the installers' own --check, changes nothing
 #   ./scripts/deploy/remote-install-broker-vm.sh [--host H] [--user U] [--ssh-port 22] [--password-file F] --url URL --name NAME
 #         [--key-file F] [--timezone America/Toronto] [--port 514] [--ca F] [--tls-cert F --tls-key F [--tls-port N] [--tls-client-ca F]] [--accept-config [--config-pubkey F]]
-#         [--no-alerts] [--journald] [--wazuh-keep-days N] [--no-install] [--indexer-file F [--indexer-url U]] [--out-dir DIR] [-- more options for bootstrap-broker.sh]
+#         [--no-alerts] [--keep-windows-event-alerts] [--journald] [--wazuh-keep-days N] [--no-install] [--indexer-file F [--indexer-url U]] [--out-dir DIR] [-- more options for bootstrap-broker.sh]
 #
 #   Anything not given is asked for on the terminal (host, user, password, the ingest key). The ingest key is NOT an option here: give --key-file (one line), or ASIX_INGEST_KEY, or type it.
 #   The password: --password-file (mode 600), ASIX_SSH_PASSWORD, or typed. Never an argument, so `ps` here does not show it.
 #   --no-alerts      leave out --wazuh-alerts (the default sends the manager's alerts to ASIX too).
+#   --keep-windows-event-alerts   the default leaves out the manager's alerts raised from Windows event-log events (ASIX's own detection owns those, E14); this sends them too.
 #   --indexer-file   a file made on the indexer VM by wazuh-indexer-tenant.sh --writer (see remote-install-indexer-vm.sh, which fetches it for you): the manager's vulnerability
 #                    detection is switched on and pointed at that indexer. --indexer-url overrides its address.
 #   A re-run of bootstrap-broker.sh forgets any option not given again: give EVERY option again when you run this on a VM that is already set up (add --no-install).
@@ -24,7 +25,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; REPO="$(cd "$HERE/../.." &
 # shellcheck source=../lib/remote-ssh.sh
 . "$REPO/scripts/lib/remote-ssh.sh"
 
-CHECK=0; URL=""; NAME=""; KEY_FILE=""; TZ_=""; PORT=""; CA=""; TLS_CERT=""; TLS_KEY=""; TLS_PORT=""; TLS_CA=""; ACCEPT=0; PUBKEY=""; ALERTS=1; JOURNALD=0; KEEP=""; NOINST=0; IDX_FILE=""; IDX_URL=""; EXTRA=()
+CHECK=0; URL=""; NAME=""; KEY_FILE=""; TZ_=""; PORT=""; CA=""; TLS_CERT=""; TLS_KEY=""; TLS_PORT=""; TLS_CA=""; ACCEPT=0; PUBKEY=""; ALERTS=1; KEEPWIN=0; JOURNALD=0; KEEP=""; NOINST=0; IDX_FILE=""; IDX_URL=""; EXTRA=()
 RS_HOST=""; RS_USER=""; RS_PORT=""; RS_PWFILE_IN=""; RS_OUT_DIR=""
 need() { [ $# -ge 2 ] || rs_die "the option $1 needs a value"; }
 while [ $# -gt 0 ]; do
@@ -48,6 +49,7 @@ while [ $# -gt 0 ]; do
     --accept-config) ACCEPT=1; shift;;
     --config-pubkey) need "$@"; PUBKEY="$2"; shift 2;;
     --no-alerts) ALERTS=0; shift;;
+    --keep-windows-event-alerts) KEEPWIN=1; shift;;
     --journald) JOURNALD=1; shift;;
     --wazuh-keep-days) need "$@"; KEEP="$2"; shift 2;;
     --no-install) NOINST=1; shift;;
@@ -94,6 +96,8 @@ rs_upload "$REPO"
 F='files'
 BOOT="./scripts/deploy/bootstrap-broker.sh --wazuh-manager"
 [ "$ALERTS" -eq 0 ] || BOOT="$BOOT --wazuh-alerts"
+# Decided 2026-11-07 (docs/endpoints.md, E14): ASIX's own detection owns Windows event rules, so the manager's alerts from Windows event-log events are not sent (everything else is).
+[ "$ALERTS" -eq 0 ] || [ "$KEEPWIN" -eq 1 ] || BOOT="$BOOT --wazuh-alerts-windows-events drop"
 [ "$JOURNALD" -eq 0 ] || BOOT="$BOOT --journald"
 [ "$NOINST" -eq 0 ] || BOOT="$BOOT --no-install"
 [ -z "$KEEP" ] || BOOT="$BOOT --wazuh-keep-days $KEEP"

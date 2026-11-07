@@ -44,8 +44,12 @@ describe('broker Wazuh alerts input: the files agree', () => {
   });
   it('comments hold no dollar-brace text (Vector interpolates inside comments too and would refuse to start), and every variable is a known one', () => {
     for (const l of cfg.split('\n')) if (l.trim().startsWith('#')) assert.ok(!l.includes('${'), l);
-    const known = new Set(['ASIX_WAZUH_ALERTS', 'ASIX_WAZUH_ALERT_MIN_LEVEL', 'ASIX_INGEST_URL', 'ASIX_INGEST_KEY', 'ASIX_BROKER_NAME', 'ASIX_CA_FILE']);
+    const known = new Set(['ASIX_WAZUH_ALERTS', 'ASIX_WAZUH_ALERT_MIN_LEVEL', 'ASIX_WAZUH_ALERT_WINDOWS_EVENTS', 'ASIX_INGEST_URL', 'ASIX_INGEST_KEY', 'ASIX_BROKER_NAME', 'ASIX_CA_FILE']);
     for (const m of code(cfg).matchAll(/\$\{([A-Z_]+)/g)) assert.ok(known.has(m[1]), m[1]);
+  });
+  it('E14: the ownership switch defaults to keep in the config, is written by the bootstrap script, and is documented in broker.env.example', () => {
+    assert.match(cfg, /\$\{ASIX_WAZUH_ALERT_WINDOWS_EVENTS:-keep\}/); assert.match(bootstrap, /--wazuh-alerts-windows-events\) WAZUH_ALERTS_WIN="\$2"; WAZUH_ALERTS_WIN_SET=1; shift 2;;/);
+    assert.match(bootstrap, /echo "ASIX_WAZUH_ALERT_WINDOWS_EVENTS=\$WAZUH_ALERTS_WIN"/); assert.match(bootstrap, /WAZUH_ALERTS_WIN="keep"; WAZUH_ALERTS_WIN_SET=0/); assert.match(read('deploy/broker/broker.env.example'), /#ASIX_WAZUH_ALERT_WINDOWS_EVENTS=keep/);
   });
   it('the minimum level has a safe default of 0 in the config itself', () => { assert.match(cfg, /\$\{ASIX_WAZUH_ALERT_MIN_LEVEL:-0\}/); });
   it('the bootstrap script installs the file only with --wazuh-alerts, removes it on a re-run without, validates it, lists it, writes both settings', () => {
@@ -81,9 +85,14 @@ describe('broker Wazuh alerts input: the files agree', () => {
 describe('bootstrap validation of --wazuh-alerts (the real block, run in bash, nothing installed)', () => {
   const start = bootstrap.indexOf('# Extra input: the alerts of a Wazuh manager.'), end = bootstrap.indexOf('# (end of the Wazuh alerts checks)');
   const block = bootstrap.slice(start, end);
-  const run = (vars) => spawnSync('bash', ['-c', `set -euo pipefail\nWAZUH_ALERTS=0; WAZUH_ALERTS_FILE="/var/ossec/logs/alerts/alerts.json"; WAZUH_ALERTS_FILE_SET=0; WAZUH_ALERTS_MIN="0"; WAZUH_ALERTS_MIN_SET=0\n${vars}\n${block}\necho "CFG=[$WAZUH_ALERTS_CFG] PATH=[$WAZUH_ALERTS_FILE] MIN=[$WAZUH_ALERTS_MIN]"`], { encoding: 'utf8' });
+  const run = (vars) => spawnSync('bash', ['-c', `set -euo pipefail\nWAZUH_ALERTS=0; WAZUH_ALERTS_FILE="/var/ossec/logs/alerts/alerts.json"; WAZUH_ALERTS_FILE_SET=0; WAZUH_ALERTS_MIN="0"; WAZUH_ALERTS_MIN_SET=0; WAZUH_ALERTS_WIN="keep"; WAZUH_ALERTS_WIN_SET=0\n${vars}\n${block}\necho "CFG=[$WAZUH_ALERTS_CFG] PATH=[$WAZUH_ALERTS_FILE] MIN=[$WAZUH_ALERTS_MIN]"`], { encoding: 'utf8' });
   it('the block is found', () => { assert.ok(start > 0 && end > start); });
   it('off by default: nothing to validate and nothing refused', () => { const r = run(''); assert.strictEqual(r.status, 0, r.stderr); assert.match(r.stdout, /CFG=\[\] PATH=\[\/var\/ossec\/logs\/alerts\/alerts\.json\] MIN=\[0\]/); });
+  it('E14: --wazuh-alerts-windows-events takes keep or drop, and only with --wazuh-alerts', () => {
+    for (const ok of ['keep', 'drop']) { const r = run(`WAZUH_ALERTS=1; WAZUH_ALERTS_WIN=${ok}; WAZUH_ALERTS_WIN_SET=1`); assert.strictEqual(r.status, 0, ok + r.stderr); }
+    for (const bad of ['', 'DROP', 'yes', 'drop;ls', 'all']) { const r = run(`WAZUH_ALERTS=1; WAZUH_ALERTS_WIN='${bad}'; WAZUH_ALERTS_WIN_SET=1`); assert.strictEqual(r.status, 2, bad); assert.match(r.stderr, /must be keep or drop/); }
+    const r = run('WAZUH_ALERTS_WIN=drop; WAZUH_ALERTS_WIN_SET=1'); assert.strictEqual(r.status, 2); assert.match(r.stderr, /only make sense with --wazuh-alerts/);
+  });
   it('--wazuh-alerts alone names the file to validate and keeps the standard path and level; the options change them', () => {
     let r = run('WAZUH_ALERTS=1'); assert.strictEqual(r.status, 0, r.stderr); assert.match(r.stdout, /CFG=\[\/etc\/vector\/vector-wazuhalerts\.yaml\] PATH=\[\/var\/ossec\/logs\/alerts\/alerts\.json\] MIN=\[0\]/);
     r = run('WAZUH_ALERTS=1; WAZUH_ALERTS_FILE=/srv/wazuh/alerts.json; WAZUH_ALERTS_FILE_SET=1; WAZUH_ALERTS_MIN=7; WAZUH_ALERTS_MIN_SET=1'); assert.strictEqual(r.status, 0, r.stderr); assert.match(r.stdout, /PATH=\[\/srv\/wazuh\/alerts\.json\] MIN=\[7\]/);
@@ -242,13 +251,14 @@ describe('real Vector: the alerts input and what ASIX receives', { skip: VECTOR 
   after(() => { lane.close(); for (const t of tmps) fs.rmSync(t, { recursive: true, force: true }); });
 
   // One broker: its own folder, an alert file with a line of history, Vector started, the sample lines appended; returns what the lane got.
-  async function scenario({ minLevel, extra = [], waitFor = (events) => events.length >= 1, lines }) {
+  async function scenario({ minLevel, winEvents, extra = [], waitFor = (events) => events.length >= 1, lines }) {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wazuh-alerts-')); tmps.push(tmp);
     const file = path.join(tmp, 'alerts.json'), base = path.join(tmp, 'base.yaml'), mine = path.join(tmp, 'vector-wazuhalerts.yaml');
     fs.writeFileSync(file, A.line(A.base({ rule: { level: 12, description: 'history before Vector starts', id: '1' } })) + '\n'); fs.writeFileSync(base, `data_dir: ${tmp}\n`); fs.copyFileSync(path.join(root, 'deploy/broker/vector-wazuhalerts.yaml'), mine);
     const mark = 'scenario-' + path.basename(tmp), got = [];
     const env = { PATH: process.env.PATH, VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION: 'true', ASIX_INGEST_KEY: 'asix_ik_test', ASIX_BROKER_NAME: mark, ASIX_INGEST_URL: `http://127.0.0.1:${lane.address().port}/v1/ingest/http`, ASIX_WAZUH_ALERTS: file };
     if (minLevel !== undefined) env.ASIX_WAZUH_ALERT_MIN_LEVEL = minLevel;
+    if (winEvents !== undefined) env.ASIX_WAZUH_ALERT_WINDOWS_EVENTS = winEvents;
     const v = spawn(VECTOR, ['--config', base, '--config', mine], { env, stdio: 'ignore' });
     try {
       await sleep(3500);   // the file is read from its END: only what is appended now counts
@@ -327,6 +337,20 @@ describe('real Vector: the alerts input and what ASIX receives', { skip: VECTOR 
   it('a minimum level of 0, or one nobody can read, sends everything (the bootstrap refuses a bad one, the file does not break on it)', async () => {
     const zero = await scenario({ minLevel: '0', waitFor: (ev) => ev.length >= ALL.length }); assert.deepStrictEqual(ruleIds(zero.events), ALL);
     const junk = await scenario({ minLevel: 'abc', waitFor: (ev) => ev.length >= ALL.length }); assert.deepStrictEqual(ruleIds(junk.events), ALL);
+  });
+  it('E14: with windows-events set to drop, alerts raised from Windows event-log events are not sent; every other alert is', async () => {
+    const r = await scenario({ winEvents: 'drop', waitFor: (ev) => ev.length >= ALL.length - 1 }); const ids = ruleIds(r.events);
+    assert.ok(!ids.includes('60122'), 'the Windows logon failure alert is left out'); assert.deepStrictEqual(ids, ALL.filter((x) => x !== '60122'), 'file integrity, ssh, low level and the rest still arrive');
+  });
+  it('E14: keep, nothing set, and anything that is not drop send everything, as before', async () => {
+    for (const v of [undefined, 'keep', '', 'DROP', 'yes']) { const r = await scenario({ winEvents: v, waitFor: (ev) => ev.length >= ALL.length }); assert.deepStrictEqual(ruleIds(r.events), ALL, String(v)); }
+  });
+  it('E14: drop finds a Windows event alert by its decoder or by its location, and leaves an alert that only mentions Windows in its text alone', async () => {
+    const byDecoder = A.base({ rule: { level: 6, description: 'x', id: '71001' }, id: '1', decoder: { name: 'windows_eventchannel' }, location: 'somewhere' });
+    const byLocation = A.base({ rule: { level: 6, description: 'x', id: '71002' }, id: '2', decoder: { name: 'json' }, location: 'EventChannel' });
+    const text = A.base({ rule: { level: 6, description: 'windows_eventchannel EventChannel in words', id: '71003', groups: ['windows'] }, id: '3', decoder: { name: 'syscheck_integrity_changed' }, location: 'syscheck', full_log: 'EventChannel windows_eventchannel' });
+    const noDecoder = A.base({ rule: { level: 6, description: 'x', id: '71004' }, id: '4', location: 'l' });
+    const r = await scenario({ winEvents: 'drop', lines: [byDecoder, byLocation, text, noDecoder].map((a) => A.line(a)), waitFor: (ev) => ev.length >= 2 }); assert.deepStrictEqual(ruleIds(r.events), ['71003', '71004']);
   });
   it('text that looks like a variable or like code in an alert arrives as it is (alert text is data, not configuration)', async () => {
     const tricky = A.base({ rule: { level: 9, description: 'ran ${EVIL} and $(id) now', id: '70001' }, id: '9.9', full_log: 'x ${ASIX_INGEST_KEY} y', data: { cmd: '${HOME} `id`' }, location: 'l' });

@@ -86,6 +86,7 @@ app.use(require('./routes/score-alert'));
 app.use(require('./routes/endpoint-notices'));
 app.use(require('./routes/group-config'));
 app.use(require('./routes/group-winlog'));   // E11: the Windows events block of a group (same limits as group-config)
+app.use(require('./routes/group-linuxlog'));   // E13: the Linux logs block of a group (same limits)
 
 // Readiness (k8s/30-asix-api.yaml). Mounted AFTER every router on purpose: a request only gets here if each router above passed it on, so a pod whose route chain is
 // broken (found 2026-10-31: a router that never answered hung every request after it, while /v1/health/status, mounted early, still looked fine) is never marked Ready,

@@ -128,7 +128,7 @@ describe('history and undo', () => {
 
 describe('safety of what is drawn', () => {
   it('everything typed or received is set as text, never as HTML', () => { const src = cut('groupWinlogCard'); assert.ok(!/innerHTML|insertAdjacentHTML|outerHTML/.test(src)); });
-  it('the card is on the Group settings tab, after the folders card', () => { assert.match(html, /\['groups', 'Group settings', \(\) => \[groupConfigCard\(\), groupWinlogCard\(\)\]\]/); });
+  it('the card is on the Group settings tab, after the folders card', () => { assert.match(html, /\['groups', 'Group settings', \(\) => \[groupConfigCard\(\), groupWinlogCard\(\), groupLinuxlogCard\(\)\]\]/); });
   it('a channel name from the server is shown as text even if it looks like markup', async () => {
     const c = build(base({ ['GET ' + GW]: { ...GROUP, channels: ['<img src=x onerror=alert(1)>'], state: 'ok', in_step: true } })).fn(); await tick();
     assert.ok(texts(c).some((x) => x.includes('<img src=x'))); assert.ok(!all(c).some((x) => x.tag === 'img'));

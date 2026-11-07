@@ -102,7 +102,7 @@ describe('the broker VM install', () => {
     const r = run(BROKER, BROKER_ARGS); assert.strictEqual(r.status, 0, r.stderr + r.stdout);
     const up = calls().find((c) => /tar xzf/.test(c.raw)); assert.ok(up); assert.ok(up.stdin.length > 1000, 'a tarball went over stdin');
     const boot = roots().find((c) => /bootstrap-broker\.sh/.test(c.cmd)).cmd;
-    assert.match(boot, /bootstrap-broker\.sh --wazuh-manager --wazuh-alerts --url 'https:\/\/asix1:30443\/v1\/ingest\/http' --name 'broker-2' --key "\$\(tr -d '\\r\\n' < files\/ingest\.key\)"/);
+    assert.match(boot, /bootstrap-broker\.sh --wazuh-manager --wazuh-alerts --wazuh-alerts-windows-events drop --url 'https:\/\/asix1:30443\/v1\/ingest\/http' --name 'broker-2' --key "\$\(tr -d '\\r\\n' < files\/ingest\.key\)"/);
     for (const c of calls()) { assert.ok(!c.argv.includes(KEY) && !c.raw.includes(KEY) && !c.cmd.includes(KEY), 'the key is in no command'); } assert.ok(calls().some((c) => c.stdin.includes(KEY)), 'the key file went over stdin');
     assert.ok(!r.stdout.includes(KEY)); assert.match(r.stdout, /--key <key from file>/); assert.ok(fs.existsSync(path.join(rec, 'removed'))); assert.match(fs.readFileSync(path.join(rec, 'removed'), 'utf8'), /asix-remote-install/);
     assert.match(r.stdout, /1514\/tcp and 1515\/tcp/); assert.match(r.stdout, /\/var\/log\/asix-remote-install-/);
@@ -113,6 +113,11 @@ describe('the broker VM install', () => {
     const boot = roots().find((c) => /bootstrap-broker\.sh/.test(c.cmd)).cmd;
     for (const re of [/--journald/, /--no-install/, /--wazuh-keep-days 5/, /America\/Toronto/, /--port 1514/, /--ca files\/ca\.pem/, /--tls-cert files\/tls\.crt --tls-key files\/tls\.key/, /--tls-port 6514/, /--accept-config/, /--file-glob/]) assert.match(boot, re);
     assert.ok(!/--wazuh-alerts/.test(boot)); assert.ok(calls().some((c) => c.stdin.includes('TLSKEY')));
+  });
+  it('E14: Windows event alerts are left out by default; --keep-windows-event-alerts sends them; --no-alerts sends no alerts and so passes neither', () => {
+    run(BROKER, BROKER_ARGS); let boot = roots().find((c) => /bootstrap-broker\.sh/.test(c.cmd)).cmd; assert.match(boot, /--wazuh-alerts --wazuh-alerts-windows-events drop/);
+    fs.rmSync(rec, { recursive: true }); fs.mkdirSync(rec); run(BROKER, [...BROKER_ARGS, '--keep-windows-event-alerts']); boot = roots().find((c) => /bootstrap-broker\.sh/.test(c.cmd)).cmd; assert.match(boot, /--wazuh-alerts /); assert.ok(!/windows-events/.test(boot));
+    fs.rmSync(rec, { recursive: true }); fs.mkdirSync(rec); run(BROKER, [...BROKER_ARGS, '--no-alerts']); boot = roots().find((c) => /bootstrap-broker\.sh/.test(c.cmd)).cmd; assert.ok(!/--wazuh-alerts/.test(boot));
   });
   it('--indexer-file makes a second step that points the manager at the indexer', () => {
     fs.writeFileSync(path.join(tmp, 'idx.json'), '{"url":"https://i:9200"}\n', { mode: 0o600 });
