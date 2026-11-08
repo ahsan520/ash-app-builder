@@ -8,7 +8,7 @@ A module provides:
 - Backend services (REST / event handlers)
 - APIs (namespaced by module)
 - Database models (migrations isolated to module schema namespace)
-- UI pages (modular routing; new module = new navigation section or sub-navigation)
+- UI pages (modular routing; new module = new navigation section or sub-navigation). **As of the 2026-11-08 decision a module brings its own page files, and the portal index only calls them** through an optional `ui` block in its manifest (`builtin`, `native` or `embedded`); the index page is not edited per module. See `docs/portal-shell.md`.
 - Permissions (module-specific roles and actions)
 - Settings (modular settings categories; expandable, not one huge page)
 - Events (publish / subscribe to internal event bus)
@@ -50,3 +50,11 @@ Module-to-module communication uses:
 - Shared entity model (user, device, IP, domain, process, file, cloud resource, application, alert, incident, threat actor, IOC)
 - Shared policy engine (policies apply across modules)
 - Shared audit model (every module writes audit events)
+
+## Modules that wrap an open-source tool (2026-11-08)
+A module may be a thin ASIX layer over an open-source tool that runs as its own service (policy: `docs/open-source-stack.md`, "Adopt before build"). Such a module's manifest declares:
+- `ui.kind: 'embedded'` with a `/app/<id>/` URL, so the tool's own interface shows under the ASIX frame (`docs/portal-shell.md`);
+- `proxy: { env: 'ASIX_<NAME>_URL' }`: the name of the environment variable that holds the tool's in-cluster address, which the gateway forwards to (the address is set by the module's installer, never by a request; the name is never sent to the browser);
+- the actions it offers, which reach the **action registry** disabled until an admin enables them (`docs/product-plan.md`, SR2);
+- its tenant mapping (how an ASIX tenant becomes the tool's organisation or workspace).
+Disabling the module stops the proxy route and hides the page, as for any module; the tool's data stays.

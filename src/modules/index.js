@@ -26,6 +26,8 @@ function resolve(manifests, profile, lic) {
     out.push({
       id: m.id, name: m.name, description: m.description, tier: m.tier, status: m.status,
       requires: m.requires, entitlement: m.entitlement, portal_area: m.portal_area,
+      // portal pages this module brings (docs/portal-shell.md); null = none declared. `proxy` is deliberately not passed on.
+      ui: m.ui || null,
       state, reason, included_in_profile: tierOk, entitled,
     });
   }

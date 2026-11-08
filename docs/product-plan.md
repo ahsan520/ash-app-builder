@@ -23,6 +23,11 @@ deployment profiles, and entitlements — never a fork.
    control-plane DB, multi-node capacity dashboard.
 4. **Enterprise features** — multi-tenant hardening, sandboxed playbooks/integrations, marketplace
    catalog + signing, SSO/SAML, compliance, AI.
+5. **Platform shell, marketplace and SOAR** (planned 2026-11-08) — the portal index becomes a shell that
+   calls each module's own page; a marketplace for packs (parsers, rules, playbooks, integrations, actions);
+   SOAR on an adopted open-source engine behind an approval gate. See "Status of Phase 5" below. (Phase 4
+   above, "Enterprise features", is the long-term list; the endpoint security work is tracked as "Phase 4:
+   endpoint security" below, and Phase 5 takes over the SOAR, marketplace and signing parts of it.)
 
 Rules that keep it one product: Postgres stays first-class (not legacy); all content (rules,
 parsers, dashboards) is written in XQL, never raw SQL; one event envelope used end-to-end; modules
@@ -737,11 +742,66 @@ A broker's heartbeat now says how many CPUs and how much memory its VM has and h
 ### Parser workers turned on for the lab (2026-10-31)
 `k8s/30-asix-api.yaml`: `ASIX_PARSER_WORKERS` is now `"2"`, API memory limit 768Mi (request 384Mi), CPU limit 1000m. Decision taken with the owner: try 2 workers on the lab first and watch Settings, Parser pool for unparsed events; roll back by setting `"0"`. Rolling updates can use about 2.3 GB for a while (three pods). Never run on the k3s box yet. See `docs/broker-groups.md`, "Parser workers".
 
+## Status of Phase 5: platform shell, marketplace and SOAR (planned 2026-11-08)
+
+**Only S1 and S3 are built (see the task table).** It records what was agreed with Ash on 2026-11-08 and the tasks that follow.
+
+### What was agreed
+- **Do not copy another product's GUI** (the XSIAM screenshots are a reference for what objects and features a SIEM needs). Many features, simple GUI. Rules and the idea-by-idea mapping: `docs/xsiam-reference.md`.
+- **Adopt before build.** Most modules will use the best open-source tool, shown under the ASIX portal; ASIX keeps sign-in, tenants, approval, audit, undo and secrets. Policy and the researched candidates: `docs/open-source-stack.md`.
+- **The portal index is a shell.** A module that is being worked on has its own GUI page and the index calls it; the index is not edited for every module, and a broken module page cannot break ASIX. Contract: `docs/portal-shell.md`.
+- **Wanted outcomes:** (1) playbooks that act on Windows and Linux machines through the endpoint manager; (2) a marketplace for common products: integrations, parsers, rules, playbooks; (3) playbooks for the threat intel feeds and IOCs; (4) firewall actions.
+
+### What exists today (checked in the 2026-11-08 zip)
+- `src/playbooks/playbook-engine.js`: a Level 0 skeleton (143 lines; returns objects; no triggers, approval, rollback or run history). The manifest `soar` is `planned`.
+- Cases & Issues is the alert list; there is no case record (`docs/endpoints.md` says the same for MITRE on a case page).
+- Content packs: detection rules only, one file per pack in `src/packs/catalog/`; no signing, no per-tenant upgrade tracking.
+- IOC matcher and indicators exist (`src/threat-intel/indicators.js`, the IOC matcher); no scheduled feed pull was found.
+- ASIX can write to the endpoint manager in one narrow way: marked blocks of a group's `agent.conf` (E10, E11, E13) through a separate writer user. Restart, delete or run-a-command through the manager API is not built (`docs/endpoints.md`, E4c "Not built").
+- The portal has `NAV`, `SETTINGS` and `THREAT` arrays in `index.html`; `GET /v1/modules` already drives which entries are greyed (`MENU_MODULE`, `tests/portal-menu.test.js`). As of S1 (2026-11-08) manifests may carry an optional `ui` block, but none of the 17 real manifests declares one yet.
+
+### Tasks
+Update the Status column in the same change that does the work. Prefer new files.
+
+| Task | What | Needs | Status |
+|---|---|---|---|
+| S1 | Manifest `ui` block (`kind`, `entries`, `permission`, `order`, `proxy`) and its checks in `src/modules/registry.js`; `GET /v1/modules` returns the entries. No portal change. | none | **done 2026-11-08**: `registry.js` (`validateUi`, `checkUi`), `src/modules/index.js` passes `ui` on (never `proxy`); `tests/modules-ui.test.js`, 29 tests. No real manifest uses it yet. |
+| S2 | Portal shell loader: build the menu from `ui` entries for `native` and `embedded` kinds; `builtin` stays as it is; error card, 10 s limit, retry; fallback to the old arrays; `ctx` object for pages; tests that cut the loader out of `index.html`. | S1 | not started |
+| S3 | Gateway: `frame-src 'self'` for `/portal`, separate CSP for `/app/*`; static serving of `src/portal/modules/`. | S1 | **done 2026-11-08**: new `src/gateway/portal-headers.js` (`portalHeaders`, `appHeaders`, `moduleFiles`), wired in `src/gateway/index.js`; `tests/gateway-csp.test.js`, 18 tests. Module files are served only as `/portal/modules/<id>/<name>.js|css`. |
+| S4 | Embedded host: `/app/<id>/` reverse proxy (permission, module enabled, tenant), NetworkPolicy, single sign-on to the tool. | S3, SR0 result | not started |
+| S5 | Menu work with no new backend: Endpoints as a side menu; **Posture Management** showing the existing Vulnerabilities and Configuration checks pages; Settings regrouped by purpose. All as manifest entries. | S2 | not started |
+| CS1 | Minimal case record: alerts attach to a case; owner, status, notes, timeline. Own file set. | none | not started |
+| MK1 | Pack manifest v2: typed items (rules, parsers, dashboards, playbooks, actions, integration definitions), version, publisher, certification, support, dependencies, deprecated flag. Current packs keep working. **Packs carry data only, never portal code.** | none | not started |
+| MK2 | Marketplace page as the **first native module page** (Browse, Installed, pack page with Details / Content / Dependencies / Version history; install, update, remove). Our own layout. | S2, MK1 | not started |
+| MK3 | Signed catalog and delivery: index plus signed packs, signature check on install, update notices per tenant, staged rollout (a few machines first). Choice of OCI + cosign or GitHub Releases + signed index is recorded in `docs/open-source-stack.md`. | MK1 | not started |
+| SR0 | **SOAR engine spike** (a few days): Shuffle vs Tracecat vs own engine, with one scenario: pull an IOC feed, raise an approval, block one address on an OPNsense or pfSense firewall. Compare: footprint on 4 vCPU / 8 GB, tenant isolation, k3s fit, licence terms, how well it maps to the pack format, who patches it. Result and date written to `docs/open-source-stack.md`. | none | not started |
+| SR1 | Credentials (through the secrets abstraction) and Integrations (instances, category, status **Not configured** until an account is added). | MK1 | not started |
+| SR2 | **Action registry**: name, publisher, kind, source, parameters, risk class, autonomy level; **installed actions start disabled**; an admin enables per tenant; every run audited. This is the allow-list for firewall and endpoint actions. | SR1 | not started |
+| L1 | Lists as a tenant object (block, allow, watch; manual and by playbook) and a read-only, token-protected **list URL** a firewall can poll. | none | not started |
+| SR3 | Playbook run on the chosen engine: trigger, conditions, actions from SR2, approval, verify, undo, run history. First playbooks: **IOC feed import** (schedule, fetch, normalise, score, expire, write to the IOC store, record what changed) and **IOC hit** (enrich, open a case, ask approval, add to a list). | SR0, SR2, CS1, L1 | not started |
+| SR4 | Firewall pack, one product first (OPNsense or pfSense, then FortiGate, then Palo Alto): publish a list (low risk) and direct block with approval and an automatic undo timer. | SR3 | not started |
+| SR5 | **Endpoint actions through the endpoint manager, last** (most risk): only commands already defined on the manager, called by name with checked parameters; a separate writer user; undo timer; approval for anything not reversible. Windows registry or service changes need custom signed scripts on the agent group and are a separate decision. Check the manager API against the installed version (4.14.9) before building. | SR3 | not started |
+| PM1 | Group settings as **Profiles** (folders, Windows channels, Linux logs) plus **Rules** (platform, target group, order), showing the merged result for a machine in several groups. | S2 | not started |
+
+### Order
+S1 and S3 (done), S2 (shell) with CS1 and MK1 in parallel; MK2 as the first native page; SR0 in parallel with all of it; then SR1, SR2, L1; then SR3; then SR4; SR5 last. S5 and PM1 whenever convenient.
+
+### Honest limits (2026-11-08)
+- Every tool named in `docs/open-source-stack.md` for SOAR is **unverified** for footprint, tenant isolation and k3s fit. The spike decides; this plan does not.
+- The AGPL position (separate service, API only) is the plan's working rule, **not legal advice**. A lawyer's read is needed before any tool is modified or re-branded.
+- Wazuh does not change registry keys or services by itself; SR5 can only run commands the manager already defines.
+- The marketplace is a catalog and a signed delivery path first. A public web store, SDK, community submissions and revenue (`docs/marketplace.md`) are not part of this phase.
+
 ## Open decisions (ask before committing)
 - Smallest Home machine to design against (assumed: 4 vCPU / 8 GB / 100 GB until told otherwise).
 - Licensing model: open core vs. fully commercial with locked modules (business decision; the
   signed-license mechanism is the same either way).
 - Enterprise search engine: ClickHouse alone vs. ClickHouse + OpenSearch (can wait until Phase 3).
+- SOAR engine (2026-11-08): adopt Shuffle, adopt Tracecat, or own engine, decided by spike SR0. Lean (not a decision): Shuffle for connector breadth; Tracecat if YAML-as-code fit and PostgreSQL matter more.
+- Legal read of the AGPL position for any adopted tool, and for bundling third-party rule content (2026-11-08).
+- Pack delivery: OCI registry + cosign, or GitHub Releases + signed index (MK3).
+- Embedded tools: one Keycloak realm shared with ASIX, or their own client (`docs/portal-shell.md`, "Not decided").
+- Whether a Home install runs a SOAR engine at all, or a minimal built-in runner for Home only (depends on SR0 footprint numbers).
 
 **Done 2026-11-01 (late): PostgreSQL stuck after a kernel update, fixed.** After `apt upgrade` and a reboot onto kernel 7.0.0-42 on asix1, `postgresql-0` never started (the image's `gosu` spun at 100% CPU in `sched_yield`), so the API pods crash-looped and the portal showed 502. The pod now starts as uid 70 (`securityContext` runAsUser/runAsGroup 70 in `k8s/10-postgresql.yaml`), which skips `gosu`; the existing data folder already belonged to that user. Applied live first with `kubectl patch`, PostgreSQL started with the existing data (clean shutdown, "ready to accept connections"), Keycloak recovered by itself, the API pods needed a restart. Page: `docs/postgres-gosu-hang.md`; test `tests/k8s-postgres-user.test.js`. **Not proven:** that the kernel is the cause (the old kernel was never booted to compare). **Not yet done:** a deploy with this manifest (until then `sync-and-deploy.sh` would put the old manifest back, so push first), and `fsGroup` for a storage class other than local-path.
 

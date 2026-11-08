@@ -6,7 +6,9 @@ Status: DESIGN (Phase 1 skeleton — real backend behind, no fake pages)
 - Modular routing: new module = new navigation section / sub-navigation
 - Settings: expandable categories, never one huge page
 - Real backend required for every page; no placeholders that pretend backend exists
-- Professional enterprise security UI (comparable to Cortex XSIAM, Sentinel, Elastic Security)
+- Professional enterprise security UI, **but our own design**: we do not copy another product's screens, names or icons (`docs/xsiam-reference.md`). As many features as we can deliver, with a simple GUI: one page per job, sensible defaults, advanced options behind an "Advanced" fold, setup as a short wizard.
+- **The index page is a shell.** Each module brings its own page files, or an embedded open-source tool, and the index calls them (`docs/portal-shell.md`). A module's page failing never takes the portal down.
+- As built today: `src/portal/index.html`, one file, no build step; React/TypeScript below is the original design intent, not the current code.
 
 ## Navigation Structure (Modular)
 Main Nav (expandable sections):

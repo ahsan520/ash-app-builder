@@ -1,6 +1,7 @@
 const path = require('path');
 const express = require('express');
 const db = require('../db');
+const { portalHeaders, appHeaders, moduleFiles } = require('./portal-headers');
 
 const {
   authMiddleware,
@@ -24,21 +25,14 @@ app.use(express.json());
 
 // Central portal (static SPA). Unauthenticated on purpose: it is only HTML/JS;
 // every data call it makes goes through the Bearer-token middleware below.
-app.use(
-  '/portal',
-  (req, res, next) => {
-    res.set({
-      'Content-Security-Policy':
-        "default-src 'self'; connect-src 'self' https:; style-src 'self' 'unsafe-inline'; " +
-        "script-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
-      'X-Content-Type-Options': 'nosniff',
-      'Referrer-Policy': 'no-referrer',
-      'Cache-Control': 'no-store',
-    });
-    next();
-  },
-  express.static(path.join(__dirname, '..', 'portal'))
-);
+// Headers and the module-page rules live in ./portal-headers (docs/portal-shell.md): the portal may frame only its own
+// origin, module page files are served only as /portal/modules/<module id>/<name>.js|css, and /app/* (the embedded
+// open-source tools, S4) gets its own headers.
+const portalDir = path.join(__dirname, '..', 'portal');
+app.use('/portal', portalHeaders);
+app.use('/portal/modules', moduleFiles(path.join(portalDir, 'modules')));
+app.use('/portal', express.static(portalDir));
+app.use('/app', appHeaders);
 
 // Kubernetes / load-balancer health endpoint.
 // Intentionally unauthenticated so health checks do not require a JWT.

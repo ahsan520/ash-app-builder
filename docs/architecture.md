@@ -16,13 +16,13 @@
 | Storage / Search | OpenSearch 2.13 + ClickHouse (analytics) | Apache 2 (OpenSearch), Apache 2 (ClickHouse) |
 | Normalization | Vector / custom parsers (ECS/OCSF target) | Open source |
 | Detection | Sigma + custom rules + scheduled searches | Open (Sigma) |
-| Case / Incident | TheHive / custom | AGPL / custom |
-| Playbooks / SOAR | Custom engine (modular) | Own implementation |
+| Case / Incident | Own minimal case record first (CS1); TheHive 5 is commercial, so not a core part | Own |
+| Playbooks / SOAR | Adopt an open-source engine as a separate service (spike SR0: Shuffle / Tracecat / own); ASIX keeps the approval, audit and undo gate | AGPL engine over API, ASIX gate own |
 | Identity | Keycloak (OIDC/SAML/MFA/WebAuthn) | Apache 2 |
 | Control Plane | Custom abstraction over Kubernetes / Docker / VM | Own |
 | Metrics / Logs | Prometheus + Grafana + Loki | Apache 2 |
 | AI / Agent | Local model router + tool registry (permission-controlled) | Own |
-| UI | React / TypeScript modular design | MIT / Apache 2 (framework) |
+| UI | As built: portal shell + one page per module (native ES modules) or an embedded open-source tool; no build step (`docs/portal-shell.md`) | Own / tool licences |
 
 ## Planes
 
