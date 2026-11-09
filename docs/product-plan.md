@@ -744,7 +744,7 @@ A broker's heartbeat now says how many CPUs and how much memory its VM has and h
 
 ## Status of Phase 5: platform shell, marketplace and SOAR (planned 2026-11-08)
 
-**Only S1 and S3 are built (see the task table).** It records what was agreed with Ash on 2026-11-08 and the tasks that follow.
+**Only S1, S2 and S3 are built (see the task table).** It records what was agreed with Ash on 2026-11-08 and the tasks that follow.
 
 ### What was agreed
 - **Do not copy another product's GUI** (the XSIAM screenshots are a reference for what objects and features a SIEM needs). Many features, simple GUI. Rules and the idea-by-idea mapping: `docs/xsiam-reference.md`.
@@ -766,7 +766,7 @@ Update the Status column in the same change that does the work. Prefer new files
 | Task | What | Needs | Status |
 |---|---|---|---|
 | S1 | Manifest `ui` block (`kind`, `entries`, `permission`, `order`, `proxy`) and its checks in `src/modules/registry.js`; `GET /v1/modules` returns the entries. No portal change. | none | **done 2026-11-08**: `registry.js` (`validateUi`, `checkUi`), `src/modules/index.js` passes `ui` on (never `proxy`); `tests/modules-ui.test.js`, 29 tests. No real manifest uses it yet. |
-| S2 | Portal shell loader: build the menu from `ui` entries for `native` and `embedded` kinds; `builtin` stays as it is; error card, 10 s limit, retry; fallback to the old arrays; `ctx` object for pages; tests that cut the loader out of `index.html`. | S1 | not started |
+| S2 | Portal shell loader: build the menu from `ui` entries for `native` and `embedded` kinds; `builtin` stays as it is; error card, 10 s limit, retry; fallback to the old arrays; `ctx` object for pages; tests that cut the loader out of `index.html`. | S1 | **done 2026-11-08**: `src/portal/index.html` (blocks `menu-state` and `module-shell`, `navArea`/`dynRows`, `route()`, boot); `ui.area` limited to Main, Settings or Threat Management (`registry.js`); `/v1/auth/me` returns `permissions` (`src/gateway/identity-body.js`); `tests/portal-shell.test.js` (40), `tests/identity-body.test.js` (5). No real module declares a page yet; a native page loading successfully is not yet seen in a real browser. |
 | S3 | Gateway: `frame-src 'self'` for `/portal`, separate CSP for `/app/*`; static serving of `src/portal/modules/`. | S1 | **done 2026-11-08**: new `src/gateway/portal-headers.js` (`portalHeaders`, `appHeaders`, `moduleFiles`), wired in `src/gateway/index.js`; `tests/gateway-csp.test.js`, 18 tests. Module files are served only as `/portal/modules/<id>/<name>.js|css`. |
 | S4 | Embedded host: `/app/<id>/` reverse proxy (permission, module enabled, tenant), NetworkPolicy, single sign-on to the tool. | S3, SR0 result | not started |
 | S5 | Menu work with no new backend: Endpoints as a side menu; **Posture Management** showing the existing Vulnerabilities and Configuration checks pages; Settings regrouped by purpose. All as manifest entries. | S2 | not started |
@@ -784,7 +784,7 @@ Update the Status column in the same change that does the work. Prefer new files
 | PM1 | Group settings as **Profiles** (folders, Windows channels, Linux logs) plus **Rules** (platform, target group, order), showing the merged result for a machine in several groups. | S2 | not started |
 
 ### Order
-S1 and S3 (done), S2 (shell) with CS1 and MK1 in parallel; MK2 as the first native page; SR0 in parallel with all of it; then SR1, SR2, L1; then SR3; then SR4; SR5 last. S5 and PM1 whenever convenient.
+S1, S2 and S3 (done: the shell) with CS1 and MK1 in parallel; MK2 as the first native page; SR0 in parallel with all of it; then SR1, SR2, L1; then SR3; then SR4; SR5 last. S5 and PM1 whenever convenient.
 
 ### Honest limits (2026-11-08)
 - Every tool named in `docs/open-source-stack.md` for SOAR is **unverified** for footprint, tenant isolation and k3s fit. The spike decides; this plan does not.

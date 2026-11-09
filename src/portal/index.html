@@ -46,6 +46,8 @@
   .pill { padding:2px 8px; border-radius:10px; font-size:12px; display:inline-block; margin:1px 2px 1px 0; } .ok { background:#12382a; color:var(--ok); } .bad { background:#3d1a1a; color:var(--bad); } .off { background:#222b3f; color:var(--mute); }
   .center { min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; text-align:center; }
   .err { color:var(--bad); } .mute { color:var(--mute); } .hidden { display:none !important; }
+  .modframe { width:100%; height:calc(100vh - 150px); border:1px solid var(--line); border-radius:10px; background:var(--card); }
+  .toast { position:fixed; right:18px; bottom:18px; z-index:50; background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 14px; box-shadow:0 4px 18px rgba(0,0,0,.35); } .toast.bad { border-color:var(--bad); color:var(--bad); }
   .pager { display:flex; gap:8px; align-items:center; margin-top:12px; justify-content:flex-end; }
   .cc { display:grid; grid-template-columns:minmax(260px,340px) 1fr; gap:30px; margin-top:16px; }
   .viewby { display:flex; align-items:center; gap:12px; color:var(--mute); margin-bottom:22px; }
@@ -276,33 +278,61 @@ function navRow(n, active, path, onclick) {
   return r;
 }
 let tenantName = '', username = '', routeQuery = new URLSearchParams();
+// which side menu a path lives in; a page a module brings says so itself (its `area`)
+function navArea(active) {
+  const d = shellLeaf(active, menuMods);
+  if (d) return d.area === 'Settings' ? 'settings' : d.area === 'Threat Management' ? 'threat' : 'main';
+  return active.startsWith('threat/') ? 'threat' : active.startsWith('settings/') ? 'settings' : 'main';
+}
+// rows for the pages modules bring, under the menu they asked for; entries the caller's role cannot use are left out
+function dynRows(nav, area, active, headings) {
+  const list = shellIn(area, menuMods).filter((e) => shellCan(myPerms, e.permission));
+  const row = (e) => navRow({ label: e.label, ic: headings ? '' : '\u2726' }, active, e.path, () => { location.hash = '#/' + e.path; });
+  if (!headings) return list.forEach((e) => nav.append(row(e)));
+  shellGroups(list).forEach((g) => { nav.append(el('div', { className: 'grp', textContent: g.group })); g.items.forEach((e) => nav.append(row(e))); });
+}
 function buildNav(active) {
   const nav = $('nav'); nav.replaceChildren();
-  if (active.startsWith('threat/')) {
+  const area = navArea(active);
+  if (area === 'threat') {
     nav.append(navRow({ label: 'Back to main', ic: '\u2190' }, active, '', () => { location.hash = '#/dashboard'; }), el('div', { className: 'grp', textContent: 'Threat Management' }));
     THREAT.forEach((n) => nav.append(n.group ? el('div', { className: 'grp', textContent: n.group }) : navRow(n, active, 'threat/' + n.id, () => { location.hash = '#/threat/' + n.id; })));
-  } else if (active.startsWith('settings/')) {
+    dynRows(nav, 'Threat Management', active, true);
+  } else if (area === 'settings') {
     nav.append(navRow({ label: 'Back to portal', ic: '\u2190' }, active, '', () => { location.hash = '#/dashboard'; }), el('div', { className: 'grp', textContent: 'Settings' }));
     SETTINGS.forEach((n) => nav.append(n.group ? el('div', { className: 'grp', textContent: n.group }) : navRow(n, active, 'settings/' + n.id, () => { location.hash = '#/settings/' + n.id; })));
-  } else NAV.forEach((n) => nav.append(navRow(n, active, n.id, () => { location.hash = '#/' + (n.home || n.id); })));
+    dynRows(nav, 'Settings', active, true);
+  } else {
+    NAV.forEach((n) => nav.append(navRow(n, active, n.id, () => { location.hash = '#/' + (n.home || n.id); })));
+    dynRows(nav, 'Main', active, false);
+  }
   $('bottom').replaceChildren(
-    navRow({ label: 'Settings', ic: '\u2699' }, active.startsWith('settings/') ? 'settings' : '', 'settings', () => { location.hash = '#/settings/status'; }),
+    navRow({ label: 'Settings', ic: '\u2699' }, area === 'settings' ? 'settings' : '', 'settings', () => { location.hash = '#/settings/status'; }),
     el('div', { className: 'userbox' }, el('div', { className: 'avatar', textContent: (username || '?').slice(0, 2).toUpperCase() }),
       el('div', { className: 'nm' }, el('div', { textContent: username }), el('div', { textContent: tenantName })),
       el('button', { className: 'tg', title: 'Toggle light/dark', textContent: theme() === 'dark' ? '\u263E' : '\u2600', onclick: () => { setTheme(theme() === 'dark' ? 'light' : 'dark'); buildNav(active); } }),
       el('button', { className: 'tg', title: 'Sign out', textContent: '\u23FB', onclick: logout })));
 }
 async function route() {
+  shellLeave();
+  const attempt = shellTake();
   const [rawPath, qs] = (location.hash.replace(/^#\/?/, '') || 'dashboard').split('?');
   const path = rawPath === 'threat' ? 'threat/correlations' : rawPath;
   routeQuery = new URLSearchParams(qs || '');
   await ensureMenuState();
-  const leaf = leaves.find((l) => l.path === path) || leaves[0];
+  const dyn = shellLeaf(path, menuMods);   // a page a module brings itself
+  const leaf = dyn ? { path: dyn.path, label: dyn.label, crumb: dyn.area === 'Main' ? [dyn.label] : [dyn.area, dyn.label] } : (leaves.find((l) => l.path === path) || leaves[0]);
   buildNav(leaf.path);
   const c = leaf.crumb || [leaf.label];
   $('crumb').replaceChildren(...c.flatMap((x, i) => (i ? [' \u203A ', el('b', { textContent: x })] : [x])));
   const off = menuModule(leaf.path);
   if (off) return $('content').replaceChildren(el('div', { className: 'wrap' }, lockedPage(off)));
+  if (dyn) {
+    if (!shellCan(myPerms, dyn.permission)) return $('content').replaceChildren(el('div', { className: 'wrap' }, card('', el('div', { className: 'err', textContent: 'Your role does not include the permission for this page (' + dyn.permission + ').' }))));
+    const host = el('div', { className: 'modhost' });
+    $('content').replaceChildren(el('div', { className: 'wrap' }, host));
+    return void await shellRun(dyn, host, shellCtx(), { attempt, retry: () => shellAgain(route) });
+  }
   $('content').replaceChildren(el('div', { className: 'mute', textContent: 'Loading...' }));
   try { const view = await leaf.page(); $('content').replaceChildren(el('div', { className: 'wrap' }, view)); }
   catch (e) { $('content').replaceChildren(el('div', { className: 'wrap' }, errBox(e))); }
@@ -3204,11 +3234,124 @@ let menuMods = null, menuAt = 0;   // module id -> row from /v1/modules
 function menuSet(list) { menuMods = {}; for (const m of list || []) if (m && m.id) menuMods[m.id] = m; }
 // the module row when this path's module is NOT on, else null (also null when nothing is known yet)
 function menuModule(path) {
-  const id = MENU_MODULE[path];
+  const id = MENU_MODULE[path] || (typeof path === 'string' && path.startsWith('mod/') ? path.split('/')[1] : null);   // pages a module brings itself carry their module id in the path
   const m = id && menuMods ? menuMods[id] : null;
   return m && m.state !== 'enabled' ? m : null;
 }
 // END menu-state
+
+// ---- Module pages (portal shell) ----------------------------------------------------
+// A module that declares a `ui` block in its manifest brings its own page; this block loads it (docs/portal-shell.md).
+// Menu entries come from GET /v1/modules (menuMods); the arrays NAV, SETTINGS and THREAT stay the fallback for every page
+// that is still in this file, and when /v1/modules cannot be read no module page is listed at all.
+// BEGIN module-shell (tests/portal-shell.test.js runs this block on its own: no DOM, no api() calls inside it; el() is passed in or looked up when called)
+const SHELL_LIMIT_MS = 10000;
+// What a tool in a frame may do. No top navigation (it cannot send the portal elsewhere). Scripts and same-origin are needed for the tool's own interface, which is why only tools we choose are embedded.
+const SHELL_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-downloads';
+const SHELL_AREAS = ['Main', 'Settings', 'Threat Management'];
+const SHELL_PAGE = /^[a-z0-9][a-z0-9-]*\.js$/;
+const SHELL_ID = /^[a-z][a-z0-9-]{1,40}$/;
+const SHELL_PATH = /^mod\/([a-z][a-z0-9-]{1,40})\/[a-z][a-z0-9-]{0,40}$/;
+// every native or embedded entry of every module row, in menu order. Rows from the server are data: anything malformed is skipped, not trusted.
+function shellEntries(mods) {
+  const out = [];
+  for (const m of Object.values(mods || {})) {
+    const ui = m && m.ui;
+    if (!ui || (ui.kind !== 'native' && ui.kind !== 'embedded') || !Array.isArray(ui.entries)) continue;
+    for (const e of ui.entries) {
+      const pm = e && typeof e.path === 'string' ? SHELL_PATH.exec(e.path) : null;
+      if (!pm || pm[1] !== m.id || !SHELL_AREAS.includes(e.area) || typeof e.label !== 'string') continue;
+      out.push({ ...e, kind: ui.kind, moduleId: m.id, moduleName: m.name || m.id, state: m.state });
+    }
+  }
+  return out.sort((a, b) => ((a.order ?? 100) - (b.order ?? 100)) || a.label.localeCompare(b.label));
+}
+const shellIn = (area, mods) => shellEntries(mods).filter((e) => e.area === area);
+const shellLeaf = (path, mods) => shellEntries(mods).find((e) => e.path === path) || null;
+// unknown permissions (the /v1/auth/me call failed) or no permission declared: allowed here; the server decides on every call anyway
+const shellCan = (perms, p) => !p || !Array.isArray(perms) || perms.includes(p);
+// entries grouped under their `group` heading, in the order first seen; no group = "More"
+function shellGroups(list) {
+  const out = [];
+  for (const e of list) {
+    const g = e.group || 'More';
+    let row = out.find((x) => x.group === g);
+    if (!row) { row = { group: g, items: [] }; out.push(row); }
+    row.items.push(e);
+  }
+  return out;
+}
+function shellLimit(p, ms, setT) {
+  let timer;
+  const t = new Promise((_, rej) => { timer = (setT || setTimeout)(() => rej(new Error('did not finish loading in ' + Math.round(ms / 1000) + ' seconds')), ms); });
+  return Promise.race([p, t]).finally(() => { if (!setT) clearTimeout(timer); });
+}
+function shellErrorCard(entry, cause, retry, E) {
+  const make = E || el;
+  return make('div', { className: 'card' },
+    make('h3', { textContent: 'This page could not be loaded' }),
+    make('div', { className: 'err', textContent: entry.moduleName + ': ' + cause }),
+    make('div', { className: 'mute', style: 'margin:8px 0', textContent: 'The rest of ASIX is not affected. You can try again, or look at this module under Modules.' }),
+    make('button', { className: 'btn pri', textContent: 'Retry', onclick: retry }), ' ',
+    make('a', { href: '#/modules', textContent: 'Open Modules' }));
+}
+let shellCur = null, shellSeq = 0, shellRetry = 0;
+// leaving a module page: stop it, and make any page that is still loading drop its result
+function shellLeave() {
+  const c = shellCur; shellCur = null; shellSeq++;
+  if (c && c.unmount) { try { c.unmount(); } catch { /* a page that fails to clean up must not stop navigation */ } }
+}
+const shellTake = () => { const n = shellRetry; shellRetry = 0; return n; };   // how many times Retry was pressed for the page now opening
+const shellAgain = (redo) => { shellRetry += 1; redo(); };
+// Draws one module page into host. Never throws: any failure becomes an error card in host and { ok: false }.
+// deps (all optional): el, importFn(url), setT, log(entry, cause), retry()
+async function shellMount(entry, host, ctx, attempt, deps) {
+  const D = deps || {};
+  const E = D.el || el;
+  const fail = (cause) => {
+    const text = String((cause && cause.message) || cause);
+    if (D.log) D.log(entry, text); else console.error('module page failed:', entry.moduleId, entry.id, text);
+    host.replaceChildren(shellErrorCard(entry, text, () => { if (D.retry) D.retry(); }, E));
+    return { ok: false, unmount: null, cause: text };
+  };
+  try {
+    if (entry.kind === 'native') {
+      if (!SHELL_PAGE.test(entry.page || '') || !SHELL_ID.test(entry.moduleId || '')) return fail('the page name is not valid');
+      const url = '/portal/modules/' + entry.moduleId + '/' + entry.page + (attempt ? '?r=' + attempt : '');   // a Retry loads a fresh copy: a failed import can be remembered by the browser
+      const mod = await shellLimit((D.importFn || ((u) => import(u)))(url), SHELL_LIMIT_MS, D.setT);
+      if (!mod || typeof mod.mount !== 'function') return fail('the page file has no mount() function');
+      host.replaceChildren();
+      await mod.mount(host, ctx);
+      return { ok: true, unmount: typeof mod.unmount === 'function' ? mod.unmount : null };
+    }
+    if (entry.kind === 'embedded') {
+      if (typeof entry.url !== 'string' || !entry.url.startsWith('/app/' + entry.moduleId + '/')) return fail('the tool address is not valid');
+      const frame = E('iframe', { src: entry.url, title: entry.label, className: 'modframe' });
+      frame.setAttribute('sandbox', SHELL_SANDBOX);   // set as an attribute, not a property: if it cannot be set this throws and the page shows the error card, never an unsandboxed frame
+      host.replaceChildren(E('div', { style: 'margin-bottom:8px' }, E('a', { href: entry.url, target: '_blank', rel: 'noopener', textContent: 'Open in a new tab' })), frame);
+      return { ok: true, unmount: null };
+    }
+    return fail('unknown page kind');
+  } catch (e) { return fail(e); }
+}
+// Runs a page and remembers it so leaving can call its unmount(). If the person already moved on, the late result is stopped at once.
+async function shellRun(entry, host, ctx, deps) {
+  const seq = shellSeq;
+  const res = await shellMount(entry, host, ctx, (deps && deps.attempt) || 0, deps);
+  if (seq !== shellSeq) { if (res.unmount) { try { res.unmount(); } catch { /* ignore */ } } return res; }
+  shellCur = res.ok ? res : null;
+  return res;
+}
+// END module-shell
+let myPerms = null;   // the caller's own permission names from /v1/auth/me; null = not known (nothing is hidden)
+function toast(text, kind) {
+  const t = el('div', { className: 'toast' + (kind === 'error' ? ' bad' : ''), textContent: text });
+  document.body.append(t); setTimeout(() => t.remove(), 4000);
+}
+// what a module page receives: a small stable set, so a page never reaches into this file
+function shellCtx() {
+  return { api, el, tenant: tenantName, can: (p) => shellCan(myPerms, p), navigate: (p) => { location.hash = '#/' + p; }, toast, theme: theme() };
+}
 async function ensureMenuState() {
   if (menuMods && Date.now() - menuAt < 60000) return;
   menuAt = Date.now();   // also after a failure, so a user without modules:read does not retry on every click
@@ -3250,7 +3393,7 @@ window.addEventListener('hashchange', () => { if (!$('app').classList.contains('
     $('login').classList.add('hidden'); $('app').classList.remove('hidden');
     username = jwtClaims(tok).preferred_username || '';
     setTheme(theme());
-    api('/v1/auth/me').then((m) => { tenantName = m.tenant_name; }).catch(() => { tenantName = 'no tenant'; }).finally(route);
+    api('/v1/auth/me').then((m) => { tenantName = m.tenant_name; myPerms = Array.isArray(m.permissions) ? m.permissions : null; }).catch(() => { tenantName = 'no tenant'; }).finally(route);
   } catch (e) { showLogin(e.message); }
 })();
 function showLogin(msg) { $('app').classList.add('hidden'); $('login').classList.remove('hidden'); $('loginerr').textContent = msg || ''; }

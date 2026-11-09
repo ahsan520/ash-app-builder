@@ -9,6 +9,8 @@ const STATUSES = ['available', 'planned'];
 const ID_RE = /^[a-z][a-z0-9-]{1,40}$/;
 // Portal page entries (the optional `ui` block, docs/portal-shell.md).
 const UI_KINDS = ['builtin', 'native', 'embedded'];
+// Where a portal entry appears: the main menu, the Settings side menu, or the Threat Management side menu (docs/portal-shell.md).
+const UI_AREAS = ['Main', 'Settings', 'Threat Management'];
 const ENTRY_ID_RE = /^[a-z][a-z0-9-]{0,40}$/;
 const PAGE_RE = /^[a-z0-9][a-z0-9-]*\.js$/;          // a file name only: no path separators, no dots to climb out of the folder
 const BUILTIN_PATH_RE = /^[a-z][a-z0-9/-]{0,60}$/;   // a menu path that index.html already knows, e.g. 'settings/retention'
@@ -55,11 +57,11 @@ function validateUi(m, bad) {
     if (seen.has(e.id)) bad(`${at}.id "${e.id}" is used twice in this module`);
     seen.add(e.id);
     if (typeof e.label !== 'string' || !e.label.trim() || e.label.length > 60) bad(`${at}.label is required (1 to 60 characters)`);
-    if (typeof e.area !== 'string' || !e.area.trim() || e.area.length > 40) bad(`${at}.area is required (1 to 40 characters)`);
+    if (!UI_AREAS.includes(e.area)) bad(`${at}.area must be one of ${UI_AREAS.join(', ')}`);
     if (e.group != null && (typeof e.group !== 'string' || !e.group.trim() || e.group.length > 40)) bad(`${at}.group must be a string of 1 to 40 characters`);
     if (e.order != null && !(Number.isInteger(e.order) && e.order >= 0 && e.order <= 9999)) bad(`${at}.order must be a whole number from 0 to 9999`);
     if (e.permission != null && (typeof e.permission !== 'string' || !m.permissions.includes(e.permission))) bad(`${at}.permission must be one of this module's own permissions`);
-    const base = { id: e.id, label: e.label.trim(), area: e.area.trim(), group: e.group ? e.group.trim() : null, permission: e.permission || null, order: e.order == null ? 100 : e.order };
+    const base = { id: e.id, label: e.label.trim(), area: e.area, group: e.group ? e.group.trim() : null, permission: e.permission || null, order: e.order == null ? 100 : e.order };
     if (ui.kind === 'native') {
       if (typeof e.page !== 'string' || !PAGE_RE.test(e.page)) bad(`${at}.page must be a file name such as "marketplace.js" (no folders)`);
       if (e.url != null || e.path != null) bad(`${at}: a native entry takes "page" only`);
@@ -128,4 +130,4 @@ function loadDir(dir = path.join(__dirname, 'manifests'), opts = {}) {
   return order(list);
 }
 
-module.exports = { loadDir, validate, order, checkUi, ManifestError, TIERS, UI_KINDS };
+module.exports = { loadDir, validate, order, checkUi, ManifestError, TIERS, UI_KINDS, UI_AREAS };

@@ -1,3 +1,4 @@
+const { identityBody } = require('../identity-body');
 const express = require('express');
 const router = express.Router();
 const {
@@ -72,15 +73,7 @@ router.get(
 
       const tenant = result.rows[0];
 
-      res.status(200).json({
-        success: true,
-        authenticated: true,
-        user_id: req.user_id,
-        tenant_id: req.tenant_id,
-        tenant_name: tenant.name,
-        tenant_status: tenant.status,
-        session_id: req.session_id,
-      });
+      res.status(200).json(identityBody(req, tenant));
     } catch (error) {
       console.error('Auth context lookup failed:', error.message);
       return res.status(500).json({

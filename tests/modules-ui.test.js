@@ -29,8 +29,8 @@ function load(mods, opts = {}) {
   }
   return registry.loadDir(dir, { portalDir: portal, ...opts });
 }
-const native = (over = {}) => ({ id: 'market', permissions: ['packs:read'], ui: { kind: 'native', entries: [{ id: 'browse', label: 'Marketplace', area: 'Configuration', page: 'marketplace.js', ...over }] } });
-const embedded = (over = {}, mod = {}) => ({ id: 'soar-tool', proxy: { env: 'ASIX_SOAR_URL' }, ui: { kind: 'embedded', entries: [{ id: 'main', label: 'Playbooks', area: 'Investigation', url: '/app/soar-tool/', ...over }] }, ...mod });
+const native = (over = {}) => ({ id: 'market', permissions: ['packs:read'], ui: { kind: 'native', entries: [{ id: 'browse', label: 'Marketplace', area: 'Settings', page: 'marketplace.js', ...over }] } });
+const embedded = (over = {}, mod = {}) => ({ id: 'soar-tool', proxy: { env: 'ASIX_SOAR_URL' }, ui: { kind: 'embedded', entries: [{ id: 'main', label: 'Playbooks', area: 'Main', url: '/app/soar-tool/', ...over }] }, ...mod });
 const builtin = (id, p) => ({ id, ui: { kind: 'builtin', entries: [{ id: 'main', label: id, area: 'Settings', path: p }] } });
 const fails = (mods, re, opts) => assert.throws(() => load(mods, opts), (e) => e instanceof registry.ManifestError && re.test(e.message), 'expected a ManifestError matching ' + re);
 
@@ -41,7 +41,7 @@ describe('manifest ui block: accepted', () => {
   });
   it('a native entry gets defaults and a computed menu path', () => {
     const [m] = load([native({ permission: 'packs:read', group: 'Content' })]);
-    assert.deepStrictEqual({ ...m.ui.entries[0] }, { id: 'browse', label: 'Marketplace', area: 'Configuration', group: 'Content', permission: 'packs:read', order: 100, path: 'mod/market/browse', page: 'marketplace.js' });
+    assert.deepStrictEqual({ ...m.ui.entries[0] }, { id: 'browse', label: 'Marketplace', area: 'Settings', group: 'Content', permission: 'packs:read', order: 100, path: 'mod/market/browse', page: 'marketplace.js' });
     assert.strictEqual(m.ui.kind, 'native');
   });
   it('permission and group are optional', () => {
@@ -76,7 +76,7 @@ describe('manifest ui block: rejected', () => {
     fails([m], /used twice in this module/);
   });
   it('a missing label', () => fails([native({ label: '' })], /label is required/));
-  it('a missing area', () => fails([native({ area: undefined })], /area is required/));
+  it('a missing area, or one the shell does not know', () => { fails([native({ area: undefined })], /area must be one of/); fails([native({ area: 'Configuration' })], /area must be one of/); fails([native({ area: 'settings' })], /area must be one of/); });
   it('an order that is not a whole number in range', () => { fails([native({ order: 1.5 })], /order must be/); fails([native({ order: -1 })], /order must be/); fails([native({ order: 10000 })], /order must be/); });
   it('a permission the module does not own', () => fails([native({ permission: 'other:read' })], /one of this module's own permissions/));
   it('a native entry without a page', () => fails([native({ page: undefined })], /\.page must be a file name/));

@@ -34,7 +34,7 @@ a bad manifest breaks the test run rather than production. Do not add module lis
 `gateway/index.js` or the portal by hand; enablement is resolved in `src/modules/index.js` from
 `ASIX_PROFILE` plus the signed license.
 
-## Frontend: still one file, by necessity (until S2 of Phase 5 is built)
+## Frontend: still one file, by necessity (for every page that exists today; S2 of Phase 5 is built, so new module pages do not go here)
 **Decided 2026-11-08 (not built yet):** the portal index becomes a **shell** that calls each module's own page, so a new module adds its own files and one manifest and does not edit `index.html`; open-source tools are shown under the portal as embedded pages. Contract: `docs/portal-shell.md`; tasks S1 to S5 in `docs/product-plan.md`, "Status of Phase 5". **Until S2 is built, the rules below still apply. From S2, a new page goes in `src/portal/modules/<id>/` and `index.html` is not touched for it.** When a `builtin` page is next changed, move it out in its own change first.
 
 Rules that apply today:
@@ -209,7 +209,7 @@ Design: `docs/portal-shell.md`, `docs/xsiam-reference.md`, `docs/open-source-sta
 | Task | Status | Main files (prefer new files) |
 |---|---|---|
 | S1 Manifest `ui` block and its checks | **done 2026-11-08** | `src/modules/registry.js`, `src/modules/index.js`, `tests/modules-ui.test.js` (new, 29 tests) |
-| S2 Portal shell loader (menu from manifests, error card, fallback) | not started | `src/portal/index.html` (one block, marked like `menu-state`), `tests/portal-shell.test.js` (new) |
+| S2 Portal shell loader (menu from manifests, error card, fallback) | **done 2026-11-08** | `src/portal/index.html` (blocks `menu-state`, `module-shell`), `src/gateway/identity-body.js` (new), `src/gateway/routes/core.js`, `src/modules/registry.js`, `tests/portal-shell.test.js` (new, 40), `tests/identity-body.test.js` (new, 5) |
 | S3 Gateway CSP and static serving for module pages | **done 2026-11-08** | `src/gateway/portal-headers.js` (new), `src/gateway/index.js`, `tests/gateway-csp.test.js` (new, 18 tests) |
 | S4 Embedded host `/app/<id>/` | not started | new route file, `k8s/` NetworkPolicy; waits for the SR0 result |
 | S5 Menu: Endpoints side menu, Posture Management, Settings by purpose | not started | manifests only, after S2 |
@@ -249,7 +249,7 @@ Design: `docs/portal-shell.md`, `docs/xsiam-reference.md`, `docs/open-source-sta
 | Backup control: **Back up now**, schedule (UTC time + weekdays) and keep-N-days retention (old sets deleted before each run, newest complete set always kept) on the Data safety page | done 2026-10-30 (new files `src/backup/schedule.js`, `control.js`, `runner.js`, `docs/backup-control.md`; changed `backup.js`, `routes/storage.js`, `storage/safety.js`, portal, `k8s/12-schema-init.yaml` (table `backup_settings`), `k8s/32-backup.yaml` (CronJob suspended, new Deployment `asix-backup-runner`), CI list; real PostgreSQL 16 with the schema applied twice and a real `pg_dump`: `tests/backup-control-db.test.js`; unit tests in `npm test`; **not run on the k3s box, not seen in a browser**) | see left |
 
 ## What to build next
-**Planned 2026-11-08 (Phase 5, nothing built yet): see "Task table (Phase 5...)" above and `docs/product-plan.md`, "Status of Phase 5". The endpoint-security items below (lab tries of E11, E13 and the two remote scripts) are still open and independent. S1 (manifest `ui` block) and S3 (gateway headers and module file serving) are built; the next Phase 5 build is S2 (portal shell loader); SR0 (the SOAR engine spike) can run alongside.**
+**Phase 5 (planned 2026-11-08; S1, S2 and S3 built): see "Task table (Phase 5...)" above and `docs/product-plan.md`, "Status of Phase 5". The endpoint-security items below (lab tries of E11, E13 and the two remote scripts) are still open and independent. the shell is done, so **from now on a new module page goes in `src/portal/modules/<id>/` with a manifest `ui` block and `index.html` is not edited for it**; the next Phase 5 builds are MK1 (pack manifest v2), then MK2 (the Marketplace page, the first native page) and CS1 (cases); SR0 (the SOAR engine spike) can run alongside.**
 
 **Phase 2 is done.** Phase 3 (enterprise data plane, see `docs/product-plan.md`) has started: the ClickHouse server is in `k8s/` (optional, unused until `ASIX_EVENT_STORE=clickhouse`). Next, in this order:
 1. **Proved on the k3s box on 2026-10-17** (all steps passed; `ASIX_EVENT_STORE` was switched to `clickhouse` the same day). Steps, for repeating after a change: deploy; `copy-events.js --dry-run`, then the copy; run one backup by hand (`k3s kubectl -n asix-platform create job --from=cronjob/asix-backup backup-now-$(date +%s)`); `sudo scripts/restore-backup.sh ch-verify`; one `ch-restore --as <table>`. Result: copy 2679 events verified, ClickHouse backup of 20 days verified, `ch-restore --as` restored 2679 into an empty table. **Switched 2026-10-17:** catch-up copies run before and after (4 events), `ASIX_EVENT_STORE: "clickhouse"` deployed, a test syslog event landed in ClickHouse and not in PostgreSQL, `clickhouse-0` deleted and recreated with the count intact (see `docs/clickhouse-server.md`, "Switched on the k3s box"). **Next:** confirm the first nightly backup after the switch includes the new day, watch ClickHouse under normal load for a few days, then the broker and collector items.
