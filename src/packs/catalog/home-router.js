@@ -10,6 +10,8 @@ module.exports = {
   description: 'Watches the router: failed admin logins, wifi password guessing, new UPnP port openings and floods of blocked traffic.',
   version: '1.0.0',
   audience: 'residential',
+  tags: ['router', 'firewall', 'openwrt', 'home'],
+  history: [{ version: '1.0.0', notes: 'First release.' }],
   sources: ['Router or firewall syslog (OpenWrt-style messages)'],
   rules: [
     {

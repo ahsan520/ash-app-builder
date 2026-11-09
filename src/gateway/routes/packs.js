@@ -19,16 +19,14 @@ async function requireModule(req, res, next) {
   }
 }
 
-const view = (p, st) => {
-  const s = st[p.id];
-  return {
-    id: p.id, name: p.name, description: p.description, version: p.version, audience: p.audience, sources: p.sources,
-    rule_count: p.rules.length,
-    rules: p.rules.map((r) => ({ key: r.key, name: r.name, description: r.description, severity: r.severity, kind: r.kind, category: r.category, mitre: r.mitre })),
-    installed_rules: s ? s.installed : 0, enabled_rules: s ? s.enabled : 0, open_alerts: s ? s.open_alerts : 0,
-    state: !s ? 'available' : s.installed >= p.rules.length ? 'installed' : 'partial',
-  };
-};
+// The shape of one pack in answers lives in src/packs (describe), so it is tested without a database.
+const view = (p, st) => packs.describe(p, st);
+
+// Which of the modules a pack needs are switched on (a Set of ids).
+async function enabledSet(ids) {
+  const on = await Promise.all(ids.map((id) => modules.isEnabled(id)));
+  return new Set(ids.filter((id, i) => on[i]));
+}
 
 router.get('/v1/packs', ...guarded('detections:rules:read'), requireModule, async (req, res) => {
   try {
@@ -40,14 +38,33 @@ router.get('/v1/packs', ...guarded('detections:rules:read'), requireModule, asyn
   }
 });
 
-// body: { enabled?: boolean (default true), overwrite?: boolean (restore shipped definitions) }
+router.get('/v1/packs/:id', ...guarded('detections:rules:read'), requireModule, async (req, res) => {
+  const pack = packs.get(req.params.id);
+  if (!pack) return apiError(res, 404, 'NOT_FOUND', 'Unknown content pack');
+  try {
+    const st = await db.withTenant(req.tenant_id, (client) => service.status(client, req.tenant_id));
+    res.status(200).json({ success: true, pack: view(pack, st) });
+  } catch (error) {
+    console.error('Pack lookup failed:', error.message);
+    apiError(res, 500, 'PACK_LIST_ERROR', 'Failed to read the content pack');
+  }
+});
+
+// body: { enabled?: boolean (default true), overwrite?: boolean (restore shipped definitions), allow_deprecated?: boolean }
+// Refused with 409 when the pack is deprecated, a module it needs is off, or a pack it needs is not installed (src/packs installBlockers).
 router.post('/v1/packs/:id/install', ...guarded('detections:rules:write'), requireModule, async (req, res) => {
   const pack = packs.get(req.params.id);
   if (!pack) return apiError(res, 404, 'NOT_FOUND', 'Unknown content pack');
   const b = req.body || {};
   try {
-    const out = await db.withTenant(req.tenant_id, (client) =>
-      service.install(client, req.tenant_id, pack, { enabled: b.enabled !== false, overwrite: b.overwrite === true }));
+    const enabledModules = await enabledSet(pack.requires.modules);
+    const out = await db.withTenant(req.tenant_id, async (client) => {
+      const st = await service.status(client, req.tenant_id);
+      const blocked = packs.installBlockers(pack, { st, allPacks: packs.all(), enabledModules, allowDeprecated: b.allow_deprecated === true });
+      if (blocked) return { blocked };
+      return service.install(client, req.tenant_id, pack, { enabled: b.enabled !== false, overwrite: b.overwrite === true });
+    });
+    if (out.blocked) return apiError(res, out.blocked.status, out.blocked.code, out.blocked.message);
     res.status(200).json({ success: true, pack: pack.id, version: pack.version, ...out });
   } catch (error) {
     console.error('Pack install failed:', error.message);
@@ -60,8 +77,12 @@ router.delete('/v1/packs/:id', ...guarded('detections:rules:write'), requireModu
   const pack = packs.get(req.params.id);
   if (!pack) return apiError(res, 404, 'NOT_FOUND', 'Unknown content pack');
   try {
-    const out = await db.withTenant(req.tenant_id, (client) =>
-      service.uninstall(client, req.tenant_id, pack.id, { deleteAlerts: req.query.delete_alerts === 'true' }));
+    const out = await db.withTenant(req.tenant_id, async (client) => {
+      const blocked = packs.removeBlockers(pack.id, packs.all(), await service.status(client, req.tenant_id));
+      if (blocked) return { blocked };
+      return service.uninstall(client, req.tenant_id, pack.id, { deleteAlerts: req.query.delete_alerts === 'true' });
+    });
+    if (out.blocked) return apiError(res, out.blocked.status, out.blocked.code, out.blocked.message);
     if (out.notInstalled) return apiError(res, 404, 'NOT_INSTALLED', 'This pack is not installed');
     if (out.blocked) return apiError(res, 409, 'HAS_ALERTS', `These rules have raised ${out.alerts} alert(s). Removing the pack deletes them too; repeat with delete_alerts=true to confirm.`);
     res.status(200).json({ success: true, pack: pack.id, removed_rules: out.removed, removed_alerts: out.alerts });

@@ -1,6 +1,6 @@
 # Portal shell and module UI contract
 
-Status: **DESIGN, agreed with Ash 2026-11-08. S1 (the manifest `ui` block), S3 (gateway headers and module file serving) and S2 (the shell loader in `index.html`) are built; the embedded host `/app/<id>/` (S4) is not, and no real module declares a page yet.** Tasks: `docs/product-plan.md`, "Status of Phase 5".
+Status: **DESIGN, agreed with Ash 2026-11-08. S1 (the manifest `ui` block), S3 (gateway headers and module file serving) and S2 (the shell loader in `index.html`) are built; the embedded host `/app/<id>/` (S4) is not, and the first real module page, the Marketplace of `content-packs`, is built (MK2).** Tasks: `docs/product-plan.md`, "Status of Phase 5".
 
 ## Why
 
@@ -102,9 +102,9 @@ The tool runs as its own service inside the cluster. It is never exposed outside
 
 - Registry (**done in S1**, `tests/modules-ui.test.js`): every rule above, each with a deliberate break that fails with a message naming the problem, plus a check that `proxy` never reaches the browser.
 - Shell (**done in S2**, `tests/portal-shell.test.js`, 40 tests): the `menu-state` and `module-shell` blocks are cut out of `index.html` and run without a DOM, with a fake `el()` and a fake page loader. It covers which entries are listed and in what order, malformed rows from the server, permissions, a module page greying like any other, every failure above showing the card, the 10 second limit, Retry, unmount and late results, the embedded frame, and wiring checks that `route()` and the menu use the shell while the old arrays and pages are unchanged. `tests/identity-body.test.js` covers the `permissions` field.
-- **Also checked once by hand, not kept in the repo:** the real `index.html` was run in jsdom (a test DOM) with a fake sign-in and fake API answers: old menus unchanged when no module declares a page; embedded, Settings and Threat pages; the error card; permission gating; and `/v1/modules` down. jsdom cannot load an ES module, so **a native page that loads successfully has not been seen in a real browser**: that needs the first real native page (MK2) and a look in the browser.
+- **Also checked once by hand, not kept in the repo:** the real `index.html` was run in jsdom (a test DOM) with a fake sign-in and fake API answers: old menus unchanged when no module declares a page; embedded, Settings and Threat pages; the error card; permission gating; and `/v1/modules` down. jsdom cannot run `import()`, so for the Marketplace page (MK2) the same check was repeated with that one call swapped for a loader that evaluates the real page file: the page loads through the shell, searches, installs, removes (two-step) and navigates, all against fake API answers. **What has not been seen is the browser's own `import()` of `/portal/modules/content-packs/marketplace.js` from the running gateway**: open the Marketplace once in a real browser after deploying.
 - Gateway headers and module files (**done in S3**, `tests/gateway-csp.test.js`, 18 tests): the policies as written, headers on the real app, `appHeaders` mounted before any route, what is and is not served from the modules folder, and attempts to climb out of it. Still to do in S4: `/app/<id>/` refuses a caller without the permission, a disabled module, and another tenant.
-- Branding test (`tests/branding.test.js`) keeps scanning `index.html`, and also the new `src/portal/modules/**` files.
+- Branding: `tests/branding.test.js` keeps scanning `index.html`; `tests/branding-modules.test.js` scans every file under `src/portal/modules/` (no allowed exceptions).
 
 ## Not decided
 - Whether a page's `mount` should get a time limit after all (today only loading the file is limited).

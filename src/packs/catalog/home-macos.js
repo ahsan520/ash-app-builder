@@ -10,6 +10,8 @@ module.exports = {
   description: 'Catches commands that weaken macOS protections or give a program permanent access: Gatekeeper, SIP, quarantine, LaunchAgents, Keychain and Remote Login.',
   version: '1.0.0',
   audience: 'residential',
+  tags: ['macos', 'home'],
+  history: [{ version: '1.0.0', notes: 'First release.' }],
   sources: ['macOS syslog forwarding (sudo, shell command logs)'],
   rules: [
     {

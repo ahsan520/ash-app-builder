@@ -10,4 +10,12 @@ module.exports = {
   requires: ["detections", "ingestion"],
   permissions: ["detections:rules:read", "detections:rules:write"],
   portal_area: "Modules",
+  // The Marketplace page (task MK2, docs/portal-shell.md): the first page a module brings itself. The older "Content packs" page
+  // in the main menu stays until the Marketplace has been seen working in a real browser.
+  ui: {
+    kind: "native",
+    entries: [
+      { id: "marketplace", label: "Marketplace", area: "Main", permission: "detections:rules:read", order: 60, page: "marketplace.js" },
+    ],
+  },
 };

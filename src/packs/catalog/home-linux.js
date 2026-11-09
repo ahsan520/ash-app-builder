@@ -11,6 +11,8 @@ module.exports = {
   description: 'SSH and sudo watching for a Linux machine at home: logins from the internet, password logins, guessing of usernames, root attempts, and a few risky commands.',
   version: '1.0.0',
   audience: 'residential',
+  tags: ['linux', 'home'],
+  history: [{ version: '1.0.0', notes: 'First release.' }],
   sources: ['Linux syslog (sshd, sudo, cron)'],
   rules: [
     {
