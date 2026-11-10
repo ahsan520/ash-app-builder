@@ -8,7 +8,7 @@ export async function mount(host, ctx) {
   alive = true;
   const E = ctx.el;
   const canWrite = ctx.can('soar:actions:write');
-  const S = { tab: 'actions', actions: [], levels: {}, runs: [], total: 0, filter: '', open: null, form: null, busy: false, msg: null };
+  const S = { tab: 'actions', actions: [], levels: {}, runs: [], total: 0, filter: '', open: null, form: null, busy: false, msg: null, cases: null, users: null };
   const RUN_STATUS = [['', 'All'], ['awaiting_approval', 'Waiting for approval'], ['succeeded', 'Done'], ['failed', 'Failed'], ['refused', 'Refused'], ['recommended', 'Recommended'], ['rejected', 'Rejected']];
   const STATUS_TEXT = { awaiting_approval: 'Waiting for approval', succeeded: 'Done', failed: 'Failed', refused: 'Refused', recommended: 'Recommended only', rejected: 'Rejected' };
 
@@ -25,6 +25,11 @@ export async function mount(host, ctx) {
     const r = await ctx.api('/v1/actions/runs?limit=100' + (S.filter ? '&status=' + S.filter : '')); S.runs = r.runs; S.total = r.total;
   };
   await loadActions();   // a failure here is the shell's error card, with Retry
+  // Pickers for the parameters people cannot be expected to know by heart: a case and a user. If either list cannot be read, the field stays a plain text box.
+  const loadPickers = async (a) => {
+    if (a.parameters.some((q) => q.name === 'case_id') && !S.cases) { try { S.cases = (await ctx.api('/v1/cases?status=all&limit=100')).cases; } catch { S.cases = null; } }
+    if (a.parameters.some((q) => q.name === 'owner_id') && !S.users) { try { S.users = (await ctx.api('/v1/alert-assignees')).users; } catch { S.users = null; } }
+  };
 
   // Runs a change, then shows what the server answered.
   const run = async (fn, done) => {
@@ -61,7 +66,7 @@ export async function mount(host, ctx) {
       E('div', { style: 'margin-top:8px' },
         canWrite ? btn(a.enabled ? 'Disable' : 'Enable', () => setting(a, { enabled: !a.enabled }, a.enabled ? 'Action disabled' : 'Action enabled'), !a.enabled, S.busy) : '',
         canWrite ? E('select', { disabled: S.busy, style: 'margin-right:8px', onchange: (ev) => setting(a, { autonomy: Number(ev.target.value) }, 'Level changed') }, ...levels) : '',
-        canWrite && a.enabled ? btn('Run…', () => { S.form = { id: a.id, values: {} }; S.open = a.id; draw(); }, false, S.busy) : '',
+        canWrite && a.enabled ? btn('Run…', async () => { await loadPickers(a); S.form = { id: a.id, values: {} }; S.open = a.id; draw(); }, false, S.busy) : '',
         btn(open ? 'Hide details' : 'Details', () => { S.open = open ? null : a.id; if (open) S.form = null; draw(); })),
       open ? details(a) : '',
       S.form && S.form.id === a.id ? runForm(a) : '');
@@ -79,6 +84,8 @@ export async function mount(host, ctx) {
     const v = S.form.values;
     const field = (q) => {
       const label = T('div', 'mute', q.name + (q.required ? ' *' : '') + ' ' + q.description);
+      if (q.name === 'case_id' && S.cases) return E('div', { style: 'margin:6px 0' }, label, E('select', { onchange: (ev) => { v[q.name] = ev.target.value; } }, E('option', { value: '', textContent: S.cases.length ? 'Choose a case…' : 'There are no cases yet', selected: !v[q.name] }), ...S.cases.map((c) => E('option', { value: c.id, textContent: '#' + c.case_number + ' ' + c.title + ' (' + c.status + ')', selected: v[q.name] === c.id }))));
+      if (q.name === 'owner_id' && S.users) return E('div', { style: 'margin:6px 0' }, label, E('select', { onchange: (ev) => { v[q.name] = ev.target.value; } }, E('option', { value: '', textContent: 'Nobody', selected: !v[q.name] }), ...S.users.map((u) => E('option', { value: u.id, textContent: u.username, selected: v[q.name] === u.id }))));
       if (q.type === 'enum') return E('div', { style: 'margin:6px 0' }, label, E('select', { onchange: (ev) => { v[q.name] = ev.target.value; } }, E('option', { value: '', textContent: q.required ? 'Choose…' : '(leave out)', selected: !v[q.name] }), ...q.values.map((x) => E('option', { value: x, textContent: x, selected: v[q.name] === x }))));
       if (q.type === 'uuid_list') return E('div', { style: 'margin:6px 0' }, label, E('textarea', { rows: 2, style: 'width:100%', placeholder: 'ids separated by spaces, commas or new lines', value: v[q.name] || '', oninput: (ev) => { v[q.name] = ev.target.value; } }));
       return E('div', { style: 'margin:6px 0' }, label, E('input', { type: 'text', style: 'width:70%', placeholder: q.type === 'uuid' ? (q.nullable ? 'an id, or empty for nobody' : 'an id') : '', value: v[q.name] || '', oninput: (ev) => { v[q.name] = ev.target.value; } }));

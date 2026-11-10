@@ -49,6 +49,8 @@ function server(opts = {}) {
     if (opts.fail && opts.fail[method + ' ' + p]) throw opts.fail[method + ' ' + p];
     let m;
     if (method === 'GET' && p === '/v1/actions') return { success: true, actions, levels: LEVELS };
+    if (method === 'GET' && p.startsWith('/v1/cases?')) { if (opts.noCases) throw err(403, 'no'); return { success: true, cases: [{ id: ID(5), case_number: 5, title: 'Router attack', status: 'open' }, { id: ID(3), case_number: 3, title: 'Old one', status: 'closed' }], total: 2 }; }
+    if (method === 'GET' && p === '/v1/alert-assignees') return { success: true, users: [{ id: ID(901), username: 'alice' }, { id: ID(902), username: 'bob' }], me: ID(901) };
     if (method === 'GET' && p.startsWith('/v1/actions/runs?')) {
       const st = new URLSearchParams(p.split('?')[1]).get('status'); const list = runs.filter((r) => !st || r.status === st);
       return { success: true, runs: list, total: opts.total || list.length, limit: 100, offset: 0 };
@@ -73,6 +75,7 @@ async function open(srv, perms = ['soar:actions:read', 'soar:actions:write']) {
   await page.mount(host, { api: srv.api, el: fakeEl, can: (p) => perms.includes(p), toast: (t, k) => toasts.push([t, k]) });
   return { host, toasts };
 }
+const pickCase = (host, name, id) => selects({ kids: [card(host, name)] }).find((x) => x.kids.some((o) => String(o.textContent).startsWith('Choose a case'))).onchange({ target: { value: id } });
 const card = (host, name) => host.kids.find((n) => n.className === 'card' && allText({ kids: [n] }).includes(name));
 const cardText = (host, name) => allText({ kids: [card(host, name)] });
 
@@ -84,10 +87,10 @@ describe('the page file follows the module-page rules', () => {
     for (const w of ['document', 'window', 'alert', 'confirm', 'prompt', 'innerHTML', 'outerHTML', 'insertAdjacentHTML', 'localStorage', 'sessionStorage', 'eval', 'Function', 'fetch']) assert.ok(!new RegExp('(?<![.\\w$])' + w + '\\b(?!\\s*:)').test(code), `the page must not use ${w}`);
     assert.ok(code.includes('ctx.api') && code.includes('ctx.el'));
   });
-  it('talks only to the action registry routes', () => {
+  it('talks only to the action registry routes (and the case and user lists for the pickers)', () => {
     const urls = [...src.matchAll(/ctx\.api\(\s*'([^']+)'/g)].map((m) => m[1]);
     assert.ok(urls.length >= 5);
-    for (const u of urls) assert.ok(u.startsWith('/v1/actions'), u);
+    for (const u of urls) assert.ok(u.startsWith('/v1/actions') || u.startsWith('/v1/cases?') || u === '/v1/alert-assignees', u);
   });
 });
 
@@ -164,7 +167,7 @@ describe('running an action', () => {
     const { host } = await open(server({ enabled }));
     await click(card(host, 'Add alerts to a case'), 'Run…');
     const c = card(host, 'Add alerts to a case');
-    assert.strictEqual(inputs({ kids: [c] }).length, 1, 'case_id is a text box');
+    assert.strictEqual(inputs({ kids: [c] }).length, 0, 'case_id is a choice of cases, not a text box');
     assert.strictEqual(textareas({ kids: [c] }).length, 1, 'alert_ids is a box for a list');
     await click(card(host, 'Set the status of a case'), 'Run…');
     const sel = selects({ kids: [card(host, 'Set the status of a case')] }).find((s) => s.kids.some((o) => o.value === 'closed'));
@@ -175,8 +178,8 @@ describe('running an action', () => {
     const srv = server({ enabled, runs: [] }); const { host, toasts } = await open(srv);
     await click(card(host, 'Add a note to a case'), 'Run…');
     const c = card(host, 'Add a note to a case');
-    inputs({ kids: [c] })[0].oninput({ target: { value: '  ' + ID(5) + ' ' } });
-    inputs({ kids: [c] })[1].oninput({ target: { value: 'a note' } });
+    pickCase(host, 'Add a note to a case', ID(5));
+    inputs({ kids: [c] })[0].oninput({ target: { value: 'a note' } });
     await click(card(host, 'Add a note to a case'), 'Run');
     const run = srv.calls.find((x) => x.key === 'POST /v1/actions/case.add_note/run');
     assert.deepStrictEqual(run.body, { parameters: { case_id: ID(5), body: 'a note' } });
@@ -188,17 +191,23 @@ describe('running an action', () => {
     const srv = server({ enabled }); const { host } = await open(srv);
     await click(card(host, 'Add alerts to a case'), 'Run…');
     const c = card(host, 'Add alerts to a case');
-    inputs({ kids: [c] })[0].oninput({ target: { value: ID(1) } });
+    pickCase(host, 'Add alerts to a case', ID(5));
     textareas({ kids: [c] })[0].oninput({ target: { value: `${ID(2)}, ${ID(3)}\n${ID(4)}  ${ID(5)}` } });
     await click(card(host, 'Add alerts to a case'), 'Run');
-    assert.deepStrictEqual(srv.calls.find((x) => x.key.endsWith('/run')).body.parameters, { case_id: ID(1), alert_ids: [ID(2), ID(3), ID(4), ID(5)] });
+    assert.deepStrictEqual(srv.calls.find((x) => x.key.endsWith('/run')).body.parameters, { case_id: ID(5), alert_ids: [ID(2), ID(3), ID(4), ID(5)] });
   });
   it('an empty owner means nobody (null)', async () => {
     const srv = server({ enabled }); const { host } = await open(srv);
     await click(card(host, 'Set the owner of a case'), 'Run…');
-    inputs({ kids: [card(host, 'Set the owner of a case')] })[0].oninput({ target: { value: ID(3) } });   // case_id; owner_id is left empty
+    pickCase(host, 'Set the owner of a case', ID(3));   // the owner is left on "Nobody"
     await click(card(host, 'Set the owner of a case'), 'Run');
     assert.deepStrictEqual(srv.calls.find((x) => x.key.endsWith('/run')).body.parameters, { case_id: ID(3), owner_id: null });
+    // choosing a user sends that user (the page went to the Runs tab after the first run)
+    await click(host, 'Actions'); await click(card(host, 'Set the owner of a case'), 'Run…');
+    pickCase(host, 'Set the owner of a case', ID(5));
+    selects({ kids: [card(host, 'Set the owner of a case')] }).find((x) => x.kids.some((o) => o.textContent === 'Nobody')).onchange({ target: { value: ID(902) } });
+    await click(card(host, 'Set the owner of a case'), 'Run');
+    assert.deepStrictEqual(srv.calls.filter((x) => x.key.endsWith('/run')).pop().body.parameters, { case_id: ID(5), owner_id: ID(902) });
   });
   it('an enum left unchosen is left out of the request', async () => {
     const srv = server({ enabled }); const { host } = await open(srv);
@@ -211,9 +220,11 @@ describe('running an action', () => {
     const srv = server({ enabled }); const { host } = await open(srv);
     await click(card(host, 'Add a note to a case'), 'Run…');
     const c = card(host, 'Add a note to a case');
-    inputs({ kids: [c] })[0].oninput({ target: { value: ID(7) } });
+    inputs({ kids: [c] })[0].oninput({ target: { value: 'half a note' } });
+    pickCase(host, 'Add a note to a case', ID(5));
     await click(card(host, 'Open a case'), 'Details');   // a redraw caused by another card
-    assert.strictEqual(inputs({ kids: [card(host, 'Add a note to a case')] })[0].value, ID(7));
+    assert.strictEqual(inputs({ kids: [card(host, 'Add a note to a case')] })[0].value, 'half a note');
+    assert.strictEqual(selectedValue(selects({ kids: [card(host, 'Add a note to a case')] }).find((x) => x.kids.some((o) => o.value === ID(5)))), ID(5));
   });
   it('Cancel closes the form without calling the server', async () => {
     const srv = server({ enabled }); const { host } = await open(srv);
@@ -230,6 +241,25 @@ describe('running an action', () => {
     const srv = server({ enabled, fail: { 'POST /v1/actions/case.add_note/run': err(409, 'This action is not enabled for this tenant', 'ACTION_DISABLED') } }); const { host } = await open(srv);
     await click(card(host, 'Add a note to a case'), 'Run…'); await click(card(host, 'Add a note to a case'), 'Run');
     assert.ok(allText(host).includes('not enabled for this tenant'));
+  });
+});
+
+describe('the case and user pickers', () => {
+  const enabled = ['case.add_note', 'case.set_owner'];
+  it('offer the cases by number, title and status, so nobody has to know an id', async () => {
+    const { host } = await open(server({ enabled })); await click(card(host, 'Add a note to a case'), 'Run…');
+    const sel = selects({ kids: [card(host, 'Add a note to a case')] }).find((x) => x.kids.some((o) => String(o.textContent).startsWith('Choose a case')));
+    assert.deepStrictEqual(sel.kids.map((o) => o.textContent), ['Choose a case…', '#5 Router attack (open)', '#3 Old one (closed)']);
+    assert.deepStrictEqual(sel.kids.map((o) => o.value), ['', ID(5), ID(3)]);
+  });
+  it('fall back to a plain text box when the case list cannot be read', async () => {
+    const srv = server({ enabled, noCases: true }); const { host } = await open(srv); await click(card(host, 'Add a note to a case'), 'Run…');
+    assert.strictEqual(inputs({ kids: [card(host, 'Add a note to a case')] }).length, 2, 'case_id and body are both text boxes');
+  });
+  it('are read once, not on every Run…', async () => {
+    const srv = server({ enabled }); const { host } = await open(srv);
+    await click(card(host, 'Add a note to a case'), 'Run…'); await click(card(host, 'Add a note to a case'), 'Cancel'); await click(card(host, 'Add a note to a case'), 'Run…');
+    assert.strictEqual(srv.calls.filter((c) => c.key === 'GET /v1/cases').length, 1);
   });
 });
 
