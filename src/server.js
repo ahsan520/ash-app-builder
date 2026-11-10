@@ -12,6 +12,7 @@ async function main() {
     console.log('ASIX API listening on port ' + port);
     require('./detection/rule-runner').start();
     require('./detection/ioc-matcher').start();
+    require('./licensing/notices').start();
     require('./notifications/dispatcher').start();
     require('./collectors/watchdog').start();
     require('./storage/retention').start();

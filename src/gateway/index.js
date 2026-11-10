@@ -37,6 +37,7 @@ app.use('/app', appHeaders);
 // Kubernetes / load-balancer health endpoint.
 // Intentionally unauthenticated so health checks do not require a JWT.
 
+app.use(require('../licensing/gate').gate);   // licensing (docs/licensing.md): refuses a locked module's routes; does nothing while licensing is off
 app.use(require('./routes/core'));
 app.use(require('./routes/detections'));
 app.use(require('./routes/search'));
@@ -83,6 +84,7 @@ app.use(require('./routes/endpoint-notices'));
 app.use(require('./routes/group-config'));
 app.use(require('./routes/group-winlog'));   // E11: the Windows events block of a group (same limits as group-config)
 app.use(require('./routes/group-linuxlog'));   // E13: the Linux logs block of a group (same limits)
+app.use(require('../licensing/routes'));   // the License API: never gated by a license
 
 // Readiness (k8s/30-asix-api.yaml). Mounted AFTER every router on purpose: a request only gets here if each router above passed it on, so a pod whose route chain is
 // broken (found 2026-10-31: a router that never answered hung every request after it, while /v1/health/status, mounted early, still looked fine) is never marked Ready,

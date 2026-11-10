@@ -8,6 +8,7 @@
 //   that the event store runs (getEventStore().matchGroups), so rules work on any storage engine.
 
 const db = require('../db');
+const workerGate = require('../licensing/worker-gate');
 const { buildRuleMatch } = require('./rule-query');
 const { getEventStore } = require('../events');
 const { mitreForGroups } = require('../endpoints/endpoint-alerts');
@@ -599,6 +600,8 @@ function start() {
     if (running) return;
     running = true;
     try {
+      if (!(await workerGate.enabled('detections', 'alerts'))) { workerGate.pausedOnce('[detection]'); return; }   // a lapsed license stops detection (docs/licensing.md)
+      workerGate.resumed('[detection]');
       const r = await runOnce();
       if (r.created || r.errors) console.log('[detection] cycle', JSON.stringify(r));
     } catch (err) {

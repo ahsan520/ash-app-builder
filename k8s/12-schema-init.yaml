@@ -808,6 +808,40 @@ data:
         WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
     GRANT SELECT, INSERT, UPDATE, DELETE ON endpoint_group_config_history TO asix_admin;
 
+    -- Licensing (docs/licensing.md): the identity of this installation, made once with the database. A license is signed for this id; last_seen_at catches a clock set back.
+    CREATE TABLE IF NOT EXISTS installation (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        singleton BOOLEAN NOT NULL DEFAULT TRUE UNIQUE CHECK (singleton),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_seen_at TIMESTAMP
+    );
+    INSERT INTO installation (singleton) VALUES (TRUE) ON CONFLICT DO NOTHING;
+    GRANT SELECT, UPDATE ON installation TO asix_admin;
+    -- the enforcement switch of a development build (a release build ignores it and always enforces; src/build-channel.js)
+    ALTER TABLE installation ADD COLUMN IF NOT EXISTS enforce BOOLEAN NOT NULL DEFAULT FALSE;
+    -- stored licenses: many can be available, at most one active (docs/licensing.md). A token is a signed public document, not a secret.
+    CREATE TABLE IF NOT EXISTS license_files (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        label VARCHAR(80),
+        token TEXT NOT NULL,
+        sha256 VARCHAR(64) NOT NULL UNIQUE,
+        customer TEXT,
+        kind VARCHAR(12),
+        expires_at TIMESTAMP,
+        uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        uploaded_by TEXT,
+        active BOOLEAN NOT NULL DEFAULT FALSE
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS license_files_one_active ON license_files (active) WHERE active;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON license_files TO asix_admin;
+    -- which license notices were already sent (one per stage and expiry date, so a renewal starts again)
+    CREATE TABLE IF NOT EXISTS license_notices (
+        stage VARCHAR(80) PRIMARY KEY,
+        sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        detail TEXT
+    );
+    GRANT SELECT, INSERT ON license_notices TO asix_admin;
+
     -- E11: the history of changes to the ASIX block of Windows event channels in an agent group's agent.conf (docs/endpoints.md). Same idea as endpoint_group_config_history, in its own
     -- table so the folder undo can never read one of these rows. channels_* are the channel names; policy_revision is the revision of the Windows filter policy the block was made from.
     CREATE TABLE IF NOT EXISTS endpoint_group_winlog_history (

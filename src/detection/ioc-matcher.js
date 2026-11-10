@@ -5,6 +5,7 @@
 // and several API replicas (a Postgres advisory lock lets one replica run a cycle).
 
 const db = require('../db');
+const workerGate = require('../licensing/worker-gate');
 const { getEventStore, encodeCursor, decodeCursor } = require('../events');
 const { extractCandidates } = require('../threat-intel/indicators');
 
@@ -154,6 +155,8 @@ function start() {
     if (running) return;
     running = true;
     try {
+      if (!(await workerGate.enabled('threat-intel', 'alerts'))) { workerGate.pausedOnce('[ioc]'); return; }   // a lapsed license stops matching (docs/licensing.md)
+      workerGate.resumed('[ioc]');
       const r = await runOnce();
       if (r.created || r.errors) console.log('[ioc] cycle', JSON.stringify(r));
     } catch (err) {

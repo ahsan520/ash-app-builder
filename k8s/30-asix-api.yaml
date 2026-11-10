@@ -32,6 +32,9 @@ spec:
           env:
             - name: PORT
               value: "3000"
+            # Edition (src/modules/profiles.js): "home" (residential) or "enterprise". It only shapes the deployment; what is unlocked is decided by the license (docs/licensing.md).
+            - name: ASIX_PROFILE
+              value: "home"
             - name: DB_HOST
               value: "postgresql"
             - name: DB_PORT
@@ -148,6 +151,12 @@ spec:
                   optional: true
             - name: ASIX_CLICKHOUSE_URL
               value: "http://asix:$(CLICKHOUSE_PASSWORD)@clickhouse:8123/asix"
+          # The signed license (docs/licensing.md): the optional Secret asix-license, key license.jwt, appears at /etc/asix/license.jwt. Without it only the baseline runs. A new license in the
+          # Secret is picked up within a minute or two, no restart. Create or replace it with:  ./scripts/deploy/install-license.sh license.jwt
+          volumeMounts:
+            - name: asix-license
+              mountPath: /etc/asix
+              readOnly: true
           resources:
             requests:
               cpu: "250m"
@@ -180,6 +189,12 @@ spec:
             periodSeconds: 20
             timeoutSeconds: 5
             failureThreshold: 6
+      volumes:
+        - name: asix-license
+          secret:
+            secretName: asix-license
+            optional: true
+
 ---
 apiVersion: v1
 kind: Service

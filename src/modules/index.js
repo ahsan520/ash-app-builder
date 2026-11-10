@@ -4,7 +4,7 @@
 // and every module it requires is enabled. `planned` modules have no backend yet and are never enabled.
 const registry = require('./registry');
 const profiles = require('./profiles');
-const license = require('./license');
+const licensing = require('../licensing');   // self-contained, may be off (docs/licensing.md)
 
 // Pure and synchronous, so it is easy to test: no I/O.
 function resolve(manifests, profile, lic) {
@@ -14,7 +14,7 @@ function resolve(manifests, profile, lic) {
   for (const m of manifests) { // manifests are already in dependency order
     let state; let reason = null;
     const tierOk = profile.tiers.includes(m.tier);
-    const entitled = !m.entitlement || features.has(m.entitlement);
+    const entitled = licensing.entitled(m, features, lic);
     if (m.status === 'planned') { state = 'planned'; }
     else if (!tierOk) { state = 'locked'; reason = 'profile'; }
     else if (!entitled) { state = 'locked'; reason = 'license'; }
@@ -25,7 +25,7 @@ function resolve(manifests, profile, lic) {
     byId.set(m.id, state);
     out.push({
       id: m.id, name: m.name, description: m.description, tier: m.tier, status: m.status,
-      requires: m.requires, entitlement: m.entitlement, portal_area: m.portal_area,
+      requires: m.requires, entitlement: m.entitlement, license_feature: licensing.featureFor(m), portal_area: m.portal_area,
       // portal pages this module brings (docs/portal-shell.md); null = none declared. `proxy` is deliberately not passed on.
       ui: m.ui || null,
       state, reason, included_in_profile: tierOk, entitled,
@@ -42,16 +42,17 @@ let manifestsCache = null;
 let licCache = null;
 const TTL_MS = 60 * 1000;
 
-async function snapshot(env = process.env) {
+async function snapshot(env = process.env, db) {
   if (!manifestsCache) manifestsCache = registry.loadDir();
   const profile = profiles.get(env.ASIX_PROFILE);
   if (!profile) throw new Error('ASIX_PROFILE must be one of: ' + Object.keys(profiles.PROFILES).join(', '));
-  if (!licCache || Date.now() - licCache.at > TTL_MS) licCache = { at: Date.now(), value: await license.load(env) };
+  if (!licCache || Date.now() - licCache.at > TTL_MS) licCache = { at: Date.now(), value: await licensing.state(env, db) };
   const lic = licCache.value;
   const modules = resolve(manifestsCache, profile, lic);
   return {
     profile: { id: profile.id, label: profile.label, deployment: profile.deployment },
-    license: { status: lic.status, customer: lic.customer || null, expires_at: lic.expires_at || null, features: lic.features, reason: lic.reason || null },
+    license: licensing.describe(lic),
+    build: licensing.buildInfo(),
     limits: effectiveLimits(profile, lic),
     modules,
   };
@@ -63,6 +64,6 @@ async function isEnabled(id, env = process.env) {
   return !!m && m.state === 'enabled';
 }
 
-function resetCache() { manifestsCache = null; licCache = null; }
+function resetCache() { manifestsCache = null; licCache = null; licensing.reset(); }
 
 module.exports = { resolve, effectiveLimits, snapshot, isEnabled, resetCache };

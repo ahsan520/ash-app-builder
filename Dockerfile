@@ -15,6 +15,12 @@ RUN npm ci --omit=dev
 
 COPY src ./src
 
+# The build channel (src/licensing/build-channel.js, docs/licensing.md): 'dev' for your own staged builds, 'release' for the images the release pipeline makes for customers.
+# Written into the image here, never read from the environment.
+ARG ASIX_BUILD_CHANNEL=dev
+ARG ASIX_VERSION=
+RUN printf '{"channel":"%s","version":"%s"}\n' "$ASIX_BUILD_CHANNEL" "$ASIX_VERSION" > src/licensing/build-channel.json
+
 USER node
 
 EXPOSE 3000

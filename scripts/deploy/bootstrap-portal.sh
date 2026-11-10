@@ -79,7 +79,7 @@ SELECT t.id, 'portal-admin', ARRAY['auth:identity:read', 'search:events:read', '
   'notify:read', 'notify:write',
   'storage:read', 'storage:write',
   'soar:actions:read', 'soar:actions:write',
-  'capacity:read', 'modules:read', 'endpoints:config:write']
+  'license:read', 'license:write', 'capacity:read', 'modules:read', 'endpoints:config:write']
 FROM tenants t
 WHERE t.name = 'Default Tenant'
   AND NOT EXISTS (SELECT 1 FROM roles r WHERE r.tenant_id = t.id AND r.name = 'portal-admin');
@@ -91,7 +91,7 @@ UPDATE roles SET permissions = ARRAY['auth:identity:read', 'search:events:read',
   'notify:read', 'notify:write',
   'storage:read', 'storage:write',
   'soar:actions:read', 'soar:actions:write',
-  'capacity:read', 'modules:read', 'endpoints:config:write']
+  'license:read', 'license:write', 'capacity:read', 'modules:read', 'endpoints:config:write']
 WHERE name = 'portal-admin' AND tenant_id = (SELECT id FROM tenants WHERE name = 'Default Tenant');
 
 INSERT INTO users (tenant_id, username, email, role_ids)
