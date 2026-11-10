@@ -744,7 +744,7 @@ A broker's heartbeat now says how many CPUs and how much memory its VM has and h
 
 ## Status of Phase 5: platform shell, marketplace and SOAR (planned 2026-11-08)
 
-**Only S1, S2, S3, MK1 and MK2 are built (see the task table).** It records what was agreed with Ash on 2026-11-08 and the tasks that follow.
+**Only S1, S2, S3, MK1, MK2 and CS1 are built (see the task table).** It records what was agreed with Ash on 2026-11-08 and the tasks that follow.
 
 ### What was agreed
 - **Do not copy another product's GUI** (the XSIAM screenshots are a reference for what objects and features a SIEM needs). Many features, simple GUI. Rules and the idea-by-idea mapping: `docs/xsiam-reference.md`.
@@ -754,7 +754,7 @@ A broker's heartbeat now says how many CPUs and how much memory its VM has and h
 
 ### What exists today (checked in the 2026-11-08 zip)
 - `src/playbooks/playbook-engine.js`: a Level 0 skeleton (143 lines; returns objects; no triggers, approval, rollback or run history). The manifest `soar` is `planned`.
-- Cases & Issues is the alert list; there is no case record (`docs/endpoints.md` says the same for MITRE on a case page).
+- Cases & Issues is the alert list. As of CS1 (2026-11-08) a case record exists (`docs/cases.md`), with its own Cases page; the alert list is unchanged. (`docs/endpoints.md` still notes that MITRE has no case page of its own.)
 - Content packs: detection rules only, one file per pack in `src/packs/catalog/`; as of MK1 and MK2 (2026-11-08) a pack manifest v2 and a Marketplace page exist (`docs/content-packs.md`); no signing and no per-tenant upgrade tracking yet.
 - IOC matcher and indicators exist (`src/threat-intel/indicators.js`, the IOC matcher); no scheduled feed pull was found.
 - ASIX can write to the endpoint manager in one narrow way: marked blocks of a group's `agent.conf` (E10, E11, E13) through a separate writer user. Restart, delete or run-a-command through the manager API is not built (`docs/endpoints.md`, E4c "Not built").
@@ -770,7 +770,7 @@ Update the Status column in the same change that does the work. Prefer new files
 | S3 | Gateway: `frame-src 'self'` for `/portal`, separate CSP for `/app/*`; static serving of `src/portal/modules/`. | S1 | **done 2026-11-08**: new `src/gateway/portal-headers.js` (`portalHeaders`, `appHeaders`, `moduleFiles`), wired in `src/gateway/index.js`; `tests/gateway-csp.test.js`, 18 tests. Module files are served only as `/portal/modules/<id>/<name>.js|css`. |
 | S4 | Embedded host: `/app/<id>/` reverse proxy (permission, module enabled, tenant), NetworkPolicy, single sign-on to the tool. | S3, SR0 result | not started |
 | S5 | Menu work with no new backend: Endpoints as a side menu; **Posture Management** showing the existing Vulnerabilities and Configuration checks pages; Settings regrouped by purpose. All as manifest entries. | S2 | not started |
-| CS1 | Minimal case record: alerts attach to a case; owner, status, notes, timeline. Own file set. | none | not started |
+| CS1 | Minimal case record: alerts attach to a case; owner, status, notes, timeline. Own file set. | none | **done 2026-11-08** (`docs/cases.md`): `src/cases/model.js`, `src/cases/service.js`, `src/gateway/routes/cases.js`, tables in `k8s/12-schema-init.yaml`, manifest `cases` (`soar` now requires it), page `src/portal/modules/cases/cases.js`; `tests/cases-model.test.js` (30), `tests/cases-page.test.js` (26), `tests/cases-db.test.js` (real PostgreSQL, skipped unless `ASIX_TEST_DB=1`). Not yet seen in a real browser. |
 | MK1 | Pack manifest v2: typed items (rules, parsers, dashboards, playbooks, actions, integration definitions), version, publisher, certification, support, dependencies, deprecated flag. Current packs keep working. **Packs carry data only, never portal code.** | none | **done 2026-11-08** (scope: the metadata, dependencies and checks; other kinds of content are refused until their installer exists, see `docs/content-packs.md`): `src/packs/index.js`, `src/gateway/routes/packs.js` (+ `GET /v1/packs/:id`, 409 checks), the three catalog packs; `tests/packs-v2.test.js`, 34 tests. |
 | MK2 | Marketplace page as the **first native module page** (Browse, Installed, pack page with Details / Content / Dependencies / Version history; install, update, remove). Our own layout. | S2, MK1 | **done 2026-11-08** (no update flow yet: that is MK3): `src/portal/modules/content-packs/marketplace.js`, `ui` block in `src/modules/manifests/content-packs.js`; `tests/marketplace-page.test.js` (29), `tests/branding-modules.test.js` (2). Loaded through the shell in a test DOM with the real page and real `index.html`; **not yet seen in a real browser**. The old Content packs page stays until it has been. |
 | MK3 | Signed catalog and delivery: index plus signed packs, signature check on install, update notices per tenant, staged rollout (a few machines first). Choice of OCI + cosign or GitHub Releases + signed index is recorded in `docs/open-source-stack.md`. | MK1 | not started |
@@ -784,7 +784,7 @@ Update the Status column in the same change that does the work. Prefer new files
 | PM1 | Group settings as **Profiles** (folders, Windows channels, Linux logs) plus **Rules** (platform, target group, order), showing the merged result for a machine in several groups. | S2 | not started |
 
 ### Order
-S1, S2 and S3 (done: the shell), MK1 and MK2 (done: the first native page) with CS1; SR0 in parallel with all of it; then SR1, SR2, L1; then SR3; then SR4; SR5 last. S5 and PM1 whenever convenient.
+S1, S2 and S3 (done: the shell), MK1, MK2 and CS1 (done); SR0 in parallel with all of it; then SR1, SR2, L1; then SR3; then SR4; SR5 last. S5 and PM1 whenever convenient.
 
 ### Honest limits (2026-11-08)
 - Every tool named in `docs/open-source-stack.md` for SOAR is **unverified** for footprint, tenant isolation and k3s fit. The spike decides; this plan does not.

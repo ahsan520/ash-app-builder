@@ -377,6 +377,80 @@ data:
     ALTER TABLE alerts ADD COLUMN IF NOT EXISTS merged_count INTEGER NOT NULL DEFAULT 0;
     CREATE INDEX IF NOT EXISTS idx_alerts_merged_into ON alerts(merged_into_id) WHERE merged_into_id IS NOT NULL;
 
+    -- Cases (CS1, docs/cases.md): a case groups alerts under an owner, a status and a timeline (idempotent)
+    CREATE TABLE IF NOT EXISTS cases (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) NOT NULL,
+        case_number INTEGER NOT NULL,
+        title VARCHAR(200) NOT NULL,
+        description TEXT,
+        severity VARCHAR(20) NOT NULL DEFAULT 'medium',
+        status VARCHAR(20) NOT NULL DEFAULT 'open',
+        owner_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        created_by_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        created_by_name VARCHAR(255) NOT NULL,
+        closed_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT cases_tenant_number UNIQUE (tenant_id, case_number),
+        CONSTRAINT cases_severity_chk CHECK (severity IN ('critical', 'high', 'medium', 'low')),
+        CONSTRAINT cases_status_chk CHECK (status IN ('open', 'investigating', 'closed'))
+    );
+
+    -- an alert belongs to at most one case (the unique key on alert_id)
+    CREATE TABLE IF NOT EXISTS case_alerts (
+        tenant_id UUID REFERENCES tenants(id) NOT NULL,
+        case_id UUID REFERENCES cases(id) ON DELETE CASCADE NOT NULL,
+        alert_id UUID REFERENCES alerts(id) ON DELETE CASCADE NOT NULL,
+        added_by_name VARCHAR(255) NOT NULL,
+        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (case_id, alert_id),
+        CONSTRAINT case_alerts_one_case UNIQUE (alert_id)
+    );
+
+    -- the timeline: every change and every note, in order (created_at is the statement time, so events of one request keep their order)
+    CREATE TABLE IF NOT EXISTS case_events (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) NOT NULL,
+        case_id UUID REFERENCES cases(id) ON DELETE CASCADE NOT NULL,
+        kind VARCHAR(30) NOT NULL,
+        actor_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        actor_name VARCHAR(255) NOT NULL,
+        body TEXT,
+        data JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMP DEFAULT clock_timestamp()
+    );
+
+    ALTER TABLE cases ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS cases_tenant_isolation ON cases;
+    CREATE POLICY cases_tenant_isolation ON cases
+        FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    ALTER TABLE case_alerts ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS case_alerts_tenant_isolation ON case_alerts;
+    CREATE POLICY case_alerts_tenant_isolation ON case_alerts
+        FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    ALTER TABLE case_events ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS case_events_tenant_isolation ON case_events;
+    CREATE POLICY case_events_tenant_isolation ON case_events
+        FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    CREATE INDEX IF NOT EXISTS idx_cases_tenant_status ON cases(tenant_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_cases_owner ON cases(tenant_id, owner_id) WHERE owner_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_case_alerts_case ON case_alerts(case_id);
+    CREATE INDEX IF NOT EXISTS idx_case_events_case ON case_events(case_id, created_at);
+
+    GRANT SELECT, INSERT, UPDATE, DELETE ON cases TO asix_admin;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON case_alerts TO asix_admin;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON case_events TO asix_admin;
+
     -- Custom rules: correlation vs BIOC, plus an alert category (idempotent upgrade)
     ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'correlation';
     ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS category VARCHAR(100);

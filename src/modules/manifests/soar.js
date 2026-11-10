@@ -7,7 +7,7 @@ module.exports = {
   tier: "enterprise",             // lowest edition that includes it: 'home' or 'enterprise'
   entitlement: "soar",        // license feature that unlocks it; null = no license needed
   status: "planned",         // 'available' = backend exists, 'planned' = not built yet
-  requires: ["alerts"],
+  requires: ["alerts", "cases"],
   permissions: [],
   portal_area: "Investigation & Response",
 };
