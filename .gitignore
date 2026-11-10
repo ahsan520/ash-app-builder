@@ -4,3 +4,6 @@ node_modules/
 !.env.example
 .DS_Store
 *.log
+
+# written by the image build (Dockerfile, docs/licensing.md); never committed
+src/licensing/build-channel.json
