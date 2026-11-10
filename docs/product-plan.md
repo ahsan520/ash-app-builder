@@ -744,7 +744,7 @@ A broker's heartbeat now says how many CPUs and how much memory its VM has and h
 
 ## Status of Phase 5: platform shell, marketplace and SOAR (planned 2026-11-08)
 
-**Only S1, S2, S3, MK1, MK2 and CS1 are built (see the task table).** It records what was agreed with Ash on 2026-11-08 and the tasks that follow.
+**Only S1, S2, S3, MK1, MK2, CS1 and the core of SR2 are built (see the task table).** It records what was agreed with Ash on 2026-11-08 and the tasks that follow.
 
 ### What was agreed
 - **Do not copy another product's GUI** (the XSIAM screenshots are a reference for what objects and features a SIEM needs). Many features, simple GUI. Rules and the idea-by-idea mapping: `docs/xsiam-reference.md`.
@@ -776,7 +776,7 @@ Update the Status column in the same change that does the work. Prefer new files
 | MK3 | Signed catalog and delivery: index plus signed packs, signature check on install, update notices per tenant, staged rollout (a few machines first). Choice of OCI + cosign or GitHub Releases + signed index is recorded in `docs/open-source-stack.md`. | MK1 | not started |
 | SR0 | **SOAR engine spike** (a few days): Shuffle vs Tracecat vs own engine, with one scenario: pull an IOC feed, raise an approval, block one address on an OPNsense or pfSense firewall. Compare: footprint on 4 vCPU / 8 GB, tenant isolation, k3s fit, licence terms, how well it maps to the pack format, who patches it. Result and date written to `docs/open-source-stack.md`. | none | not started |
 | SR1 | Credentials (through the secrets abstraction) and Integrations (instances, category, status **Not configured** until an account is added). | MK1 | not started |
-| SR2 | **Action registry**: name, publisher, kind, source, parameters, risk class, autonomy level; **installed actions start disabled**; an admin enables per tenant; every run audited. This is the allow-list for firewall and endpoint actions. | SR1 | not started |
+| SR2 | **Action registry**: name, publisher, kind, source, parameters, risk class, autonomy level; **installed actions start disabled**; an admin enables per tenant; every run audited. This is the allow-list for firewall and endpoint actions. | SR1 for integration-backed actions only (the core does not need it) | **core done 2026-11-10** (`docs/actions.md`): `src/actions/{model,catalog,service}.js`, `src/gateway/routes/actions.js`, tables `action_settings` and `action_runs` in `k8s/12-schema-init.yaml`, manifest `actions`, page `src/portal/modules/actions/actions.js`, new permissions `soar:actions:read` / `soar:actions:write` (re-run `bootstrap-portal.sh`); seven built-in actions on cases, approval, undo, audit of every run; `tests/actions-model.test.js` (54), `tests/actions-page.test.js` (30), `tests/actions-db.test.js` (real PostgreSQL). Integration-backed actions plug in later through `register()` once SR1 exists. Not seen in a real browser. |
 | L1 | Lists as a tenant object (block, allow, watch; manual and by playbook) and a read-only, token-protected **list URL** a firewall can poll. | none | not started |
 | SR3 | Playbook run on the chosen engine: trigger, conditions, actions from SR2, approval, verify, undo, run history. First playbooks: **IOC feed import** (schedule, fetch, normalise, score, expire, write to the IOC store, record what changed) and **IOC hit** (enrich, open a case, ask approval, add to a list). | SR0, SR2, CS1, L1 | not started |
 | SR4 | Firewall pack, one product first (OPNsense or pfSense, then FortiGate, then Palo Alto): publish a list (low risk) and direct block with approval and an automatic undo timer. | SR3 | not started |
@@ -784,7 +784,7 @@ Update the Status column in the same change that does the work. Prefer new files
 | PM1 | Group settings as **Profiles** (folders, Windows channels, Linux logs) plus **Rules** (platform, target group, order), showing the merged result for a machine in several groups. | S2 | not started |
 
 ### Order
-S1, S2 and S3 (done: the shell), MK1, MK2 and CS1 (done); SR0 in parallel with all of it; then SR1, SR2, L1; then SR3; then SR4; SR5 last. S5 and PM1 whenever convenient.
+S1, S2 and S3 (done: the shell), MK1, MK2 and CS1 (done); SR0 in parallel with all of it; then SR1, L1 (SR2's core is done; integration-backed actions follow SR1); then SR3; then SR4; SR5 last. S5 and PM1 whenever convenient.
 
 ### Honest limits (2026-11-08)
 - Every tool named in `docs/open-source-stack.md` for SOAR is **unverified** for footprint, tenant isolation and k3s fit. The spike decides; this plan does not.

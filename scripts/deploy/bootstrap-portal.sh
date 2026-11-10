@@ -78,6 +78,7 @@ SELECT t.id, 'portal-admin', ARRAY['auth:identity:read', 'search:events:read', '
   'collectors:read', 'collectors:write', 'parsing:rules:read', 'parsing:rules:write', 'datamodel:rules:read', 'datamodel:rules:write',
   'notify:read', 'notify:write',
   'storage:read', 'storage:write',
+  'soar:actions:read', 'soar:actions:write',
   'capacity:read', 'modules:read', 'endpoints:config:write']
 FROM tenants t
 WHERE t.name = 'Default Tenant'
@@ -89,6 +90,7 @@ UPDATE roles SET permissions = ARRAY['auth:identity:read', 'search:events:read',
   'collectors:read', 'collectors:write', 'parsing:rules:read', 'parsing:rules:write', 'datamodel:rules:read', 'datamodel:rules:write',
   'notify:read', 'notify:write',
   'storage:read', 'storage:write',
+  'soar:actions:read', 'soar:actions:write',
   'capacity:read', 'modules:read', 'endpoints:config:write']
 WHERE name = 'portal-admin' AND tenant_id = (SELECT id FROM tenants WHERE name = 'Default Tenant');
 

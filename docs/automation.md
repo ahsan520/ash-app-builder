@@ -14,3 +14,6 @@ Observe (metrics/logs/health) → Diagnose (root cause analysis; dependency grap
 
 ## Playbook Execution Flow
 Trigger (event/alert/schedule) → Conditions (check) → Actions (modular actions; connector framework) → Approval (if configured; Level 2+) → Execution (through Control Plane; not UI) → Verification (success/failure check) → Rollback (if failure; rollback actions executed) → Audit (execution history; approval records)
+
+## As built
+The action registry (SR2) puts these levels into code for the actions it holds: per tenant, per action, never above the action's own ceiling, with approval, undo and an audit row for every run. See `docs/actions.md`.

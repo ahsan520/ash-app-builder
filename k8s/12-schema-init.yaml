@@ -451,6 +451,70 @@ data:
     GRANT SELECT, INSERT, UPDATE, DELETE ON case_alerts TO asix_admin;
     GRANT SELECT, INSERT, UPDATE, DELETE ON case_events TO asix_admin;
 
+    -- Action registry (SR2, docs/actions.md): which actions a tenant has switched on, and every run of an action (idempotent).
+    -- An action that has no row in action_settings is disabled: installed actions start disabled. The definitions themselves live in code (src/actions/catalog.js).
+    CREATE TABLE IF NOT EXISTS action_settings (
+        tenant_id UUID REFERENCES tenants(id) NOT NULL,
+        action_id VARCHAR(100) NOT NULL,
+        enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        autonomy_level INTEGER NOT NULL DEFAULT 2,
+        updated_by_name VARCHAR(255) NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (tenant_id, action_id),
+        CONSTRAINT action_settings_level_chk CHECK (autonomy_level BETWEEN 0 AND 4)
+    );
+
+    -- one row per request: what was asked, by whom, the decision, the outcome, and how to undo it. Written in the same transaction as the work and the audit row.
+    CREATE TABLE IF NOT EXISTS action_runs (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) NOT NULL,
+        action_id VARCHAR(100) NOT NULL,
+        origin VARCHAR(20) NOT NULL,
+        status VARCHAR(20) NOT NULL,
+        risk_class VARCHAR(10) NOT NULL,
+        autonomy_level INTEGER NOT NULL DEFAULT 0,
+        params JSONB NOT NULL DEFAULT '{}'::jsonb,
+        result JSONB,
+        error_code VARCHAR(60),
+        error_message TEXT,
+        undo JSONB,
+        undone_by_run_id UUID REFERENCES action_runs(id) ON DELETE SET NULL,
+        undo_of_run_id UUID REFERENCES action_runs(id) ON DELETE SET NULL,
+        requested_by_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        requested_by_name VARCHAR(255) NOT NULL,
+        decided_by_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        decided_by_name VARCHAR(255),
+        decided_at TIMESTAMP,
+        decision_note TEXT,
+        created_at TIMESTAMP DEFAULT clock_timestamp(),
+        finished_at TIMESTAMP,
+        CONSTRAINT action_runs_origin_chk CHECK (origin IN ('user', 'automation', 'undo')),
+        CONSTRAINT action_runs_status_chk CHECK (status IN ('recommended', 'awaiting_approval', 'rejected', 'succeeded', 'failed', 'refused')),
+        CONSTRAINT action_runs_risk_chk CHECK (risk_class IN ('low', 'medium', 'high')),
+        CONSTRAINT action_runs_level_chk CHECK (autonomy_level BETWEEN 0 AND 4)
+    );
+
+    ALTER TABLE action_settings ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS action_settings_tenant_isolation ON action_settings;
+    CREATE POLICY action_settings_tenant_isolation ON action_settings
+        FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    ALTER TABLE action_runs ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS action_runs_tenant_isolation ON action_runs;
+    CREATE POLICY action_runs_tenant_isolation ON action_runs
+        FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    CREATE INDEX IF NOT EXISTS idx_action_runs_tenant_created ON action_runs(tenant_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_action_runs_tenant_status ON action_runs(tenant_id, status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_action_runs_action ON action_runs(tenant_id, action_id, created_at DESC);
+
+    GRANT SELECT, INSERT, UPDATE, DELETE ON action_settings TO asix_admin;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON action_runs TO asix_admin;
+
     -- Custom rules: correlation vs BIOC, plus an alert category (idempotent upgrade)
     ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'correlation';
     ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS category VARCHAR(100);

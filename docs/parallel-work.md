@@ -219,7 +219,7 @@ Design: `docs/portal-shell.md`, `docs/xsiam-reference.md`, `docs/open-source-sta
 | MK3 Signed catalog and delivery, staged rollout | not started | new files |
 | SR0 SOAR engine spike (Shuffle vs Tracecat vs own) | not started | notes into `docs/open-source-stack.md` |
 | SR1 Credentials and Integrations | not started | new files |
-| SR2 Action registry (disabled by default) | not started | new files |
+| SR2 Action registry (disabled by default) | **core done 2026-11-10** (`docs/actions.md`) | new files; also `k8s/12-schema-init.yaml`, `src/gateway/index.js`, `scripts/deploy/bootstrap-portal.sh` |
 | L1 Lists and list URL | not started | new files |
 | SR3 Playbook run, IOC feed import and IOC hit playbooks | not started | after SR0 |
 | SR4 Firewall pack | not started | after SR3 |
