@@ -93,7 +93,7 @@ describe('what runs with and without a license', () => {
   });
   it('a residential license unlocks the residential modules on the home profile and not the enterprise ones', () => {
     const s = state(HOME, { status: 'valid', features: bundles.BUNDLES['@residential'] });
-    for (const id of ['search', 'detections', 'alerts', 'cases', 'actions', 'content-packs', 'dashboards', 'notifications', 'threat-intel']) assert.strictEqual(s[id], 'enabled', id);
+    for (const id of ['search', 'detections', 'alerts', 'cases', 'actions', 'lists', 'content-packs', 'dashboards', 'notifications', 'threat-intel']) assert.strictEqual(s[id], 'enabled', id);
     for (const id of ['endpoints', 'compliance', 'mssp', 'posture']) assert.notStrictEqual(s[id], 'enabled', id);
   });
   it('an enterprise license on the enterprise profile unlocks the built enterprise modules; planned ones stay planned; the home profile still locks them', () => {
@@ -187,8 +187,8 @@ describe('build channel, the enforcement switch and stored licenses', () => {
 
 describe('the server gate', () => {
   it('maps the locked features to their modules and leaves everything else alone', () => {
-    for (const [p, id] of [['/v1/search/xql', 'search'], ['/v1/search/fields', 'search'], ['/v1/detections', 'detections'], ['/v1/detections/rules/1', 'detections'], ['/v1/alerts', 'alerts'], ['/v1/cases', 'cases'], ['/v1/cases/1', 'cases'], ['/v1/actions', 'actions'], ['/v1/my-alerts', 'alerts'], ['/v1/alert-duplicates', 'alerts'], ['/v1/notifications/channels', 'notifications'], ['/v1/threat-intel/feeds', 'threat-intel'], ['/v1/packs', 'content-packs'], ['/v1/endpoints/agents', 'endpoints']]) assert.strictEqual(gate.moduleOf(p), id, p);
-    for (const p of ['/v1/storage/retention', '/v1/capacity', '/v1/brokers', '/v1/collectors', '/v1/parsing-rules', '/v1/ingest', '/v1/ingest/http', '/v1/health/ready', '/v1/modules', '/v1/alertsmith', '/v1/detectionsX', '/', '/v1/ingestion-keys']) assert.strictEqual(gate.moduleOf(p), null, p);
+    for (const [p, id] of [['/v1/search/xql', 'search'], ['/v1/search/fields', 'search'], ['/v1/detections', 'detections'], ['/v1/detections/rules/1', 'detections'], ['/v1/alerts', 'alerts'], ['/v1/cases', 'cases'], ['/v1/cases/1', 'cases'], ['/v1/actions', 'actions'], ['/v1/lists', 'lists'], ['/v1/lists/1/entries', 'lists'], ['/v1/my-alerts', 'alerts'], ['/v1/alert-duplicates', 'alerts'], ['/v1/notifications/channels', 'notifications'], ['/v1/threat-intel/feeds', 'threat-intel'], ['/v1/packs', 'content-packs'], ['/v1/endpoints/agents', 'endpoints']]) assert.strictEqual(gate.moduleOf(p), id, p);
+    for (const p of ['/v1/storage/retention', '/v1/capacity', '/v1/brokers', '/v1/collectors', '/v1/parsing-rules', '/v1/ingest', '/v1/ingest/http', '/v1/health/ready', '/v1/modules', '/v1/alertsmith', '/v1/detectionsX', '/', '/v1/ingestion-keys', '/v1/list-feed/x', '/v1/listsX']) assert.strictEqual(gate.moduleOf(p), null, p);
     for (const [, id] of gate.MAP) assert.ok(registry.loadDir().some((m) => m.id === id), id);
   });
   it('every route prefix of a licensed module is in the map (a new route file for a locked module cannot be forgotten)', () => {

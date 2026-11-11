@@ -515,6 +515,64 @@ data:
     GRANT SELECT, INSERT, UPDATE, DELETE ON action_settings TO asix_admin;
     GRANT SELECT, INSERT, UPDATE, DELETE ON action_runs TO asix_admin;
 
+    -- Lists (L1, docs/lists.md): a tenant's block, allow and watch lists, and what is on them (idempotent).
+    -- The feed token is stored only as a SHA-256 hash (like ingestion keys); the hint is its last four characters, so a person can tell which one is in use.
+    CREATE TABLE IF NOT EXISTS lists (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) NOT NULL,
+        name VARCHAR(100) NOT NULL,
+        kind VARCHAR(10) NOT NULL,
+        item_type VARCHAR(10) NOT NULL,
+        description VARCHAR(500),
+        allow_private BOOLEAN NOT NULL DEFAULT FALSE,
+        feed_token_hash VARCHAR(64),
+        feed_token_hint VARCHAR(8),
+        feed_created_at TIMESTAMP,
+        feed_last_fetch_at TIMESTAMP,
+        feed_last_fetch_ip VARCHAR(64),
+        created_by_name VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT lists_kind_chk CHECK (kind IN ('block', 'allow', 'watch')),
+        CONSTRAINT lists_item_type_chk CHECK (item_type IN ('ip', 'domain', 'url', 'hash'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_lists_tenant_name ON lists(tenant_id, lower(name));
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_lists_feed_token ON lists(feed_token_hash) WHERE feed_token_hash IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS list_entries (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) NOT NULL,
+        list_id UUID REFERENCES lists(id) ON DELETE CASCADE NOT NULL,
+        value TEXT NOT NULL,
+        note VARCHAR(200),
+        source VARCHAR(10) NOT NULL DEFAULT 'manual',
+        added_by_name VARCHAR(255) NOT NULL,
+        added_at TIMESTAMP DEFAULT localtimestamp,
+        expires_at TIMESTAMP,
+        CONSTRAINT list_entries_source_chk CHECK (source IN ('manual', 'action')),
+        CONSTRAINT list_entries_unique UNIQUE (list_id, value)
+    );
+
+    ALTER TABLE lists ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS lists_tenant_isolation ON lists;
+    CREATE POLICY lists_tenant_isolation ON lists
+        FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    ALTER TABLE list_entries ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS list_entries_tenant_isolation ON list_entries;
+    CREATE POLICY list_entries_tenant_isolation ON list_entries
+        FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    CREATE INDEX IF NOT EXISTS idx_list_entries_list_expiry ON list_entries(list_id, expires_at);
+    CREATE INDEX IF NOT EXISTS idx_list_entries_tenant_value ON list_entries(tenant_id, value);
+
+    GRANT SELECT, INSERT, UPDATE, DELETE ON lists TO asix_admin;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON list_entries TO asix_admin;
+
     -- Custom rules: correlation vs BIOC, plus an alert category (idempotent upgrade)
     ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'correlation';
     ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS category VARCHAR(100);

@@ -10,7 +10,7 @@ Defined in code (`src/actions/catalog.js`), never created by a tenant: `id` (`ca
 
 Rules the definition check enforces (`checkDefinition`): a high-risk action never goes above level 2; a medium one never above 3; an action that is neither reversible nor append-only never above level 2, and cannot be "low" risk. A parameter is never a secret (it is stored with the run); credentials will be passed by reference to an integration instance (SR1).
 
-### The built-in actions (all on cases)
+### The built-in actions (seven on cases; two on lists, `docs/lists.md`)
 | Action | Risk | What |
 |---|---|---|
 | `case.create` | low (adds) | Open a case, optionally with alerts. |
@@ -20,6 +20,8 @@ Rules the definition check enforces (`checkDefinition`): a high-risk action neve
 | `case.set_status` | **medium**, undo | Open, investigate, close, reopen. Closing takes a case out of the active lists, so it cannot run by itself above level 3. |
 | `case.add_alerts` | low, undo | Attach alerts; undo takes out only the ones that were added. |
 | `case.remove_alerts` | low, undo | Take alerts out, all or none; undo adds them back. |
+| `list.add_entry` | **medium**, undo | Put one value on a list (30 days unless told otherwise); the list's own rules apply (too wide, private, on an allow list). Undo takes it off. |
+| `list.remove_entry` | **medium**, undo | Take one value off a list; undo puts it back with its note and exact expiry. |
 
 They call the CS1 service (`src/cases/service.js`), so every rule of cases (a closed case is read-only, an alert is in one case only, tenant checks) still applies and the case timeline shows the change.
 
