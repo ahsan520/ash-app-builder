@@ -573,6 +573,36 @@ data:
     GRANT SELECT, INSERT, UPDATE, DELETE ON lists TO asix_admin;
     GRANT SELECT, INSERT, UPDATE, DELETE ON list_entries TO asix_admin;
 
+    -- Integrations (SR1, docs/integrations.md): a tenant's accounts for other products. config holds the settings that are not secret; credential_enc holds the
+    -- secrets sealed as one JSON object with NOTIFY_ENCRYPTION_KEY through src/secrets/provider.js and is never returned by a route; credential_fields keeps only the
+    -- NAMES of the credentials that are set, so the status needs no key (idempotent).
+    CREATE TABLE IF NOT EXISTS integration_instances (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) NOT NULL,
+        definition_id VARCHAR(40) NOT NULL,
+        name VARCHAR(100) NOT NULL,
+        config JSONB NOT NULL DEFAULT '{}'::jsonb,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        credential_enc TEXT,
+        credential_fields TEXT[] NOT NULL DEFAULT '{}',
+        credential_set_at TIMESTAMP,
+        credential_set_by_name VARCHAR(255),
+        created_by_name VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_integration_instances_tenant_name ON integration_instances(tenant_id, lower(name));
+    CREATE INDEX IF NOT EXISTS idx_integration_instances_definition ON integration_instances(tenant_id, definition_id);
+
+    ALTER TABLE integration_instances ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS integration_instances_tenant_isolation ON integration_instances;
+    CREATE POLICY integration_instances_tenant_isolation ON integration_instances
+        FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    GRANT SELECT, INSERT, UPDATE, DELETE ON integration_instances TO asix_admin;
+
     -- Custom rules: correlation vs BIOC, plus an alert category (idempotent upgrade)
     ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'correlation';
     ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS category VARCHAR(100);

@@ -50,7 +50,7 @@ describe('licensing off (the default on a development build)', () => {
   });
   it('the module states are the same as the platform had before licensing: a licensed feature never locks a module while off, even on the smaller edition', async () => {
     const s = await modules.snapshot({ ASIX_PROFILE: 'home' }, down); const on = s.modules.filter((m) => m.state === 'enabled').map((m) => m.id);
-    for (const id of ['search', 'detections', 'alerts', 'cases', 'actions', 'lists', 'content-packs', 'dashboards', 'notifications', 'threat-intel']) assert.ok(on.includes(id), id);
+    for (const id of ['search', 'detections', 'alerts', 'cases', 'actions', 'lists', 'integrations', 'content-packs', 'dashboards', 'notifications', 'threat-intel']) assert.ok(on.includes(id), id);
   });
   it('a database that has never heard of licensing (the schema job has not run) is also just off', async () => {
     const noTable = { async query() { const e = new Error('relation "installation" does not exist'); e.code = '42P01'; throw e; } };

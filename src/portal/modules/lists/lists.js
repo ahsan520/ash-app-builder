@@ -74,7 +74,7 @@ export async function mount(host, ctx) {
       field('What it holds (cannot be changed later)', E('select', { onchange: (ev) => { f.item_type = ev.target.value; draw(); } }, ...S.choices.item_types.map((k) => E('option', { value: k, textContent: TYPE[k], selected: f.item_type === k })))),
       field('Description (optional)', E('input', { type: 'text', style: 'width:80%', value: f.description, oninput: (ev) => { f.description = ev.target.value; } })),
       f.kind === 'block' && f.item_type === 'ip'
-        ? E('div', { style: 'margin:6px 0' }, E('label', {}, E('input', { type: 'checkbox', checked: !!f.allow_private, onchange: (ev) => { f.allow_private = ev.target.checked; } }), ' Allow private addresses (10.x, 172.16-31.x, 192.168.x and the like). Off by default: blocking one can cut off your own network.'))
+        ? E('div', { style: 'margin:6px 0' }, E('label', {}, E('input', { type: 'checkbox', style: 'width:auto;margin-right:8px;vertical-align:middle', checked: !!f.allow_private, onchange: (ev) => { f.allow_private = ev.target.checked; } }), ' Allow private addresses (10.x, 172.16-31.x, 192.168.x and the like). Off by default: blocking one can cut off your own network.'))
         : '',
       E('div', {}, btn('Create', create, true, S.busy), btn('Cancel', () => { S.creating = false; draw(); })));
   }

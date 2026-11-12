@@ -3,7 +3,7 @@
 Status: **core built 2026-11-10 (task SR2 of `docs/product-plan.md`, "Status of Phase 5").** It is the allow-list of everything ASIX may do on its own or on request: firewall and endpoint actions will be added to it, and a playbook (SR3) may only call an action that is in it, enabled for the tenant.
 
 ## Why the core does not wait for SR1
-The task table said SR2 needs SR1 (credentials and integrations). The registry itself does not: actions are defined in code, switched on per tenant, gated by an autonomy level and audited. **Integration-backed actions plug in later** with `register()` (`src/actions/catalog.js`) once SR1 exists. What SR2 ships today are real built-in actions on **cases** (the thing ASIX can change without an account elsewhere).
+The task table said SR2 needs SR1 (credentials and integrations). The registry itself does not: actions are defined in code, switched on per tenant, gated by an autonomy level and audited. **Integration-backed actions plug in later (accounts exist since SR1, `docs/integrations.md`; the actions come with SR3 and SR4)** with `register()` (`src/actions/catalog.js`) once SR1 exists. What SR2 ships today are real built-in actions on **cases** (the thing ASIX can change without an account elsewhere).
 
 ## What an action is
 Defined in code (`src/actions/catalog.js`), never created by a tenant: `id` (`case.add_note`), `name`, `description`, `publisher`, `kind` (`builtin`; `integration` and `endpoint` come with SR1 and SR5), `source`, `parameters` (typed: `uuid`, `uuid_list`, `string`, `enum`), **risk class** (`low`, `medium`, `high`), `reversible` / `append_only`, `max_autonomy`, `default_autonomy`, and `execute()`. `register()` refuses a malformed definition when ASIX starts, not at a request.

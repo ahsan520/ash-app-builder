@@ -47,6 +47,7 @@ app.use(require('./routes/alert-triage'));
 app.use(require('./routes/alert-dedupe'));
 app.use(require('./routes/cases'));   // CS1: before anything that could take /v1/alerts/:id/case or /v1/cases/:x
 app.use(require('./routes/actions')); // SR2: the action registry (docs/actions.md)
+app.use(require('./routes/integrations')); // SR1: integrations and their write-only credentials (docs/integrations.md)
 app.use(require('./routes/lists'));   // L1: lists and their entries (docs/lists.md); also adds list.add_entry and list.remove_entry to the registry
 app.use(require('./routes/my-alerts'));
 app.use(require('./routes/threat-intel'));
