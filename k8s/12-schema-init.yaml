@@ -603,6 +603,64 @@ data:
 
     GRANT SELECT, INSERT, UPDATE, DELETE ON integration_instances TO asix_admin;
 
+    -- IOC feeds (docs/ioc-feeds.md): a tenant's scheduled imports of an indicator feed into threat_indicators (idempotent). A feed uses a `threat-feed`
+    -- integration (its address, format and optional token). running_since is a lease: one run per feed at a time, across API replicas, and a lease older than
+    -- 15 minutes is taken over. Indicators it writes carry source 'feed:<feed id>'; ioc_feed_runs keeps what each run changed (the last 100 per feed).
+    CREATE TABLE IF NOT EXISTS ioc_feeds (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) NOT NULL,
+        integration_id UUID REFERENCES integration_instances(id) ON DELETE CASCADE NOT NULL,
+        name VARCHAR(100) NOT NULL,
+        severity VARCHAR(20) NOT NULL DEFAULT 'medium',
+        ttl_days INTEGER NOT NULL DEFAULT 30,
+        interval_hours INTEGER NOT NULL DEFAULT 24,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        last_run_at TIMESTAMP,
+        last_status VARCHAR(10),
+        last_error VARCHAR(300),
+        last_item_count INTEGER,
+        running_since TIMESTAMP,
+        created_by_name VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT ioc_feeds_ttl_chk CHECK (ttl_days BETWEEN 1 AND 365),
+        CONSTRAINT ioc_feeds_interval_chk CHECK (interval_hours IN (1, 6, 12, 24))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ioc_feeds_tenant_name ON ioc_feeds(tenant_id, lower(name));
+    CREATE INDEX IF NOT EXISTS idx_ioc_feeds_due ON ioc_feeds(enabled, last_run_at);
+
+    CREATE TABLE IF NOT EXISTS ioc_feed_runs (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) NOT NULL,
+        feed_id UUID REFERENCES ioc_feeds(id) ON DELETE CASCADE NOT NULL,
+        run_kind VARCHAR(10) NOT NULL,
+        started_at TIMESTAMP DEFAULT localtimestamp,
+        finished_at TIMESTAMP,
+        status VARCHAR(10) NOT NULL DEFAULT 'running',
+        items INTEGER, added INTEGER, updated INTEGER, expired INTEGER, invalid INTEGER, skipped_other INTEGER,
+        error_code VARCHAR(40),
+        error_message VARCHAR(300),
+        CONSTRAINT ioc_feed_runs_kind_chk CHECK (run_kind IN ('schedule', 'manual')),
+        CONSTRAINT ioc_feed_runs_status_chk CHECK (status IN ('running', 'ok', 'failed'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_ioc_feed_runs_feed ON ioc_feed_runs(feed_id, started_at DESC);
+
+    ALTER TABLE ioc_feeds ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS ioc_feeds_tenant_isolation ON ioc_feeds;
+    CREATE POLICY ioc_feeds_tenant_isolation ON ioc_feeds
+        FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+    ALTER TABLE ioc_feed_runs ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS ioc_feed_runs_tenant_isolation ON ioc_feed_runs;
+    CREATE POLICY ioc_feed_runs_tenant_isolation ON ioc_feed_runs
+        FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    GRANT SELECT, INSERT, UPDATE, DELETE ON ioc_feeds TO asix_admin;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON ioc_feed_runs TO asix_admin;
+
     -- Custom rules: correlation vs BIOC, plus an alert category (idempotent upgrade)
     ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'correlation';
     ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS category VARCHAR(100);

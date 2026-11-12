@@ -13,7 +13,7 @@ const walk = (dir) => fs.readdirSync(path.join(root, dir), { withFileTypes: true
 
 describe('where the rest of the platform touches licensing', () => {
   it('only the listed files outside src/licensing refer to it, and nothing refers to its inside by another route', () => {
-    const allowed = ['src/detection/ioc-matcher.js', 'src/detection/rule-runner.js', 'src/gateway/index.js', 'src/modules/index.js', 'src/server.js'];
+    const allowed = ['src/detection/ioc-matcher.js', 'src/detection/rule-runner.js', 'src/feeds/runner.js', 'src/gateway/index.js', 'src/modules/index.js', 'src/server.js'];
     const hits = walk('src').filter((f) => f.endsWith('.js') && !f.startsWith('src/licensing/') && !f.startsWith('src/portal/modules/licensing/')).filter((f) => /require\([^)]*licensing/.test(read(f))).sort();
     assert.deepStrictEqual(hits, allowed);
     assert.deepStrictEqual([...read('src/modules/index.js').matchAll(/require\('([^']*licensing[^']*)'\)/g)].map((m) => m[1]), ['../licensing']);
@@ -50,7 +50,7 @@ describe('licensing off (the default on a development build)', () => {
   });
   it('the module states are the same as the platform had before licensing: a licensed feature never locks a module while off, even on the smaller edition', async () => {
     const s = await modules.snapshot({ ASIX_PROFILE: 'home' }, down); const on = s.modules.filter((m) => m.state === 'enabled').map((m) => m.id);
-    for (const id of ['search', 'detections', 'alerts', 'cases', 'actions', 'lists', 'integrations', 'content-packs', 'dashboards', 'notifications', 'threat-intel']) assert.ok(on.includes(id), id);
+    for (const id of ['search', 'detections', 'alerts', 'cases', 'actions', 'lists', 'integrations', 'ioc-feeds', 'content-packs', 'dashboards', 'notifications', 'threat-intel']) assert.ok(on.includes(id), id);
   });
   it('a database that has never heard of licensing (the schema job has not run) is also just off', async () => {
     const noTable = { async query() { const e = new Error('relation "installation" does not exist'); e.code = '42P01'; throw e; } };
