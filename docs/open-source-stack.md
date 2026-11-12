@@ -59,7 +59,8 @@
 - Capabilities: Generic detection rule format; can translate to multiple backends
 - Suitability: Detection-as-code format; independent of backend
 
-### SOAR / playbooks / case management (researched 2026-11-08; engine NOT chosen yet)
+### SOAR / playbooks / case management (researched 2026-11-08; engine NOT chosen yet; spike kit built 2026-11-12)
+**2026-11-12 update:** provisional first try is **Tracecat**, fallback Shuffle; the comparison table, the scenario, the decision rule and the empty results are in `docs/soar-spike.md`. New facts from the sources that day: Tracecat's Helm chart is PolyForm Shield (internal use) and its documentation calls it a private OCI artifact, so the spike uses Docker Compose; its human-in-the-loop, RBAC/ABAC, Git sync and MCP servers are listed as paid (not needed, ASIX keeps approval); Tracecat needs PostgreSQL, Redis, an S3-compatible store and Temporal; Shuffle's own `.env` points at OpenSearch and its Orborus starts app containers through Docker (Kubernetes is mentioned as a scaling option); a community discussion questions limits in the self-hosted Shuffle edition (unverified).
 Sources: the projects' own repositories and one July 2026 comparison article (aimultiple.com, "open source SOAR"); licences must be re-checked at the time of use.
 - **Shuffle** (security automation, workflow editor, OpenAPI-based apps). Licence as its repository states: the backend is AGPLv3; workflows, documentation, the app specification, the app SDK and the apps are MIT. The article counts 200+ pre-built app integrations and over 11,000 endpoints. Built with MSSPs in mind (its README). *Unverified for us:* footprint on a one-VM Home install, tenant isolation, running under k3s as it is.
 - **Tracecat** (automation with YAML templates, cases, tables). AGPL-3.0, except a paid enterprise directory (`tracecat-ee`) and a Helm chart under PolyForm Shield. Depends on Temporal, PostgreSQL and an S3-compatible store. *Sources disagree* on which features are enterprise-only (one lists RBAC, MCP servers and version control; the article says SSO and audit logs are free): check before choosing. Smaller integration catalogue than Shuffle.
@@ -111,4 +112,4 @@ We do not build a marketplace web store first. Candidates for the parts:
 ## Unverified / Assumed (Explicitly Marked)
 - ASSUMPTION: Redpanda can fully replace Kafka for our message bus needs in Phase 1 — verify load testing before finalizing
 - ASSUMPTION: ClickHouse analytics layer does not conflict with OpenSearch licensing in combined deployment — verify legal review before production
-- UNVERIFIED (2026-11-08): footprint, tenant isolation and k3s fit of Shuffle and Tracecat; Tracecat's free vs enterprise feature split; StackStorm's current licence; Sigstore/OCI as the pack delivery path; the licence terms of SigmaHQ rules for bundling.
+- UNVERIFIED (2026-11-08, still true 2026-11-12: the kit exists, nothing was run): footprint, tenant isolation and k3s fit of Shuffle and Tracecat; Tracecat's free vs enterprise feature split; StackStorm's current licence; Sigstore/OCI as the pack delivery path; the licence terms of SigmaHQ rules for bundling.
