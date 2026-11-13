@@ -3,7 +3,7 @@
 // SOAR engine spike (task SR0, docs/soar-spike.md): ONE small server that plays the three things the spike scenario talks to, so two engines can be
 // compared on the same scenario without a real firewall, a real feed or the real ASIX approval gate:
 //   1. an indicator feed          GET  /feed.txt
-//   2. ASIX's approval gate       POST /asix/approvals, GET /asix/approvals/:id, POST /asix/approvals/:id/grant|reject   (the person's decision)
+//   2. ASIX's approval gate       POST /asix/approvals, GET /asix/approvals/:id, GET /asix/approvals/:id/decision (202 while waiting), POST /asix/approvals/:id/grant|reject   (the person's decision)
 //   3. a firewall alias API       POST /api/firewall/alias_util/add|del/:alias, GET /api/firewall/alias_util/list/:alias   (basic auth)
 // plus   GET /_spike/report (the verdict: did the engine do the scenario in the right order and nothing else)   and   POST /_spike/reset.
 // The firewall paths follow OPNsense's alias_util API as we remember it (NOT checked against a real OPNsense): the answers are only as exact as that memory.
@@ -72,7 +72,12 @@ function createStandIn(opts = {}) {
         const id = 'ap' + (++st.seq); st.approvals.set(id, { id, address: b.address, status: 'waiting' }); log('approval_requested', { id, address: b.address });
         return send(res, 201, { id, address: b.address, status: 'waiting' });
       }
-      let r = /^\/asix\/approvals\/(ap\d+)(?:\/(grant|reject))?$/.exec(p);
+      let r = /^\/asix\/approvals\/(ap\d+)\/decision$/.exec(p);   // for an engine that polls: 202 while a person has not decided, 200 once they have
+      if (r && m === 'GET') {
+        const a = st.approvals.get(r[1]); if (!a) return send(res, 404, { error: 'unknown approval' });
+        return send(res, a.status === 'waiting' ? 202 : 200, { id: a.id, address: a.address, status: a.status });
+      }
+      r = /^\/asix\/approvals\/(ap\d+)(?:\/(grant|reject))?$/.exec(p);
       if (r) {
         const a = st.approvals.get(r[1]); if (!a) return send(res, 404, { error: 'unknown approval' });
         if (m === 'GET' && !r[2]) return send(res, 200, { id: a.id, address: a.address, status: a.status });

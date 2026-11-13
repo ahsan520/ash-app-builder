@@ -68,6 +68,14 @@ describe('SOAR spike stand-in', () => {
     const granted = await call('POST', `/asix/approvals/${id}/grant`); assert.deepStrictEqual(granted.json, { id, address: '203.0.113.10', status: 'granted' });
   });
 
+  it('the decision endpoint answers 202 while waiting and 200 once a person has decided (granted or rejected), and 404 for an unknown approval', async () => {
+    const id = await ask('203.0.113.10'); const other = await ask('203.0.113.11');
+    let r = await call('GET', `/asix/approvals/${id}/decision`); assert.strictEqual(r.status, 202); assert.strictEqual(r.json.status, 'waiting'); assert.strictEqual(r.json.address, '203.0.113.10');
+    await call('POST', `/asix/approvals/${id}/grant`); r = await call('GET', `/asix/approvals/${id}/decision`); assert.strictEqual(r.status, 200); assert.strictEqual(r.json.status, 'granted');
+    await call('POST', `/asix/approvals/${other}/reject`); r = await call('GET', `/asix/approvals/${other}/decision`); assert.strictEqual(r.status, 200); assert.strictEqual(r.json.status, 'rejected');
+    assert.strictEqual((await call('GET', '/asix/approvals/ap999/decision')).status, 404);
+  });
+
   it('an approval can be decided once; unknown ones are 404', async () => {
     const id = await ask('203.0.113.10'); assert.strictEqual((await call('POST', `/asix/approvals/${id}/grant`)).status, 200);
     assert.strictEqual((await call('POST', `/asix/approvals/${id}/reject`)).status, 409); assert.strictEqual((await call('GET', '/asix/approvals/ap999')).status, 404);

@@ -7,7 +7,7 @@
 |---|---|
 | `deploy/soar-spike/stand-in.js` | One small server (no dependency, loopback only) that plays the three things the scenario talks to: an indicator feed, **ASIX's approval gate** and a firewall alias API (OPNsense style). It also judges the run: `GET /_spike/report` says `pass` or `fail` with one sentence per check. |
 | `scripts/deploy/soar-spike-measure.sh` | Reads what the engine costs (memory per container or pod, restarts, disk) from Docker or k3s, judges it against the budget, prints a block of Markdown to paste below. Changes nothing. |
-| `tests/soar-spike-stand-in.test.js` (10), `tests/soar-spike-measure-script.test.js` (8) | Real HTTP for the stand-in; stubs on `PATH` for docker, kubectl, free, nproc. One test found a real bug (kubectl writes `Gi`, not `GiB`). |
+| `tests/soar-spike-stand-in.test.js` (11), `tests/soar-spike-measure-script.test.js` (8) | Real HTTP for the stand-in; stubs on `PATH` for docker, kubectl, free, nproc. One test found a real bug (kubectl writes `Gi`, not `GiB`). |
 
 ## The scenario (the same for every engine)
 1. **Pull the feed** (`GET /feed.txt`: three public addresses, one with a note after it, and one private address `10.0.0.5`).
