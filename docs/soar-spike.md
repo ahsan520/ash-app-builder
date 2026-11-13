@@ -1,6 +1,6 @@
 # SOAR engine spike (task SR0)
 
-**Status 2026-11-12: kit built, engine NOT yet run.** Decision so far: **Tracecat is the engine to try first** (a provisional choice from reading, not from running anything). The spike is finished only when the table in "Results" is filled in on the lab and the decision below is confirmed or reversed. Nothing in ASIX itself changed for this task.
+**Status 2026-11-13: scenario run and PASSED on Tracecat 1.4.0; footprint measured idle only; Shuffle not tried.** Tracecat did the whole scenario on a lab VM (feed, clean-up, approval request, wait for a person, block with a secret-held login) and the stand-in's verdict was **pass**. Idle memory is **5025 MiB over 16 containers**, far over the 2048 MiB budget this spike assumed for Home. So the leaning is: **Tracecat is a candidate for the engine tier (a separate VM), not for Home**. This is not final: the busy run, the one-hour reading, tenant isolation, the licence question and the five-minute poll limit are still open (see "Results" and "Findings"). Nothing in ASIX itself changed for this task.
 
 ## What is in the kit
 | File | What |
@@ -43,31 +43,52 @@ Use a **separate VM** for the engine (4 vCPU / 8 GB, the Home profile), not asix
 
 **Why Tracecat first:** its workflows are plain files (they fit the pack format, `docs/content-packs.md`), it keeps its state in PostgreSQL, and it does not need a Docker socket or a third search engine. **Against it:** Temporal and Redis and a store are several containers; its Helm chart is not for us; its integration catalogue is smaller. **Not a verdict:** every number in "Results" is still empty.
 
-## Decision rule
+## Decision rule (outcome so far in the last paragraph)
 - **Adopt Tracecat** if the scenario passes, the idle total stays within the budget (**2048 MiB, an assumption** of this spike: it is what we decided the engine may take on a Home machine that also runs ASIX; change it here first) and the busy total stays within 1.5 times it.
 - **Try Shuffle** if either fails, then choose the one that passes.
 - **Home without an engine** (open decision in `docs/product-plan.md`) if neither fits: a minimal runner inside ASIX for Home only; Enterprise keeps the engine.
 - Either way: the engine is a **separate service**, ASIX talks to it over HTTP and keeps approval, autonomy, tenant and audit in front of every action. Any AGPL tool is used unmodified and over its API; a lawyer's read is still open.
 
-## Results (fill in; paste the measure script's blocks)
+## Results (Tracecat 1.4.0 on a lab VM, 2026-11-13; Shuffle not run)
+Lab VM: Ubuntu, **ARM64** (all images have arm64 builds and pull cleanly), 8 vCPU, 9209 MiB, no swap, Docker 29.9.3, Compose 5.7.1, HTTPS at the VM's LAN address with a self-signed certificate, executor backend `direct` (no sandbox).
+
 | Question | Tracecat | Shuffle |
 |---|---|---|
-| Scenario verdict (`/_spike/report`) | not run | not run |
-| Idle memory (MiB, highest) | not measured | not measured |
+| Scenario verdict (`/_spike/report`) | **pass** (2026-11-13): blocked exactly the two granted addresses; the rejected one stayed out; no private address, no wrong credentials | not run |
+| Idle memory (MiB, highest of 3 readings, about 14 minutes after start) | **5025** over **16 containers** (largest: litellm 1272, api 637, executor 393, temporal 351, background worker 349, mcp 342); CPU idle under 6% per container | not measured |
 | Busy memory, 20 runs in a loop | not measured | not measured |
-| After one hour | not measured | not measured |
-| Containers or pods | not measured | not measured |
-| Starts after a reboot by itself | not tried | not tried |
+| After one hour | not measured (about 35 minutes of stable running seen, no restarts after the first start) | not measured |
+| Containers or pods | 16 running, plus 2 one-shot jobs (migrations, minio-init) | not measured |
+| Starts after a reboot by itself | not tried (containers are `restart: unless-stopped`) | not tried |
 | Tenant isolation (can one tenant's workflow read another's secrets or runs?) | not tried | not tried |
-| Fits k3s (if a later step needs it) | not tried | not tried |
-| Pack mapping: which parts of a workflow can be a data file | not tried | not tried |
-| Free edition has what ASIX needs (SSO not needed; audit export; secrets) | not checked | not checked |
-| Who patches it, and how often it releases | not checked | not checked |
+| Fits k3s | not tried; the vendor's Helm chart is not self-serve (see Findings) | not tried |
+| Pack mapping: which parts of a workflow can be a data file | not tried: the workflow was built in the UI; export to YAML not yet looked at | not tried |
+| Free edition has what ASIX needs | **partly known**: image label says AGPL-3.0; the Platform admin pages (Organizations, Tiers, Managed Workspaces) show with `TRACECAT__EE_MULTI_TENANT=false` and the Tiers page says its settings will be gated behind a licence key in a future release; the `.env` says the Enterprise flags need an Enterprise licence. Which features are free is **not established**: ask Tracecat in writing | not checked |
+| Who patches it, and how often it releases | not checked (the version seen is 1.4.0; `temporalio/ui` is unpinned `latest` in the shipped compose file; `postgres:13` backs Temporal) | not checked |
+
+## Findings (what building the scenario taught us)
+- **The workflow that passed:** manual trigger, then `core.http_request` (feed), `core.script.run_python` (split lines, strip notes, drop private and duplicate addresses), `core.http_request` with **For each** (one approval request per address), `core.http_poll` with **For each** (`poll_retry_codes: [202]`, `poll_interval: 5`), `core.script.run_python` (keep the granted addresses), `core.http_request` with **For each** (the block call, `Authorization` header from a secret).
+- **A script action exists and is enough for clean-up.** `core.script.run_python` ran `re` and `ipaddress`. Its inputs are a separate `inputs:` key (a mistake that put `inputs:` inside the script text caused an `IndentationError`).
+- **The HTTP action can reach a private address** with no allow-list setting (a plain GET and POST to the lab LAN address worked). Tracecat's FAQ mentions an allow-list for LLM and MCP endpoints only.
+- **Loop order is not stable.** Requests in a loop ran in parallel and the stand-in numbered approvals in arrival order, not feed order. Carry the address in every answer (a real ASIX approval carries its action) and never rely on position.
+- **`core.http_poll` ends a poll on any status code you did not list**, so a 404 gave a green "Action completed". The step after it must check for the status it wants. Polling on a `202` while waiting and `200` once decided worked. `poll_condition` (a Python lambda over `headers`, `data`, `status_code`) exists and was not used.
+- **The poll was killed at 300 seconds** ("Action execution timed out after 300s") although `timeout: 600` was set. Cause not established (an executor limit, or the field not applying). **A person who takes longer than five minutes cannot be waited for inside one poll action**, so an ASIX approval that may take hours needs a different design: ASIX calls a Tracecat webhook when a person decides, and a second workflow does the block. Not built, not tried.
+- **Secrets are checked when a workflow is saved** (`Found 0 secrets matching 'firewall' in the 'default' environment`). `SECRETS.<name>.<KEY>` is the syntax.
+- **HTTPS is needed for the MCP service** (it exits with `Issuer URL must be HTTPS`). With a bare IP address Caddy also needs `default_sni <ip>` or browsers and curl fail the handshake; a mounted single-file Caddyfile needs `docker compose up -d --force-recreate caddy` after `sed -i` (a new file is not seen by the running container).
+- **Temporal restarted 3 times** in its first minutes and not again over about 35 minutes. No out-of-memory kills. Cause not established.
+- **The Kubernetes route is gated.** The vendor's Helm chart is source-available (PolyForm Shield, internal use) and a private OCI artifact (contact their customer success to evaluate). Its defaults ask for roughly 78 GiB and 46 vCPU of requests; the nsjail sandbox needs privileged pods (`SYS_ADMIN`, unconfined seccomp); autoscaling uses KEDA on Temporal queue depth. None of this was tried.
+- **`core.http_paginate`** exists and the scenario did not need it. A real feed or firewall list that pages would.
+
+## Outcome so far (2026-11-13), by the rule above
+- Scenario: **passed**. Idle memory **5025 MiB: over the 2048 MiB budget**. By the rule, the next step is Shuffle, and for Home a minimal runner inside ASIX is the fallback.
+- **Leaning, not a decision:** Tracecat is the candidate for the **engine tier** (its own VM of at least the vendor's Small size, 8 cores and 16 GB), and **Home gets no engine** (a minimal runner inside ASIX). Shuffle's footprint (OpenSearch, Docker-started apps) is unmeasured and is likely not lighter, but that is a guess. Run the Shuffle spike only if Tracecat's licence answer or its tenant isolation turns out wrong for ASIX.
+- **Still to do before this closes:** the busy loop and the one-hour reading (`--label busy`, `--label settled`), tenant isolation, the written licence question to Tracecat, the five-minute poll limit (test `timeout`, then decide on the webhook design), and export the workflow to YAML for the pack mapping.
 
 ## Sources (2026-11-12)
 Tracecat repository and documentation (`github.com/TracecatHQ/tracecat`, `docs.tracecat.com` self-hosting pages: licence exceptions, dependencies, Helm chart as a private OCI artifact), two third-party summaries of it (dev.co, openapps.pro: they list RBAC, version control and MCP servers as paid; the repository's older text says SSO and audit logs stay free: **the sources disagree**), Shuffle repository (`.env` with OpenSearch settings, licence note in its README, release notes) and one community discussion about self-hosted limits. The OPNsense paths in the stand-in are from our memory of its alias API and **were not checked against a real OPNsense**.
 
 ## Honest limits
-- Nothing was installed or run when this was written: no footprint, isolation or k3s figure exists yet.
+- One engine was installed and run (Tracecat 1.4.0, one lab VM, ARM64, direct executor backend): only the idle footprint exists; no busy, one-hour, isolation or k3s figure yet. Shuffle was not run.
 - The stand-in judges order and safety rules; it does not judge how pleasant the engine is to build with.
-- The approval is a stand-in; the real call from an engine into ASIX is not built.
+- The approval, the feed and the firewall are stand-ins (`deploy/soar-spike/stand-in.js`); the real call from an engine into ASIX is not built, and the OPNsense paths are from memory.
+- The stand-in has two things a real ASIX approval would answer differently: the address in every answer, and a `/decision` endpoint that answers 202 while waiting.
