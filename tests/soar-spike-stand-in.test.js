@@ -62,6 +62,12 @@ describe('SOAR spike stand-in', () => {
     assert.deepStrictEqual((await call('GET', '/_spike/report')).json.blocked, []); assert.ok((await failed()).includes('credentials'));
   });
 
+  it('every approval answer carries the address it is about, so a later step needs no lookup (as a real ASIX approval carries its action)', async () => {
+    const created = await call('POST', '/asix/approvals', { address: '203.0.113.10' }); assert.strictEqual(created.json.address, '203.0.113.10');
+    const id = created.json.id; assert.strictEqual((await call('GET', '/asix/approvals/' + id)).json.address, '203.0.113.10');
+    const granted = await call('POST', `/asix/approvals/${id}/grant`); assert.deepStrictEqual(granted.json, { id, address: '203.0.113.10', status: 'granted' });
+  });
+
   it('an approval can be decided once; unknown ones are 404', async () => {
     const id = await ask('203.0.113.10'); assert.strictEqual((await call('POST', `/asix/approvals/${id}/grant`)).status, 200);
     assert.strictEqual((await call('POST', `/asix/approvals/${id}/reject`)).status, 409); assert.strictEqual((await call('GET', '/asix/approvals/ap999')).status, 404);

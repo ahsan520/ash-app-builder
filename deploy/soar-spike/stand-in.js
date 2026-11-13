@@ -70,16 +70,16 @@ function createStandIn(opts = {}) {
       if (m === 'POST' && p === '/asix/approvals') {
         const b = await readJson(req); if (!b || !ipOk(b.address)) return send(res, 400, { error: 'address must be an IPv4 address' });
         const id = 'ap' + (++st.seq); st.approvals.set(id, { id, address: b.address, status: 'waiting' }); log('approval_requested', { id, address: b.address });
-        return send(res, 201, { id, status: 'waiting' });
+        return send(res, 201, { id, address: b.address, status: 'waiting' });
       }
       let r = /^\/asix\/approvals\/(ap\d+)(?:\/(grant|reject))?$/.exec(p);
       if (r) {
         const a = st.approvals.get(r[1]); if (!a) return send(res, 404, { error: 'unknown approval' });
-        if (m === 'GET' && !r[2]) return send(res, 200, { id: a.id, status: a.status });
+        if (m === 'GET' && !r[2]) return send(res, 200, { id: a.id, address: a.address, status: a.status });
         if (m === 'POST' && r[2]) {
           if (a.status !== 'waiting') return send(res, 409, { error: 'already ' + a.status });
           a.status = r[2] === 'grant' ? 'granted' : 'rejected'; log(a.status === 'granted' ? 'approval_granted' : 'approval_rejected', { id: a.id, address: a.address });
-          return send(res, 200, { id: a.id, status: a.status });
+          return send(res, 200, { id: a.id, address: a.address, status: a.status });
         }
       }
 
