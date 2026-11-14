@@ -1,5 +1,5 @@
 # SOAR spike (docs/soar-spike.md, "Webhook and environment tests"): the smallest workflow that shows a webhook start. WRITTEN BY HAND from the shape of
-# spike-block-list.tracecat.yaml; IMPORT WAS NOT TRIED. If Tracecat refuses it, build the same thing in the editor: two "HTTP request" actions, both POST to
+# spike-block-list.tracecat.yaml; it imported into Tracecat 1.4.0 without change (2026-11-14). If a later version refuses it, build the same thing in the editor: two "HTTP request" actions, both POST to
 # http://<stand-in>:8099/asix/ping, no secret, the first with payload {"note": "webhook-probe"}, the second with the payload below, and the second depending on the first.
 # Change 192.168.68.58 to the address of the machine that runs the stand-in. The webhook itself is switched on in the editor (Trigger node), it is not in this file.
 definition:
