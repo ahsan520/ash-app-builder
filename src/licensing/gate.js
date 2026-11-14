@@ -8,7 +8,7 @@ const modules = require('../modules');
 const MAP = [
   ['/v1/search', 'search'],
   ['/v1/detections', 'detections'],
-  ['/v1/cases', 'cases'], ['/v1/actions', 'actions'], ['/v1/lists', 'lists'], ['/v1/integrations', 'integrations'], ['/v1/ioc-feeds', 'ioc-feeds'],
+  ['/v1/cases', 'cases'], ['/v1/actions', 'actions'], ['/v1/engine', 'actions'], ['/v1/lists', 'lists'], ['/v1/integrations', 'integrations'], ['/v1/ioc-feeds', 'ioc-feeds'],
   ['/v1/alerts', 'alerts'], ['/v1/alert-duplicates', 'alerts'], ['/v1/alert-assignees', 'alerts'], ['/v1/my-alerts', 'alerts'],
   ['/v1/notifications', 'notifications'],
   ['/v1/threat-intel', 'threat-intel'],

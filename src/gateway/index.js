@@ -47,6 +47,8 @@ app.use(require('./routes/alert-triage'));
 app.use(require('./routes/alert-dedupe'));
 app.use(require('./routes/cases'));   // CS1: before anything that could take /v1/alerts/:id/case or /v1/cases/:x
 app.use(require('./routes/actions')); // SR2: the action registry (docs/actions.md)
+app.use(require('./routes/engine'));   // SR3: runs started on the automation engine, read by people (docs/engine-callback.md)
+app.use(require('../engine/callback').router);   // SR3: what the engine may call, with a one-run token instead of a sign-in (docs/engine-callback.md)
 app.use(require('./routes/ioc-feeds'));   // IOC feed import (docs/ioc-feeds.md)
 app.use(require('./routes/integrations')); // SR1: integrations and their write-only credentials (docs/integrations.md)
 app.use(require('./routes/lists'));   // L1: lists and their entries (docs/lists.md); also adds list.add_entry and list.remove_entry to the registry

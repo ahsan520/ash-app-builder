@@ -515,6 +515,43 @@ data:
     GRANT SELECT, INSERT, UPDATE, DELETE ON action_settings TO asix_admin;
     GRANT SELECT, INSERT, UPDATE, DELETE ON action_runs TO asix_admin;
 
+    -- Engine runs (SR3, docs/engine-callback.md): one row per workflow ASIX started on the automation engine. The run token is stored only as a SHA-256 hash and is
+    -- cleared when the run ends or fails to start, so a finished run's token is dead. `calls` is the list of action requests the workflow made (the action_runs hold the decisions).
+    CREATE TABLE IF NOT EXISTS engine_runs (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID REFERENCES tenants(id) NOT NULL,
+        playbook VARCHAR(80) NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'starting',
+        token_hash VARCHAR(64),
+        allowed_actions TEXT[] NOT NULL,
+        input JSONB NOT NULL DEFAULT '{}'::jsonb,
+        max_calls INTEGER NOT NULL DEFAULT 20,
+        call_count INTEGER NOT NULL DEFAULT 0,
+        calls JSONB NOT NULL DEFAULT '[]'::jsonb,
+        engine_host VARCHAR(255),
+        engine_ref VARCHAR(200),
+        summary VARCHAR(500),
+        error_message TEXT,
+        started_by_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        started_by_name VARCHAR(255) NOT NULL,
+        expires_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP DEFAULT clock_timestamp(),
+        finished_at TIMESTAMP,
+        CONSTRAINT engine_runs_status_chk CHECK (status IN ('starting', 'running', 'succeeded', 'failed')),
+        CONSTRAINT engine_runs_calls_chk CHECK (call_count >= 0 AND max_calls BETWEEN 1 AND 100)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_engine_runs_token ON engine_runs(token_hash) WHERE token_hash IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_engine_runs_tenant_created ON engine_runs(tenant_id, created_at DESC);
+
+    ALTER TABLE engine_runs ENABLE ROW LEVEL SECURITY;
+    DROP POLICY IF EXISTS engine_runs_tenant_isolation ON engine_runs;
+    CREATE POLICY engine_runs_tenant_isolation ON engine_runs
+        FOR ALL TO PUBLIC
+        USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
+        WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+    GRANT SELECT, INSERT, UPDATE, DELETE ON engine_runs TO asix_admin;
+
     -- Lists (L1, docs/lists.md): a tenant's block, allow and watch lists, and what is on them (idempotent).
     -- The feed token is stored only as a SHA-256 hash (like ingestion keys); the hint is its last four characters, so a person can tell which one is in use.
     CREATE TABLE IF NOT EXISTS lists (

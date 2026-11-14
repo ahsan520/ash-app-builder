@@ -34,7 +34,7 @@ A tenant has a row in `action_settings` only after an administrator touched it. 
 | **A person** pressing Run | refused (`OBSERVE_ONLY`) | recorded as a recommendation, nothing done | runs now | runs now | runs now |
 | **Automation** (a playbook, SR3) | refused | recommendation | **waits for approval** | runs if low-risk, else waits | runs (approved class) |
 
-Not enabled: refused (`ACTION_DISABLED`) for everybody. A person pressing Run *is* the decision, so it is recorded as decided by them. Automation is never a caller of the HTTP API: the routes always use origin `user`, and a body that names an origin is refused. SR3 will call `service.request(..., 'automation')` itself.
+Not enabled: refused (`ACTION_DISABLED`) for everybody. A person pressing Run *is* the decision, so it is recorded as decided by them. Automation is never a caller of the people's HTTP API: the routes always use origin `user`, and a body that names an origin is refused. Origin `automation` is used by the engine callback (`src/engine/callback.js`, `docs/engine-callback.md`, built 2026-11-14), which authenticates with a one-run token instead of a sign-in and calls `service.request(..., 'automation')` for only the actions that run was allowed to ask for.
 
 **Approval:** a waiting run is approved (`POST /v1/actions/runs/:id/approve`, then it runs with the parameters that were stored, so what was approved is what runs) or rejected. The action must still be enabled: switching it off stops what was already waiting (that approval is recorded as refused). A **high-risk** run cannot be approved by the person who requested it. Two people approving at once: one runs it, the other gets 409 (`FOR UPDATE` on the run).
 
@@ -73,7 +73,7 @@ Not enabled: refused (`ACTION_DISABLED`) for everybody. A person pressing Run *i
 ## Honest limits
 - **Not seen in a real browser:** as with Cases and the Marketplace, open Settings > Automation > Actions once after deploying.
 - Only case actions exist. **Firewall, endpoint and integration actions are not built** (SR4, SR5, SR1); nothing here can touch a machine or another product.
-- **No playbook calls the registry yet** (SR3): `origin: automation` is tested through the service, not through a running playbook.
+- **No playbook calls the registry yet** (SR3): `origin: automation` is now reachable through the engine callback (`docs/engine-callback.md`), tested against PostgreSQL, but no playbook is built and it has not been run from the lab Tracecat.
 - Approval is "somebody with `soar:actions:write`"; there is no approver group, expiry of waiting runs or notification yet.
 - Undo is one step per run; there is no undo timer (that belongs to SR4/SR5).
 - The registry list shows `runs` and `last_run_at` per action but the Runs tab lists at most 100 per filter (it says "Showing x of y").

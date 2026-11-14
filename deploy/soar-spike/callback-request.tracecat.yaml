@@ -1,0 +1,72 @@
+# SR3 (docs/engine-callback.md): the workflow side of the callback design. ASIX starts it through its webhook (POST /v1/engine/runs) and hands it a one-run token; the workflow ASKS
+# ASIX to put an address on a block list (list.add_entry) and then reports that it is done. It holds no credential of any tenant, and it cannot block anything itself: ASIX decides
+# (the action must be enabled for the tenant, a medium-risk request from automation waits for a person to approve) and, once approved, ASIX does the act.
+# The webhook body ASIX sends: run_id, tenant_id, token, callback_base, playbook, input. For this workflow the input must be { "list_id": "<uuid>", "value": "<address>", "note": "<why>" }.
+# WRITTEN BY HAND from the shape of webhook-probe.tracecat.yaml, which imported unchanged. NOT YET RUN. Two things in it are not verified on Tracecat 1.4.0: (1) `verify_ssl: false` is
+# the HTTP request option I expect for a self-signed ASIX certificate; if the editor does not offer it, delete the line and give the engine a certificate it trusts, or the call fails with a
+# certificate error; (2) a header built as `Bearer ${{ TRIGGER.token }}`. If import is refused, build the same two HTTP request actions by hand (POST, the URLs and payloads below).
+# Both actions try once: a repeated request would be a second approval for the same address. A workflow that dies before `finish_run` leaves the run open until its time is up (ASIX shows it as expired).
+# The token is in this run's input in Tracecat's run history for as long as the history is kept: it works only for this run, for the allowed actions, and stops at `finish_run` or at its time.
+definition:
+  actions:
+  - action: core.http_request
+    args:
+      headers:
+        Authorization: Bearer ${{ TRIGGER.token }}
+      method: POST
+      payload:
+        parameters:
+          list_id: ${{ TRIGGER.input.list_id }}
+          note: ${{ TRIGGER.input.note }}
+          value: ${{ TRIGGER.input.value }}
+      url: ${{ TRIGGER.callback_base }}/actions/list.add_entry
+      verify_ssl: false
+    depends_on: []
+    description: Asks ASIX to add the address to the list. The answer's `outcome` says what ASIX decided (awaiting_approval, executed, refused, ...).
+    join_strategy: all
+    mask_output: false
+    ref: request_block
+    retry_policy:
+      max_attempts: 1
+      timeout: 60
+    start_delay: 0.0
+  - action: core.http_request
+    args:
+      headers:
+        Authorization: Bearer ${{ TRIGGER.token }}
+      method: POST
+      payload:
+        status: succeeded
+        summary: 'asked for ${{ TRIGGER.input.value }}: ${{ ACTIONS.request_block.result.data.outcome }}'
+      url: ${{ TRIGGER.callback_base }}/finish
+      verify_ssl: false
+    depends_on:
+    - request_block
+    description: Tells ASIX the workflow is done. The token stops working here.
+    join_strategy: all
+    mask_output: false
+    ref: finish_run
+    retry_policy:
+      max_attempts: 1
+      timeout: 60
+    start_delay: 0.0
+  config:
+    environment: default
+    timeout: 0.0
+  description: SR3 callback probe - asks ASIX for a block and reports back
+  entrypoint:
+    expects: {}
+  title: spike-callback-request
+  triggers: []
+layout:
+  actions:
+  - ref: request_block
+    x: -218.0
+    y: 455.0
+  - ref: finish_run
+    x: -218.0
+    y: 640.0
+  trigger:
+    x: -218.0
+    y: 130.0
+version: 1
