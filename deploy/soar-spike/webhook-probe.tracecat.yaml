@@ -1,0 +1,58 @@
+# SOAR spike (docs/soar-spike.md, "Webhook and environment tests"): the smallest workflow that shows a webhook start. WRITTEN BY HAND from the shape of
+# spike-block-list.tracecat.yaml; IMPORT WAS NOT TRIED. If Tracecat refuses it, build the same thing in the editor: two "HTTP request" actions, both POST to
+# http://<stand-in>:8099/asix/ping, no secret, the first with payload {"note": "webhook-probe"}, the second with the payload below, and the second depending on the first.
+# Change 192.168.68.58 to the address of the machine that runs the stand-in. The webhook itself is switched on in the editor (Trigger node), it is not in this file.
+definition:
+  actions:
+  - action: core.http_request
+    args:
+      method: POST
+      payload:
+        note: webhook-probe
+      url: http://192.168.68.58:8099/asix/ping
+    depends_on: []
+    description: Proves a run started. Uses nothing from the trigger, so a bare POST with no body starts it too.
+    join_strategy: all
+    mask_output: false
+    ref: ping_start
+    retry_policy:
+      max_attempts: 1
+      timeout: 60
+    start_delay: 0.0
+  - action: core.http_request
+    args:
+      method: POST
+      payload:
+        tenant: ${{ TRIGGER.tenant }}
+        note: ${{ TRIGGER.note }}
+      url: http://192.168.68.58:8099/asix/ping
+    depends_on:
+    - ping_start
+    description: Proves the JSON body of the webhook call reaches the run (the tenant is an input of every run).
+    join_strategy: all
+    mask_output: false
+    ref: ping_input
+    retry_policy:
+      max_attempts: 1
+      timeout: 60
+    start_delay: 0.0
+  config:
+    environment: default
+    timeout: 0.0
+  description: Webhook start probe (SR0)
+  entrypoint:
+    expects: {}
+  title: spike-webhook-probe
+  triggers: []
+layout:
+  actions:
+  - ref: ping_start
+    x: -218.0
+    y: 455.0
+  - ref: ping_input
+    x: -218.0
+    y: 640.0
+  trigger:
+    x: -218.0
+    y: 130.0
+version: 1

@@ -5,7 +5,8 @@
 //   1. an indicator feed          GET  /feed.txt
 //   2. ASIX's approval gate       POST /asix/approvals, GET /asix/approvals/:id, GET /asix/approvals/:id/decision (202 while waiting), POST /asix/approvals/:id/grant|reject   (the person's decision)
 //   3. a firewall alias API       POST /api/firewall/alias_util/add|del/:alias, GET /api/firewall/alias_util/list/:alias   (basic auth)
-// plus   GET /_spike/report (the verdict: did the engine do the scenario in the right order and nothing else)   and   POST /_spike/reset.
+//   4. a run probe               GET|POST /asix/ping (records that a run reached us, with the tenant and the NAMES of the headers it carried), GET /_spike/pings
+// plus   GET /_spike/report (the verdict: did the engine do the scenario in the right order and nothing else; it also shows which credentials reached the firewall, as a short fingerprint, never the value)   and   POST /_spike/reset.
 // The firewall paths follow OPNsense's alias_util API as we remember it (NOT checked against a real OPNsense): the answers are only as exact as that memory.
 // No dependency. Listens on 127.0.0.1 unless --host says otherwise: it has no login of its own on /asix and /_spike, so never expose it beyond the lab.
 //   node deploy/soar-spike/stand-in.js [--port 8099] [--host 127.0.0.1] [--key K --secret S] [--alias asix_block]
@@ -37,6 +38,10 @@ function createStandIn(opts = {}) {
     const got = Buffer.from(Buffer.from(m[1], 'base64').toString('utf8')); const want = Buffer.from(cfg.key + ':' + cfg.secret);
     return got.length === want.length && crypto.timingSafeEqual(got, want);
   };
+  // A short fingerprint of the Authorization header a request carried (first 8 hex of its SHA-256) and the user name inside a Basic header. Never the secret itself: this is how the
+  // environment test tells WHICH credential reached the firewall (docs/soar-spike.md, "Webhook and environment tests").
+  const fpOf = (v) => (v ? crypto.createHash('sha256').update(String(v)).digest('hex').slice(0, 8) : null);
+  const userOf = (req) => { const m = /^Basic (.+)$/.exec(req.headers.authorization || ''); if (!m) return null; const t = Buffer.from(m[1], 'base64').toString('utf8'); const i = t.indexOf(':'); return (i >= 0 ? t.slice(0, i) : t).slice(0, 40); };
   const grantedFor = (address) => [...st.approvals.values()].some((a) => a.address === address && a.status === 'granted');
 
   // What the spike is judged on. Each check is one sentence a person can read; `ok` is a plain boolean.
@@ -57,7 +62,11 @@ function createStandIn(opts = {}) {
     add('rejected_stays_out', 'an address whose approval was rejected is not in the alias', approvals.filter((a) => a.status === 'rejected').every((a) => !st.blocked.has(a.address)));
     add('credentials', 'no request reached the firewall with wrong credentials', !ev.some((e) => e.type === 'bad_credentials'));
     add('blocked_one', 'at least one address ended up blocked', st.blocked.size > 0);
-    return { verdict: checks.every((c) => c.ok) ? 'pass' : 'fail', checks, blocked: [...st.blocked].sort(), approvals: approvals.map((a) => ({ id: a.id, address: a.address, status: a.status })), events: ev };
+    // Which credentials reached the firewall (from the requests that carried an Authorization header): one row per fingerprint. `expected_fp` is the fingerprint of the right ones.
+    const seen = new Map();
+    for (const e of ev) if ((e.type === 'bad_credentials' || e.type === 'block') && e.fp) { const k = e.fp; const row = seen.get(k) || { fp: e.fp, user: e.user || null, ok: e.type === 'block', count: 0 }; row.count++; if (e.type === 'block') row.ok = true; seen.set(k, row); }
+    return { verdict: checks.every((c) => c.ok) ? 'pass' : 'fail', checks, blocked: [...st.blocked].sort(), approvals: approvals.map((a) => ({ id: a.id, address: a.address, status: a.status })),
+      pings: ev.filter((e) => e.type === 'ping').length, expected_fp: fpOf('Basic ' + Buffer.from(cfg.key + ':' + cfg.secret).toString('base64')), credentials_seen: [...seen.values()], events: ev };
   }
 
   const server = http.createServer(async (req, res) => {
@@ -65,6 +74,13 @@ function createStandIn(opts = {}) {
     try {
       if (m === 'GET' && p === '/feed.txt') { log('feed_fetched'); return send(res, 200, cfg.feed, 'text/plain; charset=utf-8'); }
       if (m === 'GET' && p === '/_spike/report') return send(res, 200, report());
+      if (m === 'GET' && p === '/_spike/pings') return send(res, 200, { pings: st.events.filter((e) => e.type === 'ping') });
+      if ((m === 'GET' || m === 'POST') && p === '/asix/ping') {   // a probe: a workflow run started by something else calls this, so the run is seen here and not only in the engine's own screens
+        const b = m === 'POST' ? await readJson(req) : {}; if (b === null) return send(res, 400, { error: 'body must be JSON' });
+        const str = (v) => (typeof v === 'string' ? v.slice(0, 80) : null);
+        log('ping', { method: m, tenant: str(b.tenant), note: str(b.note), headers: Object.keys(req.headers).filter((h) => !['host', 'connection', 'content-length', 'content-type', 'accept', 'accept-encoding', 'user-agent'].includes(h)).sort() });
+        return send(res, 200, { ok: true, n: st.events.filter((e) => e.type === 'ping').length });
+      }
       if (m === 'POST' && p === '/_spike/reset') { reset(); return send(res, 200, { reset: true }); }
 
       if (m === 'POST' && p === '/asix/approvals') {
@@ -90,14 +106,14 @@ function createStandIn(opts = {}) {
 
       r = /^\/api\/firewall\/alias_util\/(add|del|list)\/([A-Za-z0-9_]{1,32})$/.exec(p);
       if (r) {
-        if (!authOk(req)) { log('bad_credentials', { path: p }); return send(res, 401, { status: 'unauthorized' }); }
+        if (!authOk(req)) { log('bad_credentials', { path: p, user: userOf(req), fp: fpOf(req.headers.authorization) }); return send(res, 401, { status: 'unauthorized' }); }
         if (r[2] !== cfg.alias) return send(res, 404, { status: 'unknown alias' });
         if (r[1] === 'list' && m === 'GET') return send(res, 200, { total: st.blocked.size, rowCount: st.blocked.size, rows: [...st.blocked].sort().map((ip) => ({ ip })) });
         if (m === 'POST' && (r[1] === 'add' || r[1] === 'del')) {
           const b = await readJson(req); if (!b || !ipOk(b.address)) return send(res, 400, { status: 'failed', error: 'address must be an IPv4 address' });
           if (r[1] === 'add') {
             if (!grantedFor(b.address)) { log('block_refused_no_approval', { address: b.address }); return send(res, 403, { status: 'refused', error: 'no granted approval for this address' }); }
-            st.blocked.add(b.address); log('block', { address: b.address }); return send(res, 200, { status: 'done' });
+            st.blocked.add(b.address); log('block', { address: b.address, user: userOf(req), fp: fpOf(req.headers.authorization) }); return send(res, 200, { status: 'done' });
           }
           const had = st.blocked.delete(b.address); log('unblock', { address: b.address, had }); return send(res, 200, { status: had ? 'done' : 'not_found' });
         }

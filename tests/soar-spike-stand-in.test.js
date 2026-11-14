@@ -100,6 +100,35 @@ describe('SOAR spike stand-in', () => {
     assert.ok([0, 400].includes(big.status), 'an oversized body must not be accepted (status ' + big.status + ')');
   });
 
+  it('the ping probe records that a run reached the stand-in: tenant, note and the NAMES of the headers (never their values), for GET and POST, and refuses a bad body', async () => {
+    assert.strictEqual((await call('GET', '/_spike/pings')).json.pings.length, 0);
+    const r = await call('POST', '/asix/ping', { tenant: 'probe-1', note: 'hello' }, { 'X-Api-Key': 'do-not-record-this' }); assert.strictEqual(r.status, 200); assert.strictEqual(r.json.n, 1);
+    assert.strictEqual((await call('GET', '/asix/ping')).json.n, 2);
+    const pings = (await call('GET', '/_spike/pings')).json.pings;
+    assert.strictEqual(pings.length, 2); assert.strictEqual(pings[0].tenant, 'probe-1'); assert.strictEqual(pings[0].note, 'hello'); assert.strictEqual(pings[0].method, 'POST'); assert.ok(pings[0].headers.includes('x-api-key'));
+    assert.ok(!JSON.stringify(pings).includes('do-not-record-this'), 'a header value must never be recorded');
+    assert.strictEqual(pings[1].method, 'GET'); assert.strictEqual(pings[1].tenant, null);
+    assert.strictEqual((await call('POST', '/asix/ping', '{not json')).status, 400);
+    assert.strictEqual((await call('GET', '/_spike/report')).json.pings, 2); assert.ok(!(await failed()).includes('pings'), 'a ping is not a verdict check');
+  });
+
+  it('shows WHICH credentials reached the firewall by a short fingerprint, never the value: the right ones and a wrong secret differ, and the wrong one fails the credentials check', async () => {
+    const id = await ask('203.0.113.10'); await call('POST', `/asix/approvals/${id}/grant`);
+    const wrong = await block('203.0.113.10', { Authorization: basic('spike-key', 'a-deliberately-wrong-secret') }); assert.strictEqual(wrong.status, 401);
+    let rep = (await call('GET', '/_spike/report')).json;
+    assert.match(rep.expected_fp, /^[0-9a-f]{8}$/); assert.strictEqual(rep.credentials_seen.length, 1);
+    assert.notStrictEqual(rep.credentials_seen[0].fp, rep.expected_fp); assert.strictEqual(rep.credentials_seen[0].user, 'spike-key'); assert.strictEqual(rep.credentials_seen[0].ok, false);
+    assert.ok((await failed()).includes('credentials'));
+    assert.strictEqual((await block('203.0.113.10')).status, 200);   // the right ones
+    rep = (await call('GET', '/_spike/report')).json;
+    assert.strictEqual(rep.credentials_seen.length, 2); const right = rep.credentials_seen.find((r) => r.fp === rep.expected_fp); assert.ok(right && right.ok === true && right.count === 1);
+    assert.ok(!JSON.stringify(rep).includes('a-deliberately-wrong-secret') && !JSON.stringify(rep).includes('spike-secret'), 'no secret value may appear in the report');
+    assert.ok(!JSON.stringify(rep).includes(Buffer.from('spike-key:spike-secret').toString('base64')), 'nor the encoded header');
+    // a call with no Authorization header at all is bad credentials with no fingerprint, and is not listed as a credential that arrived
+    await call('POST', '/api/firewall/alias_util/add/asix_block', { address: '203.0.113.10' });
+    assert.strictEqual((await call('GET', '/_spike/report')).json.credentials_seen.length, 2);
+  });
+
   it('listens on loopback by default when run as a program', () => {
     const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'deploy', 'soar-spike', 'stand-in.js'), 'utf8');
     assert.match(src, /get\('host', '127\.0\.0\.1'\)/);
