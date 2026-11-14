@@ -75,13 +75,13 @@ spec:
             # Automation engine (SR3, docs/engine-callback.md). The address the ENGINE uses to reach this API when a workflow asks ASIX for an action (https only; left empty it
             # falls back to ASIX_PUBLIC_URL). Empty and no public URL: starting an engine run answers 503 ENGINE_NOT_CONFIGURED.
             - name: ASIX_ENGINE_CALLBACK_BASE
-              value: ""
+              value: "https://192.168.68.58"
             # "true" lets ASIX call an engine on a private network (RFC1918); loopback, link-local and cloud metadata stay blocked either way. Separate from the notification switch on purpose.
             - name: ASIX_ENGINE_ALLOW_PRIVATE
-              value: "false"
+              value: "true"
             # Lab only: "true" does not check the engine's TLS certificate. Prefer ASIX_ENGINE_CA_FILE (a PEM file mounted in the pod) for an engine with its own certificate.
             - name: ASIX_ENGINE_TLS_INSECURE
-              value: "false"
+              value: "true"
             # Base URL used for "Open in ASIX" links in notifications (filled in by deploy.sh)
             - name: ASIX_PUBLIC_URL
               value: "__ASIX_PUBLIC_URL__"
